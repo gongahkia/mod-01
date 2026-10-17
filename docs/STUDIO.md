@@ -6,6 +6,8 @@ Run `pnpm native` during development or `pnpm native:package` to make a distribu
 the current OS. The desktop interface is Rust/egui and contains no webview. It opens a project
 directory or canonical `.m01c`, can save an imported cartridge as a new project, edits MODL modules
 and the manifest, checks and packs with `modl-core`, and plays through the shared console runtime.
+The start screen includes the eight first-party cartridges; opening one makes an editable copy that
+asks for a project folder on save.
 Keyboard, pointer, four gamepad ports, PCM audio, and cartridge save commits use native host APIs.
 The bundled Node child has restricted filesystem/process permissions and a five-second response
 limit. Debug mode offers source-step events and snapshot restore. Other declared assets are editable

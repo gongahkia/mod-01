@@ -192,7 +192,9 @@ impl StudioApp {
                 self.asset_name.clear();
                 self.asset_dirty = false;
                 self.view = View::Code;
-                if play { self.run(); }
+                if play {
+                    self.run();
+                }
             }
             Err(error) => self.status = error,
         }
@@ -1340,16 +1342,26 @@ impl eframe::App for StudioApp {
                     ui.add_space(24.0);
                     ui.label(RichText::new("BUNDLED CARTRIDGES").strong());
                     ui.add_space(8.0);
-                    egui::Grid::new("sample-cartridges").spacing([12.0, 8.0]).show(ui, |ui| {
-                        for path in bundled_samples() {
-                            let title = path.file_name().and_then(|value| value.to_str())
-                                .unwrap_or("CARTRIDGE").replace('-', " ").to_uppercase();
-                            ui.label(title);
-                            if ui.button("OPEN").clicked() { self.open_sample(path.clone(), false); }
-                            if ui.button("PLAY").clicked() { self.open_sample(path, true); }
-                            ui.end_row();
-                        }
-                    });
+                    egui::Grid::new("sample-cartridges")
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            for path in bundled_samples() {
+                                let title = path
+                                    .file_name()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or("CARTRIDGE")
+                                    .replace('-', " ")
+                                    .to_uppercase();
+                                ui.label(title);
+                                if ui.button("OPEN").clicked() {
+                                    self.open_sample(path.clone(), false);
+                                }
+                                if ui.button("PLAY").clicked() {
+                                    self.open_sample(path, true);
+                                }
+                                ui.end_row();
+                            }
+                        });
                 });
             });
             return;
@@ -1526,13 +1538,25 @@ fn bundled_samples() -> Vec<PathBuf> {
     let packaged = std::env::current_exe().ok().and_then(|executable| {
         let directory = executable.parent()?;
         let macos = directory.parent()?.join("Resources/cartridges");
-        Some(if macos.is_dir() { macos } else { directory.join("cartridges") })
+        Some(if macos.is_dir() {
+            macos
+        } else {
+            directory.join("cartridges")
+        })
     });
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cartridges");
-    let root = override_path.or(packaged).filter(|path| path.is_dir()).unwrap_or(development);
-    let Ok(entries) = fs::read_dir(root) else { return Vec::new(); };
-    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|entry| entry.path())
-        .filter(|path| path.join("cart.toml").is_file()).collect();
+    let root = override_path
+        .or(packaged)
+        .filter(|path| path.is_dir())
+        .unwrap_or(development);
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.join("cart.toml").is_file())
+        .collect();
     paths.sort();
     paths
 }

@@ -61,7 +61,8 @@ pnpm native
 ```
 
 `pnpm native -- path/to/project` opens a project immediately. The native Studio supports macOS,
-Windows, and Linux. It opens project directories or `.m01c` files, edits MODL source and declared
+Windows, and Linux. Its start screen opens or plays all eight bundled cartridges. It opens project
+directories or `.m01c` files, edits MODL source and declared
 assets, runs cartridges with keyboard and gamepad input, plays stereo audio, and saves/exports
 projects. Its layered sprite editor defaults to 64×64, supports up to 128×128 and 256 palette
 entries, and retains editable RGBA layers beside the compiled sprite asset. Debug mode supports

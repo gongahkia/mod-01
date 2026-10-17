@@ -118,7 +118,13 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
         };
         match exchange(running, &command) {
             Ok(reply) => {
+                let faulted = reply["type"] == "error";
                 let _ = events.send(reply);
+                if faulted {
+                    if let Some(failed) = child.take() {
+                        failed.stop();
+                    }
+                }
             }
             Err(error) => {
                 let _ = events.send(error_event(error));

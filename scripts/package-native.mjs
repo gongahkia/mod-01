@@ -44,10 +44,25 @@ if (process.platform !== 'win32') {
   chmodSync(join(binaries, executableName), 0o755);
   chmodSync(bundledNode, 0o755);
 }
+const bundledHost = join(binaries, 'native-host.mjs');
+const smoke = execFileSync(
+  bundledNode,
+  ['--permission', `--allow-fs-read=${bundledHost}`, bundledHost],
+  {
+    input: '{"type":"stop"}\n',
+    encoding: 'utf8',
+    env: {
+      PATH: process.env.PATH ?? '',
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    },
+  },
+);
+if (JSON.parse(smoke).type !== 'stopped') throw new Error('bundled runtime smoke test failed');
 const archive = `${output}.tar.gz`;
-const samples = process.platform === 'darwin'
-  ? join(output, 'MOD-01 Studio.app', 'Contents', 'Resources', 'cartridges')
-  : join(output, 'cartridges');
+const samples =
+  process.platform === 'darwin'
+    ? join(output, 'MOD-01 Studio.app', 'Contents', 'Resources', 'cartridges')
+    : join(output, 'cartridges');
 cpSync(join(root, 'cartridges'), samples, { recursive: true });
 rmSync(archive, { force: true });
 execFileSync('tar', ['-czf', archive, '-C', join(root, 'dist'), basename(output)]);

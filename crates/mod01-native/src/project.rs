@@ -226,12 +226,21 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::NativeProject;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn creates_and_resaves_a_native_project() {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("mod01-native-project-{}-{nonce}", std::process::id()));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mod01-native-project-{}-{nonce}",
+            std::process::id()
+        ));
         let mut project = NativeProject::create(&root, "native-test").unwrap();
         project.editor_text = "on draw:\n  clear(2)\n".to_owned();
         project.sync_editor();

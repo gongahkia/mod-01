@@ -48,6 +48,14 @@ the authoritative compiler and sends that output plus bounded data to the embedd
 Node host. MODL has no path to Node globals; malformed host requests reject before boot. Node is a
 documented CLI runtime dependency, not a cartridge capability.
 
+The native desktop Studio also discards archived build JavaScript and recompiles imported source.
+Its console host runs in a child process with Node's permission model enabled, filesystem read
+access limited to the generated host bundle, no inherited user environment apart from process
+essentials, and no child-process permission. Rust limits each response to 16 MiB and terminates a
+host that fails to answer within five seconds. A packaged app includes its own Node executable.
+These controls limit accidental host access and contain a stalled runtime; they are not an OS
+sandbox for arbitrary attacker-supplied JavaScript.
+
 The PWA service worker caches only same-origin GET requests and an exact build-generated inventory.
 Its cache revision covers hashed bundles and bundled-cartridge bytes. It adds offline availability,
 not a new cartridge capability or a trust boundary.

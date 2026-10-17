@@ -64,6 +64,23 @@ const samples =
     ? join(output, 'MOD-01 Studio.app', 'Contents', 'Resources', 'cartridges')
     : join(output, 'cartridges');
 cpSync(join(root, 'cartridges'), samples, { recursive: true });
+const visualCredits =
+  process.platform === 'darwin'
+    ? join(output, 'MOD-01 Studio.app', 'Contents', 'Resources', 'visual-credits')
+    : join(output, 'visual-credits');
+mkdirSync(visualCredits, { recursive: true });
+copyFileSync(
+  join(root, 'crates', 'mod01-native', 'assets', 'ATTRIBUTION.md'),
+  join(visualCredits, 'ATTRIBUTION.md'),
+);
+copyFileSync(
+  join(root, 'crates', 'mod01-native', 'assets', 'bigblue', 'LICENSE.TXT'),
+  join(visualCredits, 'BigBlueTerm-LICENSE.TXT'),
+);
+copyFileSync(
+  join(root, 'crates', 'mod01-native', 'assets', 'kenney', 'License.txt'),
+  join(visualCredits, 'Kenney-LICENSE.txt'),
+);
 rmSync(archive, { force: true });
 execFileSync('tar', ['-czf', archive, '-C', join(root, 'dist'), basename(output)]);
 console.log(`Packaged native Studio: ${output}`);

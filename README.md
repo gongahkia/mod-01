@@ -62,11 +62,12 @@ pnpm native
 
 `pnpm native -- path/to/project` opens a project immediately. The native Studio supports macOS,
 Windows, and Linux. Its start screen opens or plays all eight bundled cartridges. It opens project
-directories or `.m01c` files, edits MODL source and declared
+directories, `.m01c` files, cartridge PNGs, or `.m01w` workcarts; it edits MODL source and declared
 assets, runs cartridges with keyboard and gamepad input, plays stereo audio, and saves/exports
 projects. Its layered sprite editor defaults to 64×64, supports up to 128×128 and 256 palette
 entries, and retains editable RGBA layers beside the compiled sprite asset. Debug mode supports
-source stepping and snapshot restore. `pnpm native:package` creates a desktop folder and portable
+source stepping and snapshot restore. Its native interface uses BigBlue Terminal Plus throughout
+and Kenney pixel cursors on relevant controls. `pnpm native:package` creates a desktop folder and portable
 archive that include the Node runtime used for cartridge execution; packaged users do not need a
 separate Node install.
 See [native Studio details](docs/STUDIO.md).

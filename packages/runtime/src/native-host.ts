@@ -6,6 +6,9 @@ import { HARDWARE } from './hardware';
 import type { InputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import { RuntimeFault } from './errors';
+import { renderMusicWav, renderSoundWav } from './wav';
+import type { MusicAsset, SoundAsset } from './audio';
+import { evaluateWatch } from './debugger';
 
 type Command =
   | {
@@ -22,17 +25,25 @@ type Command =
       rom: string;
       save: string;
       debug?: boolean;
+      symbolNames?: Record<string, string>;
     }
   | { type: 'frame'; input: InputFrame }
-  | { type: 'step'; input: InputFrame }
+  | { type: 'step'; input: InputFrame; watches?: string[]; conditions?: string[] }
   | { type: 'snapshot' }
   | { type: 'restore'; snapshot: string }
   | { type: 'memory'; address: number; length: number }
   | { type: 'memory-edit'; address: number; bytes: string }
+  | {
+      type: 'render-wav';
+      kind: 'sound' | 'music';
+      asset: SoundAsset | MusicAsset;
+      sounds: SoundAsset[];
+    }
   | { type: 'stop' };
 
 let runtime: ConsoleRuntime | undefined;
 let cartridgeId: string | undefined;
+let symbolNames: Readonly<Record<string, string>> = {};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
 function bytes(encoded: string): Uint8Array {
@@ -49,8 +60,47 @@ function respond(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function namedValues(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [symbolNames[key] ?? key, entry]),
+  );
+}
+
+function evaluateExpressions(
+  expressions: readonly string[] | undefined,
+  state: unknown,
+  locals: unknown,
+  booleanOnly = false,
+): { value?: unknown; error?: string }[] {
+  if (expressions === undefined) return [];
+  if (expressions.length > 32) throw new RangeError('too many native debugger expressions');
+  const environment = { ...namedValues(state), ...namedValues(locals) };
+  return expressions.map((expression) => {
+    if (expression.length > 256) return { error: 'expression exceeds 256 characters' };
+    if (expression.length === 0) return { value: true };
+    try {
+      const value = evaluateWatch(expression, environment);
+      return booleanOnly && typeof value !== 'boolean'
+        ? { error: 'breakpoint condition must produce Bool' }
+        : { value };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'watch evaluation failed' };
+    }
+  });
+}
+
 async function handle(command: Command): Promise<unknown> {
   switch (command.type) {
+    case 'render-wav': {
+      const wav =
+        command.kind === 'sound'
+          ? renderSoundWav(command.asset as SoundAsset)
+          : renderMusicWav(command.asset as MusicAsset, command.sounds);
+      if (wav.byteLength > 8 * 1024 * 1024)
+        throw new RangeError('native WAV preview exceeds 8 MiB');
+      return { type: 'wav', bytes: encoded(wav) };
+    }
     case 'load': {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2 * 1024 * 1024)
         throw new TypeError('invalid compiled cartridge');
@@ -84,6 +134,7 @@ async function handle(command: Command): Promise<unknown> {
         save: bytes(command.save),
       });
       cartridgeId = command.manifest.id;
+      symbolNames = command.symbolNames ?? {};
       return { type: 'loaded', cartridgeId };
     }
     case 'frame': {
@@ -117,7 +168,18 @@ async function handle(command: Command): Promise<unknown> {
           },
         };
       }
-      return { type: 'step', ...result };
+      if ('booted' in result) return { type: 'step', ...result };
+      return {
+        type: 'step',
+        ...result,
+        watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
+        conditions: evaluateExpressions(
+          command.conditions,
+          result.inspection.state,
+          result.event.locals,
+          true,
+        ),
+      };
     }
     case 'snapshot':
       if (runtime === undefined) throw new Error('no cartridge is loaded');

@@ -4,14 +4,23 @@
 
 Run `pnpm native` during development or `pnpm native:package` to make a distributable folder for
 the current OS. The desktop interface is Rust/egui and contains no webview. It opens a project
-directory or canonical `.m01c`, can save an imported cartridge as a new project, edits MODL modules
+directory, canonical `.m01c`, cartridge PNG, or `.m01w` workcart; it can save an imported cartridge as a new project and rewrites workcarts while preserving recipes and tests. It edits MODL modules
 and the manifest, checks and packs with `modl-core`, and plays through the shared console runtime.
 The start screen includes the eight first-party cartridges; opening one makes an editable copy that
 asks for a project folder on save.
 Keyboard, pointer, four gamepad ports, PCM audio, and cartridge save commits use native host APIs.
 The bundled Node child has restricted filesystem/process permissions and a five-second response
-limit. Debug mode offers source-step events and snapshot restore. Other declared assets are editable
-as their source-visible JSON.
+limit. Debug mode offers source-step events, source breakpoints, memory inspection/editing, and
+snapshot restore. The native Studio includes structured editors for maps, tile sets, fonts, sounds,
+music, and display raster remaps. Each editor preserves source-visible JSON. Tile sets accept and
+export PNG atlases; sound and music assets can be previewed or exported as WAV. The player can
+capture nearest-neighbour PNGs, a short GIF, and deterministic `.m01rec` input replays. The native
+save manager imports and exports the browser-compatible checksummed `.m01save` format, retaining
+recovery copies for destructive actions. The manual and compiler explorer are embedded in the app.
+
+All native text uses BigBlue Terminal Plus; the bundled Kenney pixel cursors indicate ordinary,
+action, text, busy, and canvas targets. The application bundles attribution and license texts in
+the `visual-credits` directory of each desktop package.
 
 The native sprite editor draws on RGBA layers, supports rename/reorder/visibility/locking,
 brushes, fill, pick, selection recolour/erase, frames with onion skinning, zoom/pan, undo/redo,
@@ -21,9 +30,12 @@ Revision 2 cartridges retain the layered source when packed and unpacked. Colour
 the sprite transparency key; the zero swatch selects the eraser. Layer pixels are base64 RGBA in
 the source-visible JSON document, and the editor also reads earlier numeric-array documents.
 
-The browser Studio below remains available for its visual map/font/audio editors, browser replay
-capture, and full source debugger while the native interface covers the core project and sprite
-workflow.
+The browser Studio below remains available while native parity is completed. Its debugger still
+has precise rewind, memory watchpoints, deeper profiling and audio inspection that the native
+debugger does not yet provide. Its editors also have operations
+the native tools lack, including the complete eight-channel tracker grid, font selections, and
+map sprite-to-tile-set conversion. The browser app must stay until these workflows are covered;
+standalone HTML cartridge exports remain a supported optional output format.
 
 The browser studio is local-only. Its project repository stores the current project, ten bounded
 pre-save recovery revisions, settings, and capability-scoped cartridge saves in IndexedDB. A

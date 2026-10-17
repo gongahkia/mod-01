@@ -16,10 +16,13 @@ names, versions, integrity values, and edges are in `pnpm-lock.yaml`; `pnpm lice
 reproduces the inventory. Build/test packages and Playwright browser binaries are not cartridge
 assets or embedded runtime dependencies.
 
-No third-party game code, palette, font, artwork, or audio is bundled. The console palette, bitmap
-font, icon, labels, graphics, and synth compositions are original. `mod01.ttf` is generated from
-the same first-party glyph matrix. Standalone exports contain the dependency-free first-party
-player and author-owned cartridge material, not the Node toolchain or a third-party game engine.
+The native Studio embeds BigBlue Terminal Plus by VileR under CC BY-SA 4.0 and five images from
+Kenney's Cursor Pixel Pack under CC0. Source attribution and complete license texts are in
+`crates/mod01-native/assets/` and copied to `visual-credits` in native packages. The console
+palette, runtime bitmap font, icon, labels, graphics, and synth compositions are original;
+`mod01.ttf` is generated from the same first-party glyph matrix. Standalone HTML exports contain
+the dependency-free first-party player and author-owned cartridge material, not the native UI font,
+Kenney cursors, Node toolchain, or a third-party game engine.
 
 Installed upstream package directories contain their full licenses and notices. Any external binary
 distribution must accompany notices required by those terms; this repository task does not publish

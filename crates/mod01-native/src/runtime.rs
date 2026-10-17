@@ -61,7 +61,7 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
     };
     let mut child: Option<HostProcess> = None;
     for command in commands {
-        if command["type"] == "load" {
+        if command["type"] == "load" || command["type"] == "render-wav" {
             if let Some(old) = child.take() {
                 old.stop();
             }
@@ -133,7 +133,7 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
                 }
             }
         }
-        if command["type"] == "stop" {
+        if command["type"] == "stop" || command["type"] == "render-wav" {
             if let Some(stopped) = child.take() {
                 stopped.stop();
             }

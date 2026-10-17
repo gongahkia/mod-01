@@ -4625,9 +4625,303 @@ var MEMORY_CALLS = /* @__PURE__ */ new Map([
   ['mem_fill', 3],
 ]);
 //#endregion
+//#region src/wav.ts
+var span = {
+  start: 0,
+  end: 0,
+};
+/** Encodes production-synth frames as deterministic stereo 16-bit PCM WAV. */
+function encodeAudioFramesWav(frames) {
+  const dataBytes = frames.reduce((total, frame) => total + frame.left.length, 0) * 4;
+  const output = new Uint8Array(44 + dataBytes);
+  const view = new DataView(output.buffer);
+  writeAscii(output, 0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes, true);
+  writeAscii(output, 8, 'WAVEfmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, HARDWARE.audioSampleRate, true);
+  view.setUint32(28, HARDWARE.audioSampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeAscii(output, 36, 'data');
+  view.setUint32(40, dataBytes, true);
+  let offset = 44;
+  for (const frame of frames) {
+    if (frame.left.length !== frame.right.length)
+      throw new TypeError('audio frame channel lengths differ');
+    for (let sample = 0; sample < frame.left.length; sample += 1) {
+      view.setInt16(offset, pcm16(frame.left[sample] ?? 0), true);
+      view.setInt16(offset + 2, pcm16(frame.right[sample] ?? 0), true);
+      offset += 4;
+    }
+  }
+  return output;
+}
+function renderSoundWav(sound) {
+  const synth = new Synthesizer(new AudioAssetStore([sound]));
+  const frames = sound.durationFrames + sound.envelope.releaseFrames;
+  return encodeAudioFramesWav(
+    Array.from({ length: frames }, (_, frame) =>
+      synth.executeFrame(frame === 0 ? [audioCommand('sfx', sound.name, 'Sound')] : []),
+    ),
+  );
+}
+function renderMusicWav(music, sounds) {
+  const frames =
+    music.framesPerRow *
+    music.order.reduce((total, name) => total + (music.patterns[name]?.rows.length ?? 0), 0);
+  if (frames < 1 || frames > HARDWARE.frameRate * 60 * 10)
+    throw new RangeError('music WAV duration must be between one frame and ten minutes');
+  const synth = new Synthesizer(new AudioAssetStore([...sounds, music]));
+  return encodeAudioFramesWav(
+    Array.from({ length: frames }, (_, frame) =>
+      synth.executeFrame(frame === 0 ? [audioCommand('music', music.name, 'Music')] : []),
+    ),
+  );
+}
+function audioCommand(name, asset, kind) {
+  return {
+    name,
+    arguments: [
+      {
+        name: asset,
+        kind,
+      },
+    ],
+    sourceSpan: span,
+  };
+}
+function pcm16(value) {
+  if (!Number.isFinite(value)) throw new TypeError('audio sample is not finite');
+  const clamped = Math.max(-1, Math.min(1, value));
+  return clamped < 0 ? Math.round(clamped * 32768) : Math.round(clamped * 32767);
+}
+function writeAscii(target, offset, text) {
+  for (let index = 0; index < text.length; index += 1)
+    target[offset + index] = text.charCodeAt(index);
+}
+//#endregion
+//#region src/debugger.ts
+/** Evaluates a non-mutating MODL-like watch subset without dynamic JavaScript execution. */
+function evaluateWatch(source, environment) {
+  const parser = new WatchParser(tokenizeWatch(source), environment);
+  const value = parser.expression();
+  parser.finish();
+  return value;
+}
+var WatchParser = class {
+  tokens;
+  environment;
+  cursor = 0;
+  constructor(tokens, environment) {
+    this.tokens = tokens;
+    this.environment = environment;
+  }
+  expression(minimumPrecedence = 0) {
+    let left = this.prefix();
+    for (;;) {
+      const operator = this.peek().text;
+      const precedence = BINARY_PRECEDENCE[operator];
+      if (precedence === void 0 || precedence < minimumPrecedence) break;
+      this.cursor += 1;
+      const right = this.expression(precedence + 1);
+      left = binaryWatch(operator, left, right);
+    }
+    return left;
+  }
+  finish() {
+    if (this.peek().kind !== 'eof')
+      throw new SyntaxError(`unexpected '${this.peek().text}' in watch expression`);
+  }
+  prefix() {
+    const token = this.take();
+    let value;
+    if (token.kind === 'number') value = Number(token.text);
+    else if (token.kind === 'text') value = JSON.parse(token.text);
+    else if (token.kind === 'name') {
+      if (token.text === 'true' || token.text === 'false') value = token.text === 'true';
+      else if (token.text === 'none') value = null;
+      else if (token.text === 'not') value = !truthy(this.expression(7));
+      else if (Object.hasOwn(this.environment, token.text)) value = this.environment[token.text];
+      else throw new ReferenceError(`unknown watch name '${token.text}'`);
+    } else if (token.text === '-' || token.text === '+') {
+      const number = watchNumber(this.expression(7));
+      value = token.text === '-' ? -number : number;
+    } else if (token.text === '(') {
+      value = this.expression();
+      this.expect(')');
+    } else throw new SyntaxError(`expected a watch value, received '${token.text}'`);
+    while (this.peek().text === '.' || this.peek().text === '[')
+      if (this.take().text === '.') {
+        const property = this.take();
+        if (property.kind !== 'name') throw new SyntaxError('expected a field name after dot');
+        value = readWatchProperty(value, property.text);
+      } else {
+        const key = this.expression();
+        this.expect(']');
+        value = readWatchProperty(value, key);
+      }
+    return value;
+  }
+  expect(text) {
+    if (this.take().text !== text) throw new SyntaxError(`expected '${text}' in watch expression`);
+  }
+  peek() {
+    return (
+      this.tokens[this.cursor] ?? {
+        kind: 'eof',
+        text: '',
+      }
+    );
+  }
+  take() {
+    const token = this.peek();
+    this.cursor += 1;
+    return token;
+  }
+};
+var BINARY_PRECEDENCE = {
+  or: 1,
+  and: 2,
+  '==': 3,
+  '!=': 3,
+  '<': 4,
+  '<=': 4,
+  '>': 4,
+  '>=': 4,
+  '+': 5,
+  '-': 5,
+  '*': 6,
+  '/': 6,
+  '%': 6,
+};
+function tokenizeWatch(source) {
+  const tokens = [];
+  let cursor = 0;
+  while (cursor < source.length) {
+    const character = source[cursor] ?? '';
+    if (/\s/u.test(character)) {
+      cursor += 1;
+      continue;
+    }
+    const rest = source.slice(cursor);
+    const number = /^(?:\d+(?:\.\d+)?|\.\d+)/u.exec(rest)?.[0];
+    if (number !== void 0) {
+      tokens.push({
+        kind: 'number',
+        text: number,
+      });
+      cursor += number.length;
+      continue;
+    }
+    const name = /^[A-Za-z_][A-Za-z0-9_]*/u.exec(rest)?.[0];
+    if (name !== void 0) {
+      tokens.push({
+        kind: 'name',
+        text: name,
+      });
+      cursor += name.length;
+      continue;
+    }
+    if (character === '"') {
+      let end = cursor + 1;
+      while (end < source.length)
+        if (source[end] === '\\') end += 2;
+        else if (source[end] === '"') break;
+        else end += 1;
+      if (source[end] !== '"') throw new SyntaxError('unterminated watch text');
+      tokens.push({
+        kind: 'text',
+        text: source.slice(cursor, end + 1),
+      });
+      cursor = end + 1;
+      continue;
+    }
+    const pair = rest.slice(0, 2);
+    const operator = ['==', '!=', '<=', '>='].includes(pair)
+      ? pair
+      : '+-*/%<>().[]'.includes(character)
+        ? character
+        : void 0;
+    if (operator === void 0) throw new SyntaxError(`unsupported watch token '${character}'`);
+    tokens.push({
+      kind: 'operator',
+      text: operator,
+    });
+    cursor += operator.length;
+  }
+  tokens.push({
+    kind: 'eof',
+    text: '',
+  });
+  return tokens;
+}
+function binaryWatch(operator, left, right) {
+  switch (operator) {
+    case 'or':
+      return truthy(left) || truthy(right);
+    case 'and':
+      return truthy(left) && truthy(right);
+    case '==':
+      return Object.is(left, right);
+    case '!=':
+      return !Object.is(left, right);
+    case '<':
+      return watchNumber(left) < watchNumber(right);
+    case '<=':
+      return watchNumber(left) <= watchNumber(right);
+    case '>':
+      return watchNumber(left) > watchNumber(right);
+    case '>=':
+      return watchNumber(left) >= watchNumber(right);
+    case '+':
+      return typeof left === 'string' && typeof right === 'string'
+        ? left + right
+        : watchNumber(left) + watchNumber(right);
+    case '-':
+      return watchNumber(left) - watchNumber(right);
+    case '*':
+      return watchNumber(left) * watchNumber(right);
+    case '/':
+      return watchNumber(left) / watchNumber(right);
+    case '%':
+      return watchNumber(left) % watchNumber(right);
+    default:
+      throw new SyntaxError(`unsupported watch operator '${operator}'`);
+  }
+}
+function readWatchProperty(value, key) {
+  if (typeof key !== 'string' && typeof key !== 'number')
+    throw new TypeError('watch index must be a number or field name');
+  if (key === '__proto__' || key === 'prototype' || key === 'constructor')
+    throw new TypeError('watch access to host prototype fields is unavailable');
+  if ((typeof value !== 'object' && typeof value !== 'string') || value === null)
+    throw new TypeError('watch field access requires a record, collection, or text');
+  if (typeof value === 'string') {
+    if (key === 'length') return value.length;
+    if (typeof key === 'number' && Number.isSafeInteger(key)) return value[key];
+    throw new TypeError(`watch field '${String(key)}' is unavailable`);
+  }
+  if (!Object.hasOwn(value, key))
+    throw new TypeError(`watch field '${String(key)}' is unavailable`);
+  return value[key];
+}
+function watchNumber(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    throw new TypeError('watch arithmetic requires finite numbers');
+  return value;
+}
+function truthy(value) {
+  if (typeof value !== 'boolean') throw new TypeError('watch logic requires Bool values');
+  return value;
+}
+//#endregion
 //#region src/native-host.ts
 var runtime;
 var cartridgeId;
+var symbolNames = {};
 var input = createInterface({
   input: process.stdin,
   crlfDelay: Infinity,
@@ -4643,8 +4937,45 @@ function encoded(value) {
 function respond(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
+function namedValues(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [symbolNames[key] ?? key, entry]),
+  );
+}
+function evaluateExpressions(expressions, state, locals, booleanOnly = false) {
+  if (expressions === void 0) return [];
+  if (expressions.length > 32) throw new RangeError('too many native debugger expressions');
+  const environment = {
+    ...namedValues(state),
+    ...namedValues(locals),
+  };
+  return expressions.map((expression) => {
+    if (expression.length > 256) return { error: 'expression exceeds 256 characters' };
+    if (expression.length === 0) return { value: true };
+    try {
+      const value = evaluateWatch(expression, environment);
+      return booleanOnly && typeof value !== 'boolean'
+        ? { error: 'breakpoint condition must produce Bool' }
+        : { value };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'watch evaluation failed' };
+    }
+  });
+}
 async function handle(command) {
   switch (command.type) {
+    case 'render-wav': {
+      const wav =
+        command.kind === 'sound'
+          ? renderSoundWav(command.asset)
+          : renderMusicWav(command.asset, command.sounds);
+      if (wav.byteLength > 8388608) throw new RangeError('native WAV preview exceeds 8 MiB');
+      return {
+        type: 'wav',
+        bytes: encoded(wav),
+      };
+    }
     case 'load': {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2097152)
         throw new TypeError('invalid compiled cartridge');
@@ -4676,6 +5007,7 @@ async function handle(command) {
         save: bytes(command.save),
       });
       cartridgeId = command.manifest.id;
+      symbolNames = command.symbolNames ?? {};
       return {
         type: 'loaded',
         cartridgeId,
@@ -4711,9 +5043,21 @@ async function handle(command) {
               result.frame.saveCommit === void 0 ? null : encoded(result.frame.saveCommit),
           },
         };
+      if ('booted' in result)
+        return {
+          type: 'step',
+          ...result,
+        };
       return {
         type: 'step',
         ...result,
+        watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
+        conditions: evaluateExpressions(
+          command.conditions,
+          result.inspection.state,
+          result.event.locals,
+          true,
+        ),
       };
     }
     case 'snapshot':

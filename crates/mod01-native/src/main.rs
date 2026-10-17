@@ -19,17 +19,23 @@
     clippy::assigning_clones
 )]
 
+mod asset_tools;
 mod audio;
 mod project;
+mod replay;
 mod runtime;
+mod save_manager;
 mod sprite;
+mod ui_assets;
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
+use asset_tools::AssetWorkbench;
 use audio::AudioOutput;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use directories::ProjectDirs;
@@ -39,9 +45,26 @@ use project::NativeProject;
 use runtime::RuntimeBridge;
 use serde_json::{Value, json};
 use sprite::{DEFAULT_AXIS, SpriteDocument, SpriteEditor, Tool};
+use ui_assets::PixelCursors;
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
+const fn manual_topics() -> [(&'static str, &'static str); 9] {
+    [
+        ("START", include_str!("../../../docs/TUTORIAL.md")),
+        ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
+        ("API", include_str!("../../../docs/API.md")),
+        ("ASSETS", include_str!("../../../docs/ASSETS.md")),
+        ("HARDWARE", include_str!("../../../docs/HARDWARE.md")),
+        ("LIMITS", include_str!("../../../docs/LIMITS.md")),
+        ("DEBUGGING", include_str!("../../../docs/DEBUGGING.md")),
+        (
+            "CARTRIDGES",
+            include_str!("../../../docs/CARTRIDGE_FORMAT.md"),
+        ),
+        ("STUDIO", include_str!("../../../docs/STUDIO.md")),
+    ]
+}
 const PALETTE: [[u8; 3]; 32] = [
     [23, 20, 31],
     [41, 37, 50],
@@ -86,11 +109,29 @@ enum View {
     Manifest,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DebugTab {
+    Source,
+    State,
+    Tasks,
+    Memory,
+    Audio,
+    Profile,
+}
+
+struct SourceBreakpoint {
+    source: String,
+    line: usize,
+    condition: String,
+}
+
 struct StudioApp {
+    cursors: PixelCursors,
     project: Option<NativeProject>,
     manifest_text: String,
     view: View,
     runtime: RuntimeBridge,
+    preview_runtime: RuntimeBridge,
     audio: Option<AudioOutput>,
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
@@ -101,6 +142,7 @@ struct StudioApp {
     asset_path: String,
     asset_text: String,
     asset_dirty: bool,
+    asset_workbench: Option<AssetWorkbench>,
     color_hex: String,
     sprite_painting: bool,
     last_sprite_point: Option<(i32, i32)>,
@@ -109,6 +151,31 @@ struct StudioApp {
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
+    debug_inspection: Value,
+    debug_trace: Vec<Value>,
+    debug_tab: DebugTab,
+    debug_running: bool,
+    breakpoints: Vec<SourceBreakpoint>,
+    breakpoint_line: usize,
+    breakpoint_condition: String,
+    watch_input: String,
+    watches: Vec<String>,
+    watch_results: Vec<Value>,
+    memory_address: u32,
+    memory_length: usize,
+    memory_view: String,
+    memory_edit: String,
+    debug_snapshots: Vec<(u32, String)>,
+    last_pixels: Vec<u8>,
+    recording_gif: bool,
+    gif_frames: Vec<Vec<u8>>,
+    recording_replay: bool,
+    replay_frames: Vec<(u32, Value)>,
+    replay_playback: Option<BTreeMap<u32, Value>>,
+    preview_wav: Vec<u8>,
+    preview_offset: usize,
+    preview_export: bool,
+    preview_pending: bool,
     loaded: bool,
     pending: bool,
     frame: u32,
@@ -119,16 +186,29 @@ struct StudioApp {
     new_path: String,
     new_id: String,
     show_new: bool,
+    show_new_asset: bool,
+    new_asset_name: String,
+    new_asset_kind: modl_core::AssetKind,
+    show_manual: bool,
+    manual_query: String,
+    manual_topic: usize,
+    show_explorer: bool,
+    explorer_tab: String,
+    explorer_data: Option<Value>,
+    show_save_manager: bool,
+    confirm_save_action: Option<&'static str>,
 }
 
 impl StudioApp {
-    fn new(start: Option<PathBuf>) -> Self {
+    fn new(start: Option<PathBuf>, context: &egui::Context) -> Self {
         let host_path = native_host_path();
         let mut app = Self {
+            cursors: PixelCursors::new(context),
             project: None,
             manifest_text: String::new(),
             view: View::Code,
-            runtime: RuntimeBridge::new(host_path),
+            runtime: RuntimeBridge::new(host_path.clone()),
+            preview_runtime: RuntimeBridge::new(host_path),
             audio: AudioOutput::new().ok(),
             gamepads: Gilrs::new().ok(),
             texture: None,
@@ -139,6 +219,7 @@ impl StudioApp {
             asset_path: String::new(),
             asset_text: String::new(),
             asset_dirty: false,
+            asset_workbench: None,
             color_hex: "ED7B69FF".to_owned(),
             sprite_painting: false,
             last_sprite_point: None,
@@ -147,6 +228,31 @@ impl StudioApp {
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
+            debug_inspection: Value::Null,
+            debug_trace: Vec::new(),
+            debug_tab: DebugTab::Source,
+            debug_running: false,
+            breakpoints: Vec::new(),
+            breakpoint_line: 1,
+            breakpoint_condition: String::new(),
+            watch_input: String::new(),
+            watches: Vec::new(),
+            watch_results: Vec::new(),
+            memory_address: 0,
+            memory_length: 64,
+            memory_view: String::new(),
+            memory_edit: String::new(),
+            debug_snapshots: Vec::new(),
+            last_pixels: Vec::new(),
+            recording_gif: false,
+            gif_frames: Vec::new(),
+            recording_replay: false,
+            replay_frames: Vec::new(),
+            replay_playback: None,
+            preview_wav: Vec::new(),
+            preview_offset: 0,
+            preview_export: false,
+            preview_pending: false,
             loaded: false,
             pending: false,
             frame: 0,
@@ -157,6 +263,17 @@ impl StudioApp {
             new_path: String::new(),
             new_id: "new-cart".to_owned(),
             show_new: false,
+            show_new_asset: false,
+            new_asset_name: "new_asset".to_owned(),
+            new_asset_kind: modl_core::AssetKind::TileSet,
+            show_manual: false,
+            manual_query: String::new(),
+            manual_topic: 0,
+            show_explorer: false,
+            explorer_tab: "TOKENS".to_owned(),
+            explorer_data: None,
+            show_save_manager: false,
+            confirm_save_action: None,
         };
         if let Some(path) = start {
             app.open(path);
@@ -174,6 +291,7 @@ impl StudioApp {
                 self.sprite = None;
                 self.asset_name.clear();
                 self.asset_dirty = false;
+                self.asset_workbench = None;
                 self.view = View::Code;
             }
             Err(error) => self.status = error,
@@ -191,10 +309,35 @@ impl StudioApp {
                 self.sprite = None;
                 self.asset_name.clear();
                 self.asset_dirty = false;
+                self.asset_workbench = None;
                 self.view = View::Code;
                 if play {
                     self.run();
                 }
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn recover_revision(&mut self, path: PathBuf) {
+        let Some(previous) = self.project.as_ref() else {
+            return;
+        };
+        let root = previous.root.clone();
+        let workcart_path = previous.workcart_path.clone();
+        match NativeProject::open(&path) {
+            Ok(mut project) => {
+                self.stop();
+                project.root = root;
+                project.workcart_path = workcart_path;
+                project.dirty = true;
+                self.manifest_text = project.manifest_source.clone();
+                self.project = Some(project);
+                self.asset_workbench = None;
+                self.sprite = None;
+                self.asset_name.clear();
+                self.view = View::Code;
+                self.status = "RECOVERY REVISION LOADED; SAVE TO APPLY".to_owned();
             }
             Err(error) => self.status = error,
         }
@@ -210,6 +353,7 @@ impl StudioApp {
                 self.sprite = None;
                 self.asset_name.clear();
                 self.asset_dirty = false;
+                self.asset_workbench = None;
                 self.show_new = false;
                 self.view = View::Code;
             }
@@ -261,7 +405,7 @@ impl StudioApp {
         if self
             .project
             .as_ref()
-            .is_some_and(|project| project.root.is_none())
+            .is_some_and(|project| project.root.is_none() && project.workcart_path.is_none())
         {
             self.save_as();
             return;
@@ -308,17 +452,16 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let previous_root = project.root.clone();
-        project.root = Some(path);
-        match project.save() {
+        let mut folder_project = project.clone();
+        folder_project.root = Some(path);
+        folder_project.detach_workcart();
+        match folder_project.save() {
             Ok(()) => {
-                project.dirty = false;
+                folder_project.dirty = false;
+                *project = folder_project;
                 self.status = "PROJECT SAVED".to_owned();
             }
-            Err(error) => {
-                project.root = previous_root;
-                self.status = error;
-            }
+            Err(error) => self.status = error,
         }
     }
 
@@ -338,6 +481,265 @@ impl StudioApp {
         };
         project.sync_editor();
         self.status = project.check().unwrap_or_else(|error| error);
+    }
+
+    fn open_explorer(&mut self) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
+        }
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        project.sync_editor();
+        match modl_core::compile_project(
+            &project.manifest_source,
+            &project.files,
+            modl_core::CompileMode::Release,
+        ) {
+            Ok(compilation) => {
+                let mut data = serde_json::to_value(compilation).unwrap_or_default();
+                data["packedBytes"] = json!(project.pack().map_or(0, |bytes| bytes.len()));
+                self.explorer_data = Some(data);
+                self.show_explorer = true;
+                self.explorer_tab = "TOKENS".to_owned();
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn help_windows(&mut self, context: &egui::Context) {
+        if self.show_manual {
+            let mut open = true;
+            egui::Window::new("MODL/1 MANUAL")
+                .open(&mut open)
+                .default_size([900.0, 650.0])
+                .show(context, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("SEARCH");
+                        ui.text_edit_singleline(&mut self.manual_query);
+                    });
+                    let topics = manual_topics();
+                    ui.columns(2, |columns| {
+                        egui::ScrollArea::vertical().show(&mut columns[0], |ui| {
+                            for (index, (title, body)) in topics.iter().enumerate() {
+                                if !self.manual_query.is_empty()
+                                    && !format!("{title} {body}")
+                                        .to_lowercase()
+                                        .contains(&self.manual_query.to_lowercase())
+                                {
+                                    continue;
+                                }
+                                if ui
+                                    .selectable_label(self.manual_topic == index, *title)
+                                    .clicked()
+                                {
+                                    self.manual_topic = index;
+                                }
+                            }
+                        });
+                        egui::ScrollArea::both().show(&mut columns[1], |ui| {
+                            let (title, body) = topics[self.manual_topic.min(topics.len() - 1)];
+                            ui.heading(title);
+                            ui.add(egui::Label::new(body).wrap());
+                        });
+                    });
+                });
+            self.show_manual = open;
+        }
+        if self.show_explorer {
+            let mut open = true;
+            egui::Window::new("COMPILER EXPLORER")
+                .open(&mut open)
+                .default_size([1000.0, 700.0])
+                .show(context, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for tab in [
+                            "GRAPH", "TOKENS", "AST", "TYPED", "IR", "JS", "MAP", "DIAG", "SIZE",
+                        ] {
+                            if ui.selectable_label(self.explorer_tab == tab, tab).clicked() {
+                                self.explorer_tab = tab.to_owned();
+                            }
+                        }
+                    });
+                    if let Some(data) = &self.explorer_data {
+                        let selected = match self.explorer_tab.as_str() {
+                            "GRAPH" => &data["generated"]["relationships"],
+                            "TOKENS" => &data["analysis"]["tokens"],
+                            "AST" => &data["analysis"]["module"],
+                            "TYPED" => &data["analysis"]["symbols"],
+                            "IR" => &data["analysis"]["ir"],
+                            "JS" => &data["generated"]["javascript"],
+                            "MAP" => &data["generated"]["source_map_json"],
+                            "DIAG" => &data["analysis"]["diagnostics"],
+                            "SIZE" => &data["packedBytes"],
+                            _ => &Value::Null,
+                        };
+                        let output = selected.as_str().map_or_else(
+                            || serde_json::to_string_pretty(selected).unwrap_or_default(),
+                            str::to_owned,
+                        );
+                        egui::ScrollArea::both().show(ui, |ui| {
+                            ui.code(output);
+                        });
+                    }
+                });
+            self.show_explorer = open;
+        }
+        self.save_manager_window(context);
+    }
+
+    fn save_manager_window(&mut self, context: &egui::Context) {
+        if !self.show_save_manager {
+            return;
+        }
+        let Some(id) = self
+            .project
+            .as_ref()
+            .map(|project| project.manifest.id.clone())
+        else {
+            self.show_save_manager = false;
+            return;
+        };
+        let bytes = read_save(&id);
+        let schema = read_save_schema(&id);
+        let mut action = None;
+        let mut open = true;
+        egui::Window::new("SAVE MANAGER")
+            .open(&mut open)
+            .default_size([520.0, 260.0])
+            .show(context, |ui| {
+                ui.heading(&id);
+                match (&bytes, &schema) {
+                    (Ok(bytes), Ok(schema)) => {
+                        ui.label(format!("SCHEMA {schema} / {} OF 8192 BYTES", bytes.len()));
+                        ui.label("Browser-compatible .m01save export / checksum verified import");
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        ui.label(error);
+                    }
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("EXPORT .M01SAVE").clicked() {
+                        action = Some("export");
+                    }
+                    if ui.button("IMPORT .M01SAVE").clicked() {
+                        action = Some("import");
+                    }
+                    if ui
+                        .button(if self.confirm_save_action == Some("reset") {
+                            "CONFIRM RESET"
+                        } else {
+                            "RESET"
+                        })
+                        .clicked()
+                    {
+                        action = Some("reset");
+                    }
+                    if ui
+                        .button(if self.confirm_save_action == Some("delete") {
+                            "CONFIRM DELETE"
+                        } else {
+                            "DELETE"
+                        })
+                        .clicked()
+                    {
+                        action = Some("delete");
+                    }
+                });
+                ui.label("Reset and delete retain a local recovery copy.");
+            });
+        self.show_save_manager = open;
+        if let Some(action) = action {
+            self.manage_save(&id, action);
+        }
+    }
+
+    fn manage_save(&mut self, id: &str, action: &'static str) {
+        match action {
+            "export" => {
+                let result = read_save(id).and_then(|bytes| {
+                    let schema = read_save_schema(id)?;
+                    save_manager::export(id, schema, &bytes)
+                });
+                match result {
+                    Ok(bytes) => {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(format!("{id}.m01save"))
+                            .add_filter("MOD-01 save", &["m01save"])
+                            .save_file()
+                        {
+                            self.status = fs::write(path, bytes).map_or_else(
+                                |error| error.to_string(),
+                                |()| "SAVE IMAGE EXPORTED".to_owned(),
+                            );
+                        }
+                    }
+                    Err(error) => self.status = error,
+                }
+            }
+            "import" => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("MOD-01 save", &["m01save"])
+                    .pick_file()
+                {
+                    let result = fs::read(path)
+                        .map_err(|error| error.to_string())
+                        .and_then(|encoded| save_manager::import(id, &encoded));
+                    self.status = match result.and_then(|(schema, bytes)| {
+                        self.stop();
+                        backup_save(id)?;
+                        write_save(id, &bytes)?;
+                        write_save_schema(id, schema)
+                    }) {
+                        Ok(()) => "SAVE IMAGE IMPORTED / CHECKSUM VERIFIED".to_owned(),
+                        Err(error) => error,
+                    };
+                }
+                self.confirm_save_action = None;
+            }
+            "reset" | "delete" => {
+                if self.confirm_save_action != Some(action) {
+                    self.confirm_save_action = Some(action);
+                    self.status =
+                        format!("CONFIRM {} / RECOVERY COPY RETAINED", action.to_uppercase());
+                    return;
+                }
+                self.stop();
+                self.status = match backup_save(id).and_then(|()| {
+                    if action == "reset" {
+                        write_save(id, &[])
+                    } else {
+                        let path = save_path(id)?;
+                        match fs::remove_file(path) {
+                            Ok(()) => clear_save_schema(id),
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                                clear_save_schema(id)
+                            }
+                            Err(error) => Err(error.to_string()),
+                        }
+                    }
+                }) {
+                    Ok(()) => format!(
+                        "SAVE {}",
+                        if action == "reset" {
+                            "RESET"
+                        } else {
+                            "DELETED"
+                        }
+                    ),
+                    Err(error) => error,
+                };
+                self.confirm_save_action = None;
+            }
+            _ => {}
+        }
     }
 
     fn pack(&mut self) {
@@ -410,6 +812,301 @@ impl StudioApp {
         }
     }
 
+    fn export_cartridge_png(&mut self) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
+        }
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        project.sync_editor();
+        let packed = match project.pack() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let identity = project
+            .files
+            .get("presentation/cartridge.json")
+            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+        let metadata = modl_core::CartridgePngMetadata {
+            title: project.manifest.title.clone(),
+            author: project.manifest.author.clone(),
+            year: identity
+                .as_ref()
+                .and_then(|value| value["year"].as_u64())
+                .and_then(|value| u16::try_from(value).ok())
+                .filter(|year| (1970..=9999).contains(year))
+                .unwrap_or(1999),
+            players: identity
+                .as_ref()
+                .and_then(|value| value["players"].as_u64())
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|players| (1..=4).contains(players))
+                .unwrap_or(1),
+            controls: identity
+                .as_ref()
+                .and_then(|value| value["controls"].as_str())
+                .filter(|value| value.len() <= 64)
+                .unwrap_or("PAD")
+                .to_owned(),
+        };
+        let png = match modl_core::encode_cartridge_png(&packed, &metadata) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("{}.m01c.png", project.manifest.id))
+            .save_file()
+        {
+            self.status = match fs::write(path, png) {
+                Ok(()) => "CARTRIDGE PNG EXPORTED".to_owned(),
+                Err(error) => error.to_string(),
+            };
+        }
+    }
+
+    fn capture_png(&mut self, scale: u32) {
+        let Some(original) = indexed_image(&self.last_pixels) else {
+            self.status = "RUN A CARTRIDGE BEFORE CAPTURING".to_owned();
+            return;
+        };
+        let image = if scale == 1 {
+            original
+        } else {
+            image::imageops::resize(
+                &original,
+                SCREEN_WIDTH as u32 * scale,
+                SCREEN_HEIGHT as u32 * scale,
+                image::imageops::FilterType::Nearest,
+            )
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("mod01-screen-{scale}x.png"))
+            .save_file()
+        else {
+            return;
+        };
+        self.status = match image.save_with_format(path, image::ImageFormat::Png) {
+            Ok(()) => "SCREEN PNG SAVED".to_owned(),
+            Err(error) => error.to_string(),
+        };
+    }
+
+    fn finish_gif(&mut self) {
+        self.recording_gif = false;
+        if self.gif_frames.is_empty() {
+            self.status = "NO GIF FRAMES CAPTURED".to_owned();
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("mod01-capture.gif")
+            .save_file()
+        else {
+            return;
+        };
+        self.status = (|| -> Result<String, String> {
+            let file = fs::File::create(path).map_err(|error| error.to_string())?;
+            let mut encoder = image::codecs::gif::GifEncoder::new(file);
+            encoder
+                .set_repeat(image::codecs::gif::Repeat::Infinite)
+                .map_err(|error| error.to_string())?;
+            let frames = self
+                .gif_frames
+                .iter()
+                .filter_map(|pixels| indexed_image(pixels))
+                .map(|image| {
+                    image::Frame::from_parts(
+                        image,
+                        0,
+                        0,
+                        image::Delay::from_numer_denom_ms(1000, 30),
+                    )
+                });
+            encoder
+                .encode_frames(frames)
+                .map_err(|error| error.to_string())?;
+            Ok(format!("GIF SAVED / {} FRAMES", self.gif_frames.len()))
+        })()
+        .unwrap_or_else(|error| error);
+    }
+
+    fn finish_replay(&mut self) {
+        self.recording_replay = false;
+        let bytes = match replay::encode(&self.replay_frames) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name("mod01-input.m01rec")
+            .save_file()
+        else {
+            return;
+        };
+        self.status = match fs::write(path, bytes) {
+            Ok(()) => format!("REPLAY SAVED / {} FRAMES", self.replay_frames.len()),
+            Err(error) => error.to_string(),
+        };
+    }
+
+    fn load_replay(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("MOD-01 replay", &["m01rec"])
+            .pick_file()
+        else {
+            return;
+        };
+        self.status = match fs::read(path)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| replay::decode(&bytes))
+        {
+            Ok(frames) => {
+                self.replay_playback = Some(frames);
+                self.recording_replay = false;
+                self.run();
+                if self.running {
+                    "REPLAY LOADED".to_owned()
+                } else {
+                    self.status.clone()
+                }
+            }
+            Err(error) => error,
+        };
+    }
+
+    fn render_asset_wav(&mut self, export: bool) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let Some(declaration) = project.manifest.assets.get(&self.asset_name) else {
+            return;
+        };
+        if !matches!(
+            declaration.kind,
+            modl_core::AssetKind::Sound | modl_core::AssetKind::Music
+        ) {
+            return;
+        }
+        let mut asset: Value = match self
+            .asset_workbench
+            .as_ref()
+            .map(AssetWorkbench::source)
+            .transpose()
+            .and_then(|source| {
+                serde_json::from_str(source.as_deref().unwrap_or(&self.asset_text))
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        asset["name"] = json!(self.asset_name);
+        let sounds = project
+            .manifest
+            .assets
+            .iter()
+            .filter_map(|(name, declared)| {
+                if declared.kind != modl_core::AssetKind::Sound {
+                    return None;
+                }
+                let mut value: Value =
+                    serde_json::from_slice(project.files.get(&declared.path)?).ok()?;
+                value["name"] = json!(name);
+                Some(value)
+            })
+            .collect::<Vec<_>>();
+        self.preview_export = export;
+        self.preview_pending = true;
+        self.status = "RENDERING PRODUCTION SYNTH AUDIO".to_owned();
+        if let Err(error) = self.preview_runtime.send(json!({"type":"render-wav",
+            "kind":if declaration.kind == modl_core::AssetKind::Sound { "sound" } else { "music" },
+            "asset":asset,"sounds":sounds}))
+        {
+            self.status = error;
+            self.preview_pending = false;
+        }
+    }
+
+    fn process_preview(&mut self, context: &egui::Context) {
+        while let Some(event) = self.preview_runtime.poll() {
+            self.preview_pending = false;
+            match event["type"].as_str() {
+                Some("wav") => {
+                    let decoded = event["bytes"]
+                        .as_str()
+                        .and_then(|encoded| STANDARD.decode(encoded).ok());
+                    let Some(bytes) = decoded else {
+                        self.status = "INVALID WAV RESPONSE".to_owned();
+                        continue;
+                    };
+                    if bytes.len() < 44 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+                        self.status = "INVALID WAV HEADER".to_owned();
+                        continue;
+                    }
+                    if self.preview_export {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(format!("{}.wav", self.asset_name))
+                            .save_file()
+                        {
+                            self.status = match fs::write(path, bytes) {
+                                Ok(()) => "WAV SAVED".to_owned(),
+                                Err(error) => error.to_string(),
+                            };
+                        }
+                    } else {
+                        if let Some(audio) = &self.audio {
+                            audio.clear();
+                        }
+                        self.preview_wav = bytes;
+                        self.preview_offset = 44;
+                        self.status = "PREVIEWING AUDIO".to_owned();
+                        context.request_repaint();
+                    }
+                }
+                Some("error") => {
+                    self.status = event["message"]
+                        .as_str()
+                        .unwrap_or("AUDIO PREVIEW FAILED")
+                        .to_owned()
+                }
+                _ => {}
+            }
+        }
+        if self.preview_pending {
+            context.request_repaint_after(Duration::from_millis(16));
+        }
+        if self.preview_offset + 4 <= self.preview_wav.len() {
+            let end = (self.preview_offset + 800 * 4).min(self.preview_wav.len());
+            let aligned = self.preview_offset + ((end - self.preview_offset) / 4) * 4;
+            if let Some(audio) = &self.audio {
+                if let Err(error) =
+                    audio.push_pcm16_stereo(&self.preview_wav[self.preview_offset..aligned])
+                {
+                    self.status = error;
+                }
+            }
+            self.preview_offset = aligned;
+            context.request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
     fn run(&mut self) {
         self.run_mode(false);
     }
@@ -432,6 +1129,24 @@ impl StudioApp {
         let (Ok(rom), Ok(javascript)) = (project.pack(), project.javascript(debug)) else {
             self.status = project.check().unwrap_or_else(|error| error);
             return;
+        };
+        let symbol_names = if debug {
+            modl_core::compile_project(
+                &project.manifest_source,
+                &project.files,
+                modl_core::CompileMode::Debug,
+            )
+            .map(|compiled| {
+                compiled
+                    .analysis
+                    .symbols
+                    .into_iter()
+                    .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
+                    .collect::<BTreeMap<_, _>>()
+            })
+            .unwrap_or_default()
+        } else {
+            BTreeMap::new()
         };
         let files: serde_json::Map<String, Value> = project
             .manifest
@@ -464,6 +1179,7 @@ impl StudioApp {
             "rom": STANDARD.encode(rom),
             "save": STANDARD.encode(save),
             "debug": debug,
+            "symbolNames": symbol_names,
         });
         if let Some(audio) = &self.audio {
             audio.clear();
@@ -476,9 +1192,15 @@ impl StudioApp {
                 self.debugging = debug;
                 self.snapshot = None;
                 self.debug_event.clear();
+                self.debug_inspection = Value::Null;
+                self.debug_trace.clear();
+                self.watch_results.clear();
+                self.debug_running = false;
+                self.debug_snapshots.clear();
                 self.loaded = false;
                 self.pending = true;
                 self.frame = 0;
+                self.last_pixels.clear();
                 self.status = if debug {
                     "LOADING DEBUG CARTRIDGE"
                 } else {
@@ -493,6 +1215,7 @@ impl StudioApp {
 
     fn stop(&mut self) {
         self.running = false;
+        self.debug_running = false;
         self.loaded = false;
         self.pending = false;
         if let Some(audio) = &self.audio {
@@ -523,13 +1246,30 @@ impl StudioApp {
                     } else if event["booted"] == true {
                         self.status = "DEBUG BOOT COMPLETE".to_owned();
                     } else if event["event"].is_object() {
+                        self.debug_inspection = event["inspection"].clone();
+                        self.watch_results =
+                            event["watches"].as_array().cloned().unwrap_or_default();
+                        self.debug_trace.push(event["event"].clone());
+                        if self.debug_trace.len() > 4096 {
+                            self.debug_trace.remove(0);
+                        }
                         self.debug_event = serde_json::to_string_pretty(&event["event"])
                             .unwrap_or_else(|_| "debug event".to_owned());
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
+                        if self.hit_breakpoint(&event["event"], &event["conditions"]) {
+                            self.debug_running = false;
+                            self.status = "BREAKPOINT".to_owned();
+                        }
                     }
                 }
                 Some("snapshot") => {
                     self.snapshot = event["snapshot"].as_str().map(str::to_owned);
+                    if let Some(snapshot) = &self.snapshot {
+                        self.debug_snapshots.push((self.frame, snapshot.clone()));
+                        if self.debug_snapshots.len() > 120 {
+                            self.debug_snapshots.remove(0);
+                        }
+                    }
                     self.status = "DEBUG SNAPSHOT CAPTURED".to_owned();
                 }
                 Some("restored") => {
@@ -539,6 +1279,33 @@ impl StudioApp {
                     }
                 }
                 Some("stopped") => {}
+                Some("memory") => {
+                    self.memory_view = event["bytes"]
+                        .as_str()
+                        .and_then(|encoded| STANDARD.decode(encoded).ok())
+                        .map_or_else(
+                            || "INVALID MEMORY RESPONSE".to_owned(),
+                            |bytes| {
+                                bytes
+                                    .chunks(16)
+                                    .enumerate()
+                                    .map(|(row, bytes)| {
+                                        format!(
+                                            "{:06X}: {}",
+                                            self.memory_address as usize + row * 16,
+                                            bytes
+                                                .iter()
+                                                .map(|byte| format!("{byte:02X}"))
+                                                .collect::<Vec<_>>()
+                                                .join(" ")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            },
+                        );
+                }
+                Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
                     self.status = event["message"]
                         .as_str()
@@ -550,6 +1317,34 @@ impl StudioApp {
                 _ => self.status = format!("UNEXPECTED RUNTIME MESSAGE: {}", event["type"]),
             }
         }
+        if self.debug_running && self.running && self.loaded && !self.pending {
+            self.step(context);
+        }
+    }
+
+    fn hit_breakpoint(&self, event: &Value, conditions: &Value) -> bool {
+        let Some(project) = &self.project else {
+            return false;
+        };
+        let source = event["sourceSpan"]["source"]
+            .as_str()
+            .unwrap_or(&project.manifest.entry);
+        let offset = event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
+        let Some(bytes) = project.files.get(source) else {
+            return false;
+        };
+        let line = 1 + bytes
+            .iter()
+            .take(offset)
+            .filter(|byte| **byte == b'\n')
+            .count();
+        self.breakpoints.iter().enumerate().any(|(index, point)| {
+            point.source == source
+                && point.line == line
+                && (point.condition.is_empty()
+                    || conditions[index]["value"] == true
+                    || conditions[index]["error"].is_string())
+        })
     }
 
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
@@ -558,6 +1353,10 @@ impl StudioApp {
         if let Some(encoded) = event["pixels"].as_str() {
             if let Ok(pixels) = STANDARD.decode(encoded) {
                 if pixels.len() == SCREEN_WIDTH * SCREEN_HEIGHT {
+                    self.last_pixels = pixels.clone();
+                    if self.recording_gif && self.frame % 2 == 0 && self.gif_frames.len() < 150 {
+                        self.gif_frames.push(pixels.clone());
+                    }
                     let mut rgba = Vec::with_capacity(pixels.len() * 4);
                     let palette = sprite::palette();
                     for index in pixels {
@@ -616,6 +1415,119 @@ impl StudioApp {
         if self.running && self.loaded && !self.pending && self.debugging {
             self.send_input(context, "step");
         }
+    }
+
+    fn debugger_ui(&mut self, ui: &mut egui::Ui) {
+        ui.separator();
+        ui.horizontal(|ui| {
+            for (tab, name) in [
+                (DebugTab::Source, "SOURCE"),
+                (DebugTab::State, "STATE"),
+                (DebugTab::Tasks, "TASKS"),
+                (DebugTab::Memory, "MEMORY"),
+                (DebugTab::Audio, "AUDIO"),
+                (DebugTab::Profile, "PROFILE"),
+            ] {
+                if ui.selectable_label(self.debug_tab == tab, name).clicked() {
+                    self.debug_tab = tab;
+                }
+            }
+        });
+        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| match self.debug_tab {
+            DebugTab::Source => {
+                let source = self.project.as_ref().map_or("", |project| project.selected_file.as_str()).to_owned();
+                ui.horizontal(|ui| {
+                    ui.label(format!("BREAKPOINT {source}:"));
+                    ui.add(egui::DragValue::new(&mut self.breakpoint_line).range(1..=100_000));
+                    ui.add_sized([150.0, 22.0], egui::TextEdit::singleline(&mut self.breakpoint_condition).hint_text("CONDITION"));
+                    if ui.button("ADD").clicked() && !source.is_empty() && self.breakpoints.len() < 32
+                        && !self.breakpoints.iter().any(|point| point.source == source && point.line == self.breakpoint_line) {
+                        self.breakpoints.push(SourceBreakpoint { source: source.clone(), line: self.breakpoint_line, condition: self.breakpoint_condition.trim().chars().take(256).collect() });
+                    }
+                });
+                let mut remove = None;
+                for (index, point) in self.breakpoints.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}:{}{}", point.source, point.line,
+                            if point.condition.is_empty() { String::new() } else { format!(" IF {}", point.condition) }));
+                        if ui.button("REMOVE").clicked() { remove = Some(index); }
+                    });
+                }
+                if let Some(index) = remove { self.breakpoints.remove(index); }
+                ui.horizontal(|ui| {
+                    ui.label("WATCH");
+                    ui.add_sized([190.0, 22.0], egui::TextEdit::singleline(&mut self.watch_input).hint_text("EXPRESSION"));
+                    if ui.button("ADD").clicked() {
+                        let expression = self.watch_input.trim().to_owned();
+                        if !expression.is_empty() && expression.len() <= 256 && !self.watches.contains(&expression) {
+                            self.watches.push(expression);
+                            if self.watches.len() > 4 { self.watches.remove(0); }
+                            self.watch_input.clear();
+                        }
+                    }
+                });
+                let mut remove_watch = None;
+                for (index, expression) in self.watches.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let rendered = self.watch_results.get(index).map_or_else(
+                            || "PENDING".to_owned(),
+                            |result| result["error"].as_str().map_or_else(
+                                || result["value"].to_string(), |error| format!("ERROR {error}")),
+                        );
+                        ui.label(format!("{expression} = {rendered}"));
+                        if ui.button("REMOVE").clicked() { remove_watch = Some(index); }
+                    });
+                }
+                if let Some(index) = remove_watch {
+                    self.watches.remove(index);
+                    self.watch_results.clear();
+                }
+                ui.label(if self.debug_event.is_empty() { "Press STEP or CONTINUE." } else { &self.debug_event });
+            }
+            DebugTab::State => {
+                ui.label(serde_json::to_string_pretty(&self.debug_inspection["state"]).unwrap_or_default());
+            }
+            DebugTab::Tasks => {
+                ui.label(serde_json::to_string_pretty(&self.debug_inspection["tasks"]).unwrap_or_default());
+                ui.label(serde_json::to_string_pretty(&self.debug_inspection["callStack"]).unwrap_or_default());
+            }
+            DebugTab::Memory => {
+                ui.horizontal(|ui| {
+                    ui.label("ADDRESS"); ui.add(egui::DragValue::new(&mut self.memory_address).range(0..=0x0030_ffff).hexadecimal(6, false, true));
+                    ui.label("BYTES"); ui.add(egui::DragValue::new(&mut self.memory_length).range(1..=256));
+                    if ui.button("READ").clicked() {
+                        self.pending = self.runtime.send(json!({"type":"memory","address":self.memory_address,"length":self.memory_length})).is_ok();
+                    }
+                });
+                ui.label(&self.memory_view);
+                ui.horizontal(|ui| {
+                    ui.label("WRITE HEX"); ui.text_edit_singleline(&mut self.memory_edit);
+                    if ui.button("WRITE").clicked() {
+                        let compact = self.memory_edit.chars().filter(|character| !character.is_whitespace()).collect::<String>();
+                        if compact.len() % 2 == 0 && compact.len() <= 512 {
+                            let parsed = (0..compact.len()).step_by(2).map(|index| u8::from_str_radix(&compact[index..index+2],16)).collect::<Result<Vec<_>,_>>();
+                            match parsed {
+                                Ok(bytes) => self.pending = self.runtime.send(json!({"type":"memory-edit","address":self.memory_address,"bytes":STANDARD.encode(bytes)})).is_ok(),
+                                Err(error) => self.status = error.to_string(),
+                            }
+                        } else { self.status = "HEX WRITE NEEDS 1-256 BYTES".to_owned(); }
+                    }
+                });
+            }
+            DebugTab::Audio => { ui.label("Native PCM output is active; voice inspection follows the runtime state."); }
+            DebugTab::Profile => {
+                ui.label(format!("FRAME {} / WORK {} / {} SOURCE EVENTS", self.frame, self.work, self.debug_trace.len()));
+                for event in self.debug_trace.iter().rev().take(8) { ui.label(format!("{}", event["sourceSpan"])); }
+                ui.label("SAVED DEBUG SNAPSHOTS");
+                for (frame, snapshot) in self.debug_snapshots.iter().rev() {
+                    if ui.button(format!("RESTORE FRAME {frame}")).clicked() {
+                        self.pending = self.runtime.send(json!({"type":"restore","snapshot":snapshot})).is_ok();
+                        self.frame = *frame;
+                        self.debug_running = false;
+                    }
+                }
+            }
+        });
     }
 
     fn send_input(&mut self, context: &egui::Context, kind: &str) {
@@ -709,8 +1621,26 @@ impl StudioApp {
                 }
             }
         }
-        let input = json!({"controllers":controllers,"pointer":pointer});
-        if let Err(error) = self.runtime.send(json!({"type":kind,"input":input})) {
+        let live_input = json!({"controllers":controllers,"pointer":pointer});
+        let input = self.replay_playback.as_ref().map_or_else(
+            || live_input.clone(),
+            |frames| {
+                frames
+                    .get(&self.frame)
+                    .cloned()
+                    .unwrap_or_else(replay::empty_input)
+            },
+        );
+        if self.recording_replay && self.replay_frames.len() < 36_000 {
+            self.replay_frames.push((self.frame, input.clone()));
+        }
+        let command = if kind == "step" {
+            json!({"type":kind,"input":input,"watches":self.watches,
+                "conditions":self.breakpoints.iter().map(|point| point.condition.as_str()).collect::<Vec<_>>()})
+        } else {
+            json!({"type":kind,"input":input})
+        };
+        if let Err(error) = self.runtime.send(command) {
             self.status = error;
             self.running = false;
         } else {
@@ -719,7 +1649,7 @@ impl StudioApp {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new("M01")
                     .strong()
@@ -731,9 +1661,9 @@ impl StudioApp {
                     self.open(path);
                 }
             }
-            if ui.button("OPEN CART").clicked() {
+            if ui.button("OPEN FILE").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("MOD-01 cartridge", &["m01c"])
+                    .add_filter("MOD-01 cartridge or workcart", &["m01c", "png", "m01w"])
                     .pick_file()
                 {
                     self.open(path);
@@ -749,9 +1679,45 @@ impl StudioApp {
                 if ui.button("SAVE AS").clicked() {
                     self.save_as();
                 }
+                let revisions = self
+                    .project
+                    .as_ref()
+                    .and_then(|project| project.revisions().ok())
+                    .unwrap_or_default();
+                ui.menu_button("RECOVER", |ui| {
+                    if revisions.is_empty() {
+                        ui.label("NO LOCAL REVISIONS");
+                    }
+                    for path in revisions {
+                        let label = path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("REVISION")
+                            .to_owned();
+                        if ui.button(label).clicked() {
+                            self.recover_revision(path);
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button("CHECK").clicked() {
                     self.check();
                 }
+                ui.menu_button("TOOLS", |ui| {
+                    if ui.button("MANUAL").clicked() {
+                        self.show_manual = true;
+                        ui.close();
+                    }
+                    if ui.button("COMPILER EXPLORER").clicked() {
+                        self.open_explorer();
+                        ui.close();
+                    }
+                    if ui.button("SAVE MANAGER").clicked() {
+                        self.show_save_manager = true;
+                        self.confirm_save_action = None;
+                        ui.close();
+                    }
+                });
                 if ui.button("PACK").clicked() {
                     self.pack();
                 }
@@ -762,6 +1728,58 @@ impl StudioApp {
                     if ui.button("ITCH.IO ZIP").clicked() {
                         self.export_player(true);
                     }
+                    if ui.button("CARTRIDGE PNG").clicked() {
+                        self.export_cartridge_png();
+                    }
+                });
+                ui.menu_button("CAPTURE", |ui| {
+                    for scale in 1..=4 {
+                        if ui.button(format!("SCREEN PNG {scale}x")).clicked() {
+                            self.capture_png(scale);
+                            ui.close();
+                        }
+                    }
+                    if ui
+                        .button(if self.recording_gif {
+                            "FINISH GIF"
+                        } else {
+                            "RECORD GIF"
+                        })
+                        .clicked()
+                    {
+                        if self.recording_gif {
+                            self.finish_gif();
+                        } else {
+                            self.gif_frames.clear();
+                            self.recording_gif = true;
+                        }
+                        ui.close();
+                    }
+                    if ui
+                        .button(if self.recording_replay {
+                            "SAVE REPLAY"
+                        } else {
+                            "RECORD REPLAY"
+                        })
+                        .clicked()
+                    {
+                        if self.recording_replay {
+                            self.finish_replay();
+                        } else {
+                            self.replay_frames.clear();
+                            self.recording_replay = true;
+                        }
+                        ui.close();
+                    }
+                    if ui.button("LOAD REPLAY").clicked() {
+                        self.load_replay();
+                        ui.close();
+                    }
+                    if self.replay_playback.is_some() && ui.button("CLEAR REPLAY").clicked() {
+                        self.replay_playback = None;
+                        self.status = "LIVE INPUT RESTORED".to_owned();
+                        ui.close();
+                    }
                 });
                 if ui.button("RUN").clicked() {
                     self.run();
@@ -770,6 +1788,9 @@ impl StudioApp {
                     self.run_mode(true);
                 }
             });
+            if ui.button("HELP").clicked() {
+                self.show_manual = true;
+            }
             if ui
                 .add_enabled(self.running, egui::Button::new("STOP"))
                 .clicked()
@@ -777,6 +1798,22 @@ impl StudioApp {
                 self.stop();
             }
             if self.debugging && self.running {
+                if ui
+                    .add_enabled(
+                        self.loaded && !self.pending,
+                        egui::Button::new(if self.debug_running {
+                            "PAUSE"
+                        } else {
+                            "CONTINUE"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.debug_running = !self.debug_running;
+                    if self.debug_running {
+                        self.step(ui.ctx());
+                    }
+                }
                 if ui
                     .add_enabled(self.loaded && !self.pending, egui::Button::new("STEP"))
                     .clicked()
@@ -808,6 +1845,12 @@ impl StudioApp {
     }
 
     fn sync_asset(&mut self) -> Result<(), String> {
+        if let Some(workbench) = &self.asset_workbench {
+            if workbench.dirty {
+                self.asset_text = workbench.source()?;
+                self.asset_dirty = true;
+            }
+        }
         if !self.asset_dirty {
             return Ok(());
         }
@@ -820,6 +1863,144 @@ impl StudioApp {
         project.dirty = true;
         self.asset_dirty = false;
         Ok(())
+    }
+
+    fn import_asset_file(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "MOD-01 asset",
+                &["m01g", "m01m", "m01f", "m01s", "m01t", "m01p", "json"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        let source = match fs::read_to_string(&path) {
+            Ok(source) if source.len() <= 16 * 1024 * 1024 => source,
+            Ok(_) => {
+                self.status = "ASSET FILE EXCEEDS 16 MIB".to_owned();
+                return;
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        let Some(current) = self.asset_workbench.as_ref() else {
+            self.status = "OPEN A STRUCTURED ASSET FIRST".to_owned();
+            return;
+        };
+        let parsed: Value = match serde_json::from_str(&source) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        let expected = if self.asset_name == "DISPLAY" {
+            "display".to_owned()
+        } else {
+            serde_json::to_value(current.kind)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or("")
+                .to_owned()
+        };
+        if parsed["kind"].as_str() != Some(&expected) {
+            self.status = format!("ASSET KIND MUST BE {expected}");
+            return;
+        }
+        let editor = if self.asset_name == "DISPLAY" {
+            AssetWorkbench::new_display(&source)
+        } else {
+            AssetWorkbench::new(current.kind, &source)
+        };
+        match editor {
+            Ok(editor) => {
+                self.asset_text = source;
+                self.asset_workbench = Some(editor);
+                self.asset_dirty = true;
+                self.status = format!("IMPORTED {}", path.display());
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn export_asset_file(&mut self) {
+        let source = match &self.asset_workbench {
+            Some(editor) => match editor.source() {
+                Ok(source) => source,
+                Err(error) => {
+                    self.status = error;
+                    return;
+                }
+            },
+            None => self.asset_text.clone(),
+        };
+        let name = PathBuf::from(&self.asset_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("asset.json")
+            .to_owned();
+        if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
+            self.status = match fs::write(&path, source) {
+                Ok(()) => format!("EXPORTED {}", path.display()),
+                Err(error) => error.to_string(),
+            };
+        }
+    }
+
+    fn import_tile_png(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG atlas", &["png"])
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match fs::read(&path) {
+            Ok(bytes) if bytes.len() <= 16 * 1024 * 1024 => bytes,
+            Ok(_) => {
+                self.status = "PNG EXCEEDS 16 MIB".to_owned();
+                return;
+            }
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        self.status = match self.asset_workbench.as_mut() {
+            Some(workbench) => match workbench.import_tile_png(&bytes, &sprite::palette()) {
+                Ok(()) => {
+                    self.asset_dirty = true;
+                    "TILE ATLAS IMPORTED".to_owned()
+                }
+                Err(error) => error,
+            },
+            None => "OPEN A TILE SET FIRST".to_owned(),
+        };
+    }
+
+    fn export_tile_png(&mut self) {
+        let Some(workbench) = &self.asset_workbench else {
+            return;
+        };
+        let png = match workbench.export_tile_png(&sprite::palette()) {
+            Ok(png) => png,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("{}.png", self.asset_name))
+            .add_filter("PNG atlas", &["png"])
+            .save_file()
+        {
+            self.status = match fs::write(path, png) {
+                Ok(()) => "TILE ATLAS EXPORTED".to_owned(),
+                Err(error) => error.to_string(),
+            };
+        }
     }
 
     fn open_asset(&mut self, name: &str) {
@@ -857,10 +2038,177 @@ impl StudioApp {
                 self.asset_path = asset.path.clone();
                 self.asset_text = source;
                 self.asset_dirty = false;
+                self.asset_workbench = AssetWorkbench::new(asset.kind, &self.asset_text).ok();
                 self.view = View::Assets;
             }
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    fn open_display(&mut self) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        let path = project
+            .manifest
+            .display
+            .clone()
+            .unwrap_or_else(|| "assets/display.m01p".to_owned());
+        if project.manifest.display.is_none() {
+            let mut manifest: toml::Value = match toml::from_str(&project.manifest_source) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            };
+            manifest["display"] = toml::Value::String(path.clone());
+            project.manifest_source = match toml::to_string_pretty(&manifest) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.status = error.to_string();
+                    return;
+                }
+            };
+            project.manifest.display = Some(path.clone());
+            project.dirty = true;
+            self.manifest_text = project.manifest_source.clone();
+        }
+        let source = project.files.entry(path.clone()).or_insert_with(|| {
+            serde_json::to_vec(&json!({
+                "revision":1,"kind":"display",
+                "remap":(0..32).collect::<Vec<_>>(),"raster":[]
+            }))
+            .unwrap_or_default()
+        });
+        let source = match String::from_utf8(source.clone()) {
+            Ok(source) => source,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        self.asset_workbench = AssetWorkbench::new_display(&source).ok();
+        self.asset_text = source;
+        self.asset_name = "DISPLAY".to_owned();
+        self.asset_path = path;
+        self.asset_dirty = false;
+        self.view = View::Assets;
+    }
+
+    fn create_asset(&mut self) {
+        let name = self.new_asset_name.trim().to_owned();
+        if name.is_empty()
+            || name.len() > 64
+            || !name.as_bytes()[0].is_ascii_alphabetic()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            self.status = "ASSET NAME MUST BE A MODL IDENTIFIER".to_owned();
+            return;
+        }
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        if project.manifest.assets.contains_key(&name) {
+            self.status = "ASSET NAME ALREADY EXISTS".to_owned();
+            return;
+        }
+        let (extension, value) = match self.new_asset_kind {
+            modl_core::AssetKind::TileSet => (
+                "m01g",
+                json!({"revision":2,"kind":"tile_set","tiles":vec![vec![0;64]],"flags":[0]}),
+            ),
+            modl_core::AssetKind::Map => {
+                let tile_set = project
+                    .manifest
+                    .assets
+                    .iter()
+                    .find(|(_, asset)| asset.kind == modl_core::AssetKind::TileSet)
+                    .map_or_else(|| "tiles".to_owned(), |(name, _)| name.clone());
+                if !project.manifest.assets.contains_key(&tile_set) {
+                    self.status = "CREATE A TILE SET BEFORE A MAP".to_owned();
+                    return;
+                }
+                (
+                    "m01m",
+                    json!({"revision":1,"kind":"map","layers":[{"width":30,"height":18,"cells":vec![0;540],"tileSet":tile_set}]}),
+                )
+            }
+            modl_core::AssetKind::Font => (
+                "m01f",
+                json!({"revision":1,"kind":"font","glyphWidth":5,"glyphHeight":7,"baseline":6,"advanceX":6,"advanceY":8,"missingGlyph":63,"glyphs":[{"code":63,"pixels":vec![0;35]}]}),
+            ),
+            modl_core::AssetKind::Sound => (
+                "m01s",
+                json!({"revision":1,"kind":"sound","waveform":"pulse","note":60,"durationFrames":18,"volume":0.6,"pan":0,"duty":0.5,"envelope":{"attackFrames":1,"decayFrames":3,"sustainLevel":0.65,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}),
+            ),
+            modl_core::AssetKind::Music => (
+                "m01t",
+                json!({"revision":1,"kind":"music","framesPerRow":6,"order":["00"],"patterns":{"00":{"rows":vec![vec![Value::Null;8];16]}},"loop":true}),
+            ),
+            modl_core::AssetKind::Sprite | modl_core::AssetKind::Animation => {
+                self.status = "CREATE SPRITES IN THE SPRITE EDITOR".to_owned();
+                return;
+            }
+        };
+        let path = format!("assets/{name}.{extension}");
+        let mut manifest: toml::Value = match toml::from_str(&project.manifest_source) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        let Some(assets) = manifest
+            .get_mut("assets")
+            .and_then(toml::Value::as_table_mut)
+        else {
+            self.status = "MANIFEST HAS NO ASSETS TABLE".to_owned();
+            return;
+        };
+        let mut declaration = toml::map::Map::new();
+        declaration.insert(
+            "kind".to_owned(),
+            toml::Value::String(
+                serde_json::to_value(self.new_asset_kind)
+                    .unwrap_or_default()
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned(),
+            ),
+        );
+        declaration.insert("path".to_owned(), toml::Value::String(path.clone()));
+        assets.insert(name.clone(), toml::Value::Table(declaration));
+        let source = match toml::to_string_pretty(&manifest) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        let parsed = match modl_core::parse_project_manifest(&source) {
+            Ok(value) => value,
+            Err(error) => {
+                self.status = error.to_string();
+                return;
+            }
+        };
+        project.manifest_source = source;
+        project.manifest = parsed;
+        project
+            .files
+            .insert(path, serde_json::to_vec(&value).unwrap_or_default());
+        project.dirty = true;
+        self.manifest_text = project.manifest_source.clone();
+        self.show_new_asset = false;
+        self.open_asset(&name);
+        self.status = format!("CREATED {name}");
     }
 
     fn load_sprite(&mut self, name: &str) {
@@ -1294,6 +2642,7 @@ impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
         self.process_events(&context);
+        self.process_preview(&context);
         context.set_visuals(egui::Visuals::dark());
         egui::Panel::top("toolbar").show(root, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").show(root, |ui| {
@@ -1333,6 +2682,37 @@ impl eframe::App for StudioApp {
                 });
             self.show_new = open && self.show_new;
         }
+        if self.show_new_asset {
+            let mut open = true;
+            egui::Window::new("NEW ASSET")
+                .open(&mut open)
+                .show(&context, |ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut self.new_asset_name);
+                    egui::ComboBox::from_id_salt("new-asset-kind")
+                        .selected_text(format!("{:?}", self.new_asset_kind))
+                        .show_ui(ui, |ui| {
+                            for kind in [
+                                modl_core::AssetKind::TileSet,
+                                modl_core::AssetKind::Map,
+                                modl_core::AssetKind::Font,
+                                modl_core::AssetKind::Sound,
+                                modl_core::AssetKind::Music,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.new_asset_kind,
+                                    kind,
+                                    format!("{kind:?}"),
+                                );
+                            }
+                        });
+                    if ui.button("CREATE").clicked() {
+                        self.create_asset();
+                    }
+                });
+            self.show_new_asset &= open;
+        }
+        self.help_windows(&context);
         if self.project.is_none() {
             egui::CentralPanel::default().show(root, |ui| {
                 ui.vertical_centered(|ui| {
@@ -1399,6 +2779,15 @@ impl eframe::App for StudioApp {
                 }
                 ui.separator();
                 ui.label("ASSETS");
+                if ui.button("+ NEW ASSET").clicked() {
+                    self.show_new_asset = true;
+                }
+                if ui
+                    .selectable_label(self.asset_name == "DISPLAY", "DISPLAY / PALETTE")
+                    .clicked()
+                {
+                    self.open_display();
+                }
                 let names: Vec<String> = self.project.as_ref().map_or_else(Vec::new, |project| {
                     project.manifest.assets.keys().cloned().collect()
                 });
@@ -1437,22 +2826,92 @@ impl eframe::App for StudioApp {
                 } else {
                     ui.heading(&self.asset_name);
                     ui.label(&self.asset_path);
-                    if ui.button("APPLY JSON").clicked() {
-                        self.status = match self.sync_asset() {
-                            Ok(()) => "ASSET APPLIED".to_owned(),
-                            Err(error) => error,
-                        };
-                    }
-                    if ui
-                        .add_sized(
-                            ui.available_size(),
-                            egui::TextEdit::multiline(&mut self.asset_text)
-                                .font(egui::TextStyle::Monospace)
-                                .code_editor(),
-                        )
-                        .changed()
+                    let tile_sets = self.project.as_ref().map_or_else(Vec::new, |project| {
+                        project
+                            .manifest
+                            .assets
+                            .iter()
+                            .filter_map(|(name, asset)| {
+                                (asset.kind == modl_core::AssetKind::TileSet)
+                                    .then(|| project.files.get(&asset.path))
+                                    .flatten()
+                                    .and_then(|bytes| serde_json::from_slice(bytes).ok())
+                                    .map(|value| (name.clone(), value))
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("APPLY JSON").clicked() {
+                            self.status = match self.sync_asset() {
+                                Ok(()) => "ASSET APPLIED".to_owned(),
+                                Err(error) => error,
+                            };
+                        }
+                        if ui.button("IMPORT ASSET").clicked() {
+                            self.import_asset_file();
+                        }
+                        if ui.button("EXPORT ASSET").clicked() {
+                            self.export_asset_file();
+                        }
+                    });
+                    if self
+                        .asset_workbench
+                        .as_ref()
+                        .is_some_and(|editor| editor.kind == modl_core::AssetKind::TileSet)
                     {
-                        self.asset_dirty = true;
+                        ui.horizontal(|ui| {
+                            if ui.button("IMPORT TILE PNG").clicked() {
+                                self.import_tile_png();
+                            }
+                            if ui.button("EXPORT TILE PNG").clicked() {
+                                self.export_tile_png();
+                            }
+                        });
+                    }
+                    if self
+                        .project
+                        .as_ref()
+                        .and_then(|project| project.manifest.assets.get(&self.asset_name))
+                        .is_some_and(|asset| {
+                            matches!(
+                                asset.kind,
+                                modl_core::AssetKind::Sound | modl_core::AssetKind::Music
+                            )
+                        })
+                    {
+                        ui.horizontal(|ui| {
+                            if ui.button("PREVIEW AUDIO").clicked() {
+                                self.render_asset_wav(false);
+                            }
+                            if ui.button("EXPORT WAV").clicked() {
+                                self.render_asset_wav(true);
+                            }
+                        });
+                    }
+                    ui.collapsing("EDIT RAW JSON", |ui| {
+                        if let Some(workbench) = &self.asset_workbench {
+                            if ui.button("SYNC SOURCE").clicked() {
+                                self.asset_text = workbench.source().unwrap_or_default();
+                            }
+                        }
+                        if ui
+                            .add(
+                                egui::TextEdit::multiline(&mut self.asset_text)
+                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .desired_rows(12),
+                            )
+                            .changed()
+                        {
+                            self.asset_dirty = true;
+                            self.asset_workbench = None;
+                        }
+                    });
+                    if let Some(workbench) = self.asset_workbench.as_mut() {
+                        ui.separator();
+                        if workbench.ui(ui, &sprite::palette(), &tile_sets) {
+                            self.asset_dirty = true;
+                        }
                     }
                 }
             }
@@ -1471,7 +2930,9 @@ impl eframe::App for StudioApp {
                         .max(1.0);
                     let size =
                         egui::vec2(SCREEN_WIDTH as f32 * scale, SCREEN_HEIGHT as f32 * scale);
-                    let response = ui.add(egui::Image::new((texture.id(), size)));
+                    let response = ui
+                        .add(egui::Image::new((texture.id(), size)))
+                        .on_hover_cursor(egui::CursorIcon::Crosshair);
                     self.screen_rect = Some(response.rect);
                 } else {
                     ui.label(if self.running {
@@ -1481,20 +2942,7 @@ impl eframe::App for StudioApp {
                     });
                 }
                 if self.debugging {
-                    ui.separator();
-                    ui.label("SOURCE STEP");
-                    egui::ScrollArea::vertical()
-                        .max_height(190.0)
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(if self.debug_event.is_empty() {
-                                    "Press STEP to advance the debug cartridge."
-                                } else {
-                                    &self.debug_event
-                                })
-                                .monospace(),
-                            );
-                        });
+                    self.debugger_ui(ui);
                 }
             }
             View::Manifest => {
@@ -1511,6 +2959,7 @@ impl eframe::App for StudioApp {
             }
         });
         self.send_frame(&context);
+        self.cursors.paint(&context);
         if self.running {
             context.request_repaint_after(Duration::from_millis(4));
         }
@@ -1615,6 +3064,7 @@ fn paint_sprite_canvas(
     }
     let available = ui.available_size();
     let (response, painter) = ui.allocate_painter(available, egui::Sense::click_and_drag());
+    let response = response.on_hover_cursor(egui::CursorIcon::Crosshair);
     painter.rect_filled(response.rect, 0.0, Color32::from_rgb(17, 20, 27));
     let zoom = editor.zoom.clamp(1.0, 32.0);
     let size = egui::vec2(width as f32 * zoom, height as f32 * zoom);
@@ -1756,6 +3206,19 @@ fn paint_sprite_canvas(
     }
 }
 
+fn indexed_image(pixels: &[u8]) -> Option<image::RgbaImage> {
+    if pixels.len() != SCREEN_WIDTH * SCREEN_HEIGHT {
+        return None;
+    }
+    let palette = sprite::palette();
+    let mut rgba = Vec::with_capacity(pixels.len() * 4);
+    for index in pixels {
+        let [r, g, b] = palette[usize::from(*index)];
+        rgba.extend_from_slice(&[r, g, b, 255]);
+    }
+    image::RgbaImage::from_raw(SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32, rgba)
+}
+
 fn save_path(id: &str) -> Result<PathBuf, String> {
     let directories = ProjectDirs::from("", "MOD-01", "Native Studio")
         .ok_or("cannot find application data directory")?;
@@ -1772,6 +3235,67 @@ fn read_save(id: &str) -> Result<Vec<u8>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn read_save_schema(id: &str) -> Result<u16, String> {
+    let path = save_path(id)?.with_extension("schema");
+    match fs::read_to_string(path) {
+        Ok(value) => value
+            .trim()
+            .parse::<u16>()
+            .map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(1),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_save_schema(id: &str, schema: u16) -> Result<(), String> {
+    let path = save_path(id)?.with_extension("schema");
+    fs::write(path, schema.to_string()).map_err(|error| error.to_string())
+}
+
+fn clear_save_schema(id: &str) -> Result<(), String> {
+    let path = save_path(id)?.with_extension("schema");
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn backup_save(id: &str) -> Result<(), String> {
+    let bytes = read_save(id)?;
+    let schema = read_save_schema(id)?;
+    let exported = save_manager::export(id, schema, &bytes)?;
+    let saves = save_path(id)?;
+    let directory = saves.parent().ok_or("invalid save path")?.join("recovery");
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    fs::write(
+        directory.join(format!("{id}-{stamp:020}.m01save")),
+        exported,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut revisions = fs::read_dir(&directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&format!("{id}-")) && name.ends_with(".m01save")
+                })
+        })
+        .collect::<Vec<_>>();
+    revisions.sort_by(|left, right| right.cmp(left));
+    for old in revisions.iter().skip(10) {
+        fs::remove_file(old).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
@@ -1795,6 +3319,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "MOD-01 Native Studio",
         options,
-        Box::new(move |_context| Ok(Box::new(StudioApp::new(start)))),
+        Box::new(move |creation| {
+            ui_assets::install_font(&creation.egui_ctx);
+            Ok(Box::new(StudioApp::new(start, &creation.egui_ctx)))
+        }),
     )
 }

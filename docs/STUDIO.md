@@ -21,6 +21,11 @@ recovery copies for destructive actions. The manual and compiler explorer are em
 All native text uses BigBlue Terminal Plus; the bundled Kenney pixel cursors indicate ordinary,
 action, text, busy, and canvas targets. The application bundles attribution and license texts in
 the `visual-credits` directory of each desktop package.
+The interface follows the development unit's case and display palette: amber labels mark controls,
+cyan marks the selected mode, and the recessed screen holds source, editors, and the cartridge
+player. PROJECT contains open, new, save, and recovery actions; BUILD contains check and pack.
+RUN, DEBUG, and STOP remain on the main control strip. The status strip reports power, execution,
+cartridge state, frame count, and work. Sprite tools scroll beside the fixed pixel canvas.
 
 The native sprite editor draws on RGBA layers, supports rename/reorder/visibility/locking,
 brushes, fill, pick, selection recolour/erase, frames with onion skinning, zoom/pan, undo/redo,

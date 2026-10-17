@@ -580,7 +580,15 @@ impl AssetWorkbench {
                 }
             }
             let [r, g, b] = palette[mapped as usize];
-            ui.colored_label(Color32::from_rgb(r, g, b), "████");
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 22.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_rgb(r, g, b));
+            ui.painter().rect_stroke(
+                rect,
+                0.0,
+                egui::Stroke::new(1.0, Color32::from_rgb(109, 100, 82)),
+                egui::StrokeKind::Inside,
+            );
         });
         ui.horizontal_wrapped(|ui| {
             for (physical, &[r, g, b]) in palette.iter().enumerate() {

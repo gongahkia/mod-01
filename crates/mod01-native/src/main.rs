@@ -27,6 +27,7 @@ mod runtime;
 mod save_manager;
 mod sprite;
 mod ui_assets;
+mod ui_theme;
 
 use std::{
     collections::BTreeMap,
@@ -1649,65 +1650,81 @@ impl StudioApp {
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new("M01")
-                    .strong()
-                    .color(Color32::from_rgb(231, 189, 80)),
-            );
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("MOD-01").size(23.0).color(ui_theme::AMBER));
             ui.separator();
-            if ui.button("OPEN PROJECT").clicked() {
-                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    self.open(path);
-                }
-            }
-            if ui.button("OPEN FILE").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("MOD-01 cartridge or workcart", &["m01c", "png", "m01w"])
-                    .pick_file()
-                {
-                    self.open(path);
-                }
-            }
-            if ui.button("NEW").clicked() {
-                self.show_new = true;
-            }
-            ui.add_enabled_ui(self.project.is_some(), |ui| {
-                if ui.button("SAVE").clicked() {
-                    self.save();
-                }
-                if ui.button("SAVE AS").clicked() {
-                    self.save_as();
-                }
-                let revisions = self
-                    .project
-                    .as_ref()
-                    .and_then(|project| project.revisions().ok())
-                    .unwrap_or_default();
-                ui.menu_button("RECOVER", |ui| {
-                    if revisions.is_empty() {
-                        ui.label("NO LOCAL REVISIONS");
+            ui_theme::legend(ui, "COLOR DEVELOPMENT UNIT");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui_theme::legend(ui, "REV. 01  /  1999");
+            });
+        });
+        ui.add_space(3.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.menu_button("PROJECT", |ui| {
+                if ui.button("OPEN PROJECT").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                        self.open(path);
                     }
-                    for path in revisions {
-                        let label = path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("REVISION")
-                            .to_owned();
-                        if ui.button(label).clicked() {
-                            self.recover_revision(path);
-                            ui.close();
-                        }
-                    }
-                });
-                if ui.button("CHECK").clicked() {
-                    self.check();
+                    ui.close();
                 }
-                ui.menu_button("TOOLS", |ui| {
-                    if ui.button("MANUAL").clicked() {
-                        self.show_manual = true;
+                if ui.button("OPEN CARTRIDGE / WORKCART").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("MOD-01 cartridge or workcart", &["m01c", "png", "m01w"])
+                        .pick_file()
+                    {
+                        self.open(path);
+                    }
+                    ui.close();
+                }
+                if ui.button("NEW CARTRIDGE").clicked() {
+                    self.show_new = true;
+                    ui.close();
+                }
+                ui.separator();
+                ui.add_enabled_ui(self.project.is_some(), |ui| {
+                    if ui.button("SAVE").clicked() {
+                        self.save();
                         ui.close();
                     }
+                    if ui.button("SAVE AS").clicked() {
+                        self.save_as();
+                        ui.close();
+                    }
+                    let revisions = self
+                        .project
+                        .as_ref()
+                        .and_then(|project| project.revisions().ok())
+                        .unwrap_or_default();
+                    ui.menu_button("RECOVER", |ui| {
+                        if revisions.is_empty() {
+                            ui.label("NO LOCAL REVISIONS");
+                        }
+                        for path in revisions {
+                            let label = path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("REVISION")
+                                .to_owned();
+                            if ui.button(label).clicked() {
+                                self.recover_revision(path);
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            });
+            ui.add_enabled_ui(self.project.is_some(), |ui| {
+                ui.menu_button("BUILD", |ui| {
+                    if ui.button("CHECK SOURCE").clicked() {
+                        self.check();
+                        ui.close();
+                    }
+                    if ui.button("PACK CARTRIDGE").clicked() {
+                        self.pack();
+                        ui.close();
+                    }
+                });
+                ui.menu_button("TOOLS", |ui| {
                     if ui.button("COMPILER EXPLORER").clicked() {
                         self.open_explorer();
                         ui.close();
@@ -1718,18 +1735,18 @@ impl StudioApp {
                         ui.close();
                     }
                 });
-                if ui.button("PACK").clicked() {
-                    self.pack();
-                }
                 ui.menu_button("EXPORT", |ui| {
                     if ui.button("STANDALONE HTML").clicked() {
                         self.export_player(false);
+                        ui.close();
                     }
                     if ui.button("ITCH.IO ZIP").clicked() {
                         self.export_player(true);
+                        ui.close();
                     }
                     if ui.button("CARTRIDGE PNG").clicked() {
                         self.export_cartridge_png();
+                        ui.close();
                     }
                 });
                 ui.menu_button("CAPTURE", |ui| {
@@ -1791,6 +1808,7 @@ impl StudioApp {
             if ui.button("HELP").clicked() {
                 self.show_manual = true;
             }
+            ui.separator();
             if ui
                 .add_enabled(self.running, egui::Button::new("STOP"))
                 .clicked()
@@ -2287,7 +2305,7 @@ impl StudioApp {
                 if let Err(error) = self.save_sprite() {
                     self.status = error;
                 } else {
-                    self.status = format!("CREATED {name} / 64×64");
+                    self.status = format!("CREATED {name} / 64x64");
                 }
             }
             Err(error) => self.status = error,
@@ -2385,7 +2403,7 @@ impl StudioApp {
                 [150.0, 30.0],
                 egui::TextEdit::singleline(&mut self.sprite_name),
             );
-            if ui.button("CREATE 64×64").clicked() {
+            if ui.button("CREATE 64x64").clicked() {
                 self.create_sprite();
             }
             if self.sprite.is_some() && ui.button("SAVE SPRITE").clicked() {
@@ -2397,233 +2415,263 @@ impl StudioApp {
         });
         ui.separator();
         let Some(editor) = self.sprite.as_mut() else {
-            ui.label("Select an existing sprite or create a new 64×64 sprite.");
+            ui.add_space(24.0);
+            egui::Frame::new()
+                .fill(ui_theme::CASE_LIGHT)
+                .stroke(egui::Stroke::new(1.0, ui_theme::EDGE))
+                .inner_margin(egui::Margin::same(18))
+                .show(ui, |ui| {
+                    ui_theme::legend(ui, "SPRITE BANK / EMPTY SLOT");
+                    ui.add_space(7.0);
+                    ui.heading("READY FOR NEW ART");
+                    ui.label("Create a 64x64 sprite above, or select one from the asset bank.");
+                    ui.label(
+                        RichText::new("FRAMES  /  LAYERS  /  256 COLORS").color(ui_theme::CYAN),
+                    );
+                });
             return;
         };
+        let controls_height = ui.available_height();
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(272.0);
-                ui.label(
-                    RichText::new(format!(
-                        "{}  •  FRAME {}/{}",
-                        editor.name.to_uppercase(),
-                        editor.frame + 1,
-                        editor.document.frames.len()
-                    ))
-                    .strong(),
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("◀").clicked() {
-                        editor.frame = (editor.frame + editor.document.frames.len() - 1)
-                            % editor.document.frames.len();
-                        editor.layer = editor
-                            .layer
-                            .min(editor.document.frames[editor.frame].layers.len() - 1);
-                    }
-                    if ui.button("▶").clicked() {
-                        editor.frame = (editor.frame + 1) % editor.document.frames.len();
-                        editor.layer = editor
-                            .layer
-                            .min(editor.document.frames[editor.frame].layers.len() - 1);
-                    }
-                    if ui.button("+ FRAME").clicked() {
-                        editor.add_frame();
-                    }
-                    if ui.button("− FRAME").clicked() {
-                        editor.delete_frame();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("UNDO").clicked() {
-                        editor.undo();
-                    }
-                    if ui.button("REDO").clicked() {
-                        editor.redo();
-                    }
-                });
-                ui.separator();
-                ui.label("TOOLS");
-                for (tool, title) in [
-                    (Tool::Pencil, "PENCIL"),
-                    (Tool::Eraser, "ERASER"),
-                    (Tool::Eyedropper, "PICK"),
-                    (Tool::Fill, "FILL"),
-                    (Tool::Select, "SELECT"),
-                ] {
-                    if ui.selectable_label(editor.tool == tool, title).clicked() {
-                        editor.tool = tool;
-                    }
-                }
-                ui.horizontal(|ui| {
-                    ui.label("BRUSH");
-                    for brush in [1, 2, 4, 8] {
-                        if ui
-                            .selectable_label(editor.brush == brush, brush.to_string())
-                            .clicked()
-                        {
-                            editor.brush = brush;
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut editor.onion, "ONION");
-                    ui.checkbox(&mut editor.show_grid, "GRID");
-                });
-                ui.horizontal(|ui| {
-                    let mut width = editor.document.width;
-                    let mut height = editor.document.height;
-                    ui.label("SIZE");
-                    let changed_w = ui
-                        .add(egui::DragValue::new(&mut width).range(1..=128).speed(1))
-                        .changed();
-                    ui.label("×");
-                    let changed_h = ui
-                        .add(egui::DragValue::new(&mut height).range(1..=128).speed(1))
-                        .changed();
-                    if changed_w || changed_h {
-                        editor.resize(width, height);
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("PNG IN").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("PNG", &["png"])
-                            .pick_file()
-                        {
-                            match fs::read(path)
-                                .map_err(|error| error.to_string())
-                                .and_then(|bytes| editor.import_png(&bytes))
-                            {
-                                Ok(()) => {
-                                    self.status = "PNG IMPORTED INTO CURRENT LAYER".to_owned()
-                                }
-                                Err(error) => self.status = error,
+                ui.set_min_height(controls_height);
+                egui::ScrollArea::vertical()
+                    .id_salt("sprite-controls")
+                    .max_height(controls_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(260.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "{}  /  FRAME {}/{}",
+                                editor.name.to_uppercase(),
+                                editor.frame + 1,
+                                editor.document.frames.len()
+                            ))
+                            .strong(),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("< PREV").clicked() {
+                                editor.frame = (editor.frame + editor.document.frames.len() - 1)
+                                    % editor.document.frames.len();
+                                editor.layer = editor
+                                    .layer
+                                    .min(editor.document.frames[editor.frame].layers.len() - 1);
+                            }
+                            if ui.button("NEXT >").clicked() {
+                                editor.frame = (editor.frame + 1) % editor.document.frames.len();
+                                editor.layer = editor
+                                    .layer
+                                    .min(editor.document.frames[editor.frame].layers.len() - 1);
+                            }
+                            if ui.button("+ FRAME").clicked() {
+                                editor.add_frame();
+                            }
+                            if ui.button("- FRAME").clicked() {
+                                editor.delete_frame();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("UNDO").clicked() {
+                                editor.undo();
+                            }
+                            if ui.button("REDO").clicked() {
+                                editor.redo();
+                            }
+                        });
+                        ui.separator();
+                        ui.label("TOOLS");
+                        for (tool, title) in [
+                            (Tool::Pencil, "PENCIL"),
+                            (Tool::Eraser, "ERASER"),
+                            (Tool::Eyedropper, "PICK"),
+                            (Tool::Fill, "FILL"),
+                            (Tool::Select, "SELECT"),
+                        ] {
+                            if ui.selectable_label(editor.tool == tool, title).clicked() {
+                                editor.tool = tool;
                             }
                         }
-                    }
-                    if ui.button("PNG OUT").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("{}.png", editor.name))
-                            .save_file()
-                        {
-                            self.status = match editor.export_png().and_then(|bytes| {
-                                fs::write(path, bytes).map_err(|error| error.to_string())
-                            }) {
-                                Ok(()) => "PNG EXPORTED".to_owned(),
-                                Err(error) => error,
-                            };
-                        }
-                    }
-                });
-                ui.separator();
-                ui.label("LAYER");
-                ui.horizontal(|ui| {
-                    if ui.button("+").clicked() {
-                        editor.add_layer();
-                    }
-                    if ui.button("−").clicked() {
-                        editor.delete_layer();
-                    }
-                    if ui.button("↑").clicked() {
-                        editor.move_layer(1);
-                    }
-                    if ui.button("↓").clicked() {
-                        editor.move_layer(-1);
-                    }
-                });
-                let count = editor.document.frames[editor.frame].layers.len();
-                for index in (0..count).rev() {
-                    let current = &editor.document.frames[editor.frame].layers[index];
-                    let mut name = current.name.clone();
-                    let mut visible = current.visible;
-                    let mut locked = current.locked;
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(editor.layer == index, format!("{}", index + 1))
-                            .clicked()
-                        {
-                            editor.layer = index;
-                        }
-                        ui.add_sized([112.0, 22.0], egui::TextEdit::singleline(&mut name));
-                        ui.checkbox(&mut visible, "V").on_hover_text("Visible");
-                        ui.checkbox(&mut locked, "L").on_hover_text("Lock painting");
-                    });
-                    if (!name.is_empty() && name.len() <= 64 && name != current.name)
-                        || visible != current.visible
-                        || locked != current.locked
-                    {
-                        editor.remember();
-                        let layer = &mut editor.document.frames[editor.frame].layers[index];
-                        if !name.is_empty() && name.len() <= 64 {
-                            layer.name = name;
-                        }
-                        layer.visible = visible;
-                        layer.locked = locked;
-                        editor.dirty = true;
-                    }
-                }
-                ui.separator();
-                ui.label("COLOR / RGBA");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.color_hex);
-                    if ui.button("SET").clicked() {
-                        if let Ok(value) =
-                            u32::from_str_radix(self.color_hex.trim_start_matches('#'), 16)
-                        {
-                            editor.color = value.to_be_bytes();
-                        } else {
-                            self.status = "USE 8 HEX DIGITS: RRGGBBAA".to_owned();
-                        }
-                    }
-                });
-                egui::ScrollArea::vertical()
-                    .max_height(180.0)
-                    .show(ui, |ui| {
-                        let palette = sprite::palette();
-                        egui::Grid::new("sprite-palette")
-                            .spacing([3.0, 3.0])
-                            .show(ui, |ui| {
-                                for (index, rgb) in palette.iter().enumerate() {
-                                    let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                    if ui
-                                        .add_sized([36.0, 30.0], egui::Button::new("").fill(fill))
-                                        .on_hover_text(if index == 0 {
-                                            "TRANSPARENT / ERASER".to_owned()
-                                        } else {
-                                            format!("COLOR {index}")
-                                        })
-                                        .clicked()
+                        ui.horizontal(|ui| {
+                            ui.label("BRUSH");
+                            for brush in [1, 2, 4, 8] {
+                                if ui
+                                    .selectable_label(editor.brush == brush, brush.to_string())
+                                    .clicked()
+                                {
+                                    editor.brush = brush;
+                                }
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut editor.onion, "ONION");
+                            ui.checkbox(&mut editor.show_grid, "GRID");
+                        });
+                        ui.horizontal(|ui| {
+                            let mut width = editor.document.width;
+                            let mut height = editor.document.height;
+                            ui.label("SIZE");
+                            let changed_w = ui
+                                .add(egui::DragValue::new(&mut width).range(1..=128).speed(1))
+                                .changed();
+                            ui.label("x");
+                            let changed_h = ui
+                                .add(egui::DragValue::new(&mut height).range(1..=128).speed(1))
+                                .changed();
+                            if changed_w || changed_h {
+                                editor.resize(width, height);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("PNG IN").clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("PNG", &["png"])
+                                    .pick_file()
+                                {
+                                    match fs::read(path)
+                                        .map_err(|error| error.to_string())
+                                        .and_then(|bytes| editor.import_png(&bytes))
                                     {
-                                        if index == 0 {
-                                            editor.tool = Tool::Eraser;
-                                        } else {
-                                            editor.tool = Tool::Pencil;
-                                            editor.color = [rgb[0], rgb[1], rgb[2], 255];
-                                            self.color_hex = format!(
-                                                "{:02X}{:02X}{:02X}FF",
-                                                rgb[0], rgb[1], rgb[2]
-                                            );
+                                        Ok(()) => {
+                                            self.status =
+                                                "PNG IMPORTED INTO CURRENT LAYER".to_owned()
                                         }
-                                    }
-                                    if index % 6 == 5 {
-                                        ui.end_row();
+                                        Err(error) => self.status = error,
                                     }
                                 }
+                            }
+                            if ui.button("PNG OUT").clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .set_file_name(format!("{}.png", editor.name))
+                                    .save_file()
+                                {
+                                    self.status = match editor.export_png().and_then(|bytes| {
+                                        fs::write(path, bytes).map_err(|error| error.to_string())
+                                    }) {
+                                        Ok(()) => "PNG EXPORTED".to_owned(),
+                                        Err(error) => error,
+                                    };
+                                }
+                            }
+                        });
+                        ui.separator();
+                        ui.label("LAYER");
+                        ui.horizontal(|ui| {
+                            if ui.button("+").clicked() {
+                                editor.add_layer();
+                            }
+                            if ui.button("-").clicked() {
+                                editor.delete_layer();
+                            }
+                            if ui.button("UP").clicked() {
+                                editor.move_layer(1);
+                            }
+                            if ui.button("DN").clicked() {
+                                editor.move_layer(-1);
+                            }
+                        });
+                        let count = editor.document.frames[editor.frame].layers.len();
+                        for index in (0..count).rev() {
+                            let current = &editor.document.frames[editor.frame].layers[index];
+                            let mut name = current.name.clone();
+                            let mut visible = current.visible;
+                            let mut locked = current.locked;
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(
+                                        editor.layer == index,
+                                        format!("{}", index + 1),
+                                    )
+                                    .clicked()
+                                {
+                                    editor.layer = index;
+                                }
+                                ui.add_sized([112.0, 22.0], egui::TextEdit::singleline(&mut name));
+                                ui.checkbox(&mut visible, "V").on_hover_text("Visible");
+                                ui.checkbox(&mut locked, "L").on_hover_text("Lock painting");
                             });
+                            if (!name.is_empty() && name.len() <= 64 && name != current.name)
+                                || visible != current.visible
+                                || locked != current.locked
+                            {
+                                editor.remember();
+                                let layer = &mut editor.document.frames[editor.frame].layers[index];
+                                if !name.is_empty() && name.len() <= 64 {
+                                    layer.name = name;
+                                }
+                                layer.visible = visible;
+                                layer.locked = locked;
+                                editor.dirty = true;
+                            }
+                        }
+                        ui.separator();
+                        ui.label("COLOR / RGBA");
+                        ui.horizontal(|ui| {
+                            ui.text_edit_singleline(&mut self.color_hex);
+                            if ui.button("SET").clicked() {
+                                if let Ok(value) =
+                                    u32::from_str_radix(self.color_hex.trim_start_matches('#'), 16)
+                                {
+                                    editor.color = value.to_be_bytes();
+                                } else {
+                                    self.status = "USE 8 HEX DIGITS: RRGGBBAA".to_owned();
+                                }
+                            }
+                        });
+                        egui::ScrollArea::vertical()
+                            .max_height(180.0)
+                            .show(ui, |ui| {
+                                let palette = sprite::palette();
+                                egui::Grid::new("sprite-palette").spacing([3.0, 3.0]).show(
+                                    ui,
+                                    |ui| {
+                                        for (index, rgb) in palette.iter().enumerate() {
+                                            let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                            if ui
+                                                .add_sized(
+                                                    [36.0, 30.0],
+                                                    egui::Button::new("").fill(fill),
+                                                )
+                                                .on_hover_text(if index == 0 {
+                                                    "TRANSPARENT / ERASER".to_owned()
+                                                } else {
+                                                    format!("COLOR {index}")
+                                                })
+                                                .clicked()
+                                            {
+                                                if index == 0 {
+                                                    editor.tool = Tool::Eraser;
+                                                } else {
+                                                    editor.tool = Tool::Pencil;
+                                                    editor.color = [rgb[0], rgb[1], rgb[2], 255];
+                                                    self.color_hex = format!(
+                                                        "{:02X}{:02X}{:02X}FF",
+                                                        rgb[0], rgb[1], rgb[2]
+                                                    );
+                                                }
+                                            }
+                                            if index % 6 == 5 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    },
+                                );
+                            });
+                        if editor.selection.is_some() {
+                            ui.horizontal(|ui| {
+                                if ui.button("RECOLOR").clicked() {
+                                    editor.clear_or_recolor_selection(false);
+                                }
+                                if ui.button("ERASE").clicked() {
+                                    editor.clear_or_recolor_selection(true);
+                                }
+                                if ui.button("CLEAR SELECT").clicked() {
+                                    editor.selection = None;
+                                }
+                            });
+                        }
                     });
-                if editor.selection.is_some() {
-                    ui.horizontal(|ui| {
-                        if ui.button("RECOLOR").clicked() {
-                            editor.clear_or_recolor_selection(false);
-                        }
-                        if ui.button("ERASE").clicked() {
-                            editor.clear_or_recolor_selection(true);
-                        }
-                        if ui.button("CLEAR SELECT").clicked() {
-                            editor.selection = None;
-                        }
-                    });
-                }
             });
             ui.separator();
             paint_sprite_canvas(
@@ -2643,25 +2691,46 @@ impl eframe::App for StudioApp {
         let context = root.ctx().clone();
         self.process_events(&context);
         self.process_preview(&context);
-        context.set_visuals(egui::Visuals::dark());
-        egui::Panel::top("toolbar").show(root, |ui| self.toolbar(ui));
-        egui::Panel::bottom("status").show(root, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                if let Some(project) = &self.project {
+        egui::Panel::top("toolbar")
+            .frame(ui_theme::case_frame())
+            .show(root, |ui| self.toolbar(ui));
+        egui::Panel::bottom("status")
+            .frame(ui_theme::case_frame())
+            .show(root, |ui| {
+                ui.horizontal(|ui| {
+                    ui_theme::led(ui, true, "PWR");
+                    ui_theme::led(ui, self.running && self.loaded, "EXEC");
                     ui.separator();
-                    ui.label(format!(
-                        "{}{}",
-                        project.manifest.id,
-                        if project.dirty { " *" } else { "" }
-                    ));
-                }
-                if self.running {
-                    ui.separator();
-                    ui.label(format!("FRAME {}  WORK {}", self.frame, self.work));
-                }
+                    let status_color =
+                        if self.status.contains("ERROR") || self.status.contains("FAILED") {
+                            ui_theme::CORAL
+                        } else {
+                            ui_theme::CREAM
+                        };
+                    ui.label(RichText::new(&self.status).color(status_color));
+                    if let Some(project) = &self.project {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "{}{}",
+                                project.manifest.id,
+                                if project.dirty { " *" } else { "" }
+                            ))
+                            .color(ui_theme::AMBER),
+                        );
+                    }
+                    if self.running {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "FRAME {:06}  WORK {:06}",
+                                self.frame, self.work
+                            ))
+                            .color(ui_theme::CYAN),
+                        );
+                    }
+                });
             });
-        });
         if self.show_new {
             let mut open = self.show_new;
             egui::Window::new("NEW CARTRIDGE")
@@ -2714,250 +2783,313 @@ impl eframe::App for StudioApp {
         }
         self.help_windows(&context);
         if self.project.is_none() {
-            egui::CentralPanel::default().show(root, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(48.0);
-                    ui.heading("MOD-01 COLOR DEVELOPMENT UNIT");
-                    ui.label("Native Studio • Open a project or choose a cartridge below");
-                    ui.add_space(24.0);
-                    ui.label(RichText::new("BUNDLED CARTRIDGES").strong());
-                    ui.add_space(8.0);
-                    egui::Grid::new("sample-cartridges")
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            for path in bundled_samples() {
-                                let title = path
-                                    .file_name()
-                                    .and_then(|value| value.to_str())
-                                    .unwrap_or("CARTRIDGE")
-                                    .replace('-', " ")
-                                    .to_uppercase();
-                                ui.label(title);
-                                if ui.button("OPEN").clicked() {
-                                    self.open_sample(path.clone(), false);
+            egui::CentralPanel::default()
+                .frame(ui_theme::screen_frame())
+                .show(root, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(34.0);
+                        ui_theme::legend(ui, "MOD-01 / SYSTEM ROM / REVISION 01");
+                        ui.add_space(15.0);
+                        ui.heading(RichText::new("COLOR DEVELOPMENT UNIT").color(ui_theme::CREAM));
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("INSERT A CARTRIDGE OR OPEN A PROJECT")
+                                .color(ui_theme::CYAN),
+                        );
+                        ui.add_space(29.0);
+                        ui_theme::legend(ui, "--- CARTRIDGE LIBRARY ---");
+                        ui.add_space(10.0);
+                        egui::Grid::new("sample-cartridges")
+                            .spacing([20.0, 10.0])
+                            .show(ui, |ui| {
+                                for path in bundled_samples() {
+                                    let title = path
+                                        .file_name()
+                                        .and_then(|value| value.to_str())
+                                        .unwrap_or("CARTRIDGE")
+                                        .replace('-', " ")
+                                        .to_uppercase();
+                                    ui.label(RichText::new(title).color(ui_theme::CREAM));
+                                    if ui.button("EDIT").clicked() {
+                                        self.open_sample(path.clone(), false);
+                                    }
+                                    if ui.button("PLAY").clicked() {
+                                        self.open_sample(path, true);
+                                    }
+                                    ui.end_row();
                                 }
-                                if ui.button("PLAY").clicked() {
-                                    self.open_sample(path, true);
-                                }
-                                ui.end_row();
-                            }
-                        });
+                            });
+                    });
                 });
-            });
             return;
         }
         egui::Panel::left("project")
-            .default_size(205.0)
+            .frame(ui_theme::case_frame())
+            .default_size(218.0)
             .show(root, |ui| {
-                ui.heading("PROJECT");
-                ui.separator();
-                for (view, title) in [
-                    (View::Code, "CODE"),
-                    (View::Sprites, "SPRITES"),
-                    (View::Assets, "ASSETS"),
-                    (View::Player, "PLAYER"),
-                    (View::Manifest, "MANIFEST"),
-                ] {
-                    if ui.selectable_label(self.view == view, title).clicked() {
-                        self.view = view;
-                    }
-                }
-                ui.separator();
-                if let Some(project) = self.project.as_mut() {
-                    ui.label("SOURCE FILES");
-                    for path in project.source_paths() {
+                egui::ScrollArea::vertical()
+                    .id_salt("project-bank")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui_theme::legend(ui, "01 / WORKSPACE");
+                        ui.heading("PROJECT");
+                        ui.separator();
+                        for (view, title) in [
+                            (View::Code, "01  CODE"),
+                            (View::Sprites, "02  SPRITES"),
+                            (View::Assets, "03  ASSETS"),
+                            (View::Player, "04  PLAYER"),
+                            (View::Manifest, "05  MANIFEST"),
+                        ] {
+                            let selected = self.view == view;
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 40.0],
+                                    egui::Button::new(title).selected(selected),
+                                )
+                                .clicked()
+                            {
+                                self.view = view;
+                            }
+                        }
+                        ui.add_space(10.0);
+                        ui.separator();
+                        if let Some(project) = self.project.as_mut() {
+                            ui_theme::legend(ui, "SOURCE / MODL/1");
+                            for path in project.source_paths() {
+                                if ui
+                                    .add_sized(
+                                        [ui.available_width(), 40.0],
+                                        egui::Button::new(&path)
+                                            .selected(project.selected_file == path),
+                                    )
+                                    .clicked()
+                                {
+                                    match project.select_source(&path) {
+                                        Ok(()) => self.view = View::Code,
+                                        Err(error) => self.status = error,
+                                    }
+                                }
+                            }
+                        }
+                        ui.separator();
+                        ui_theme::legend(ui, "ASSET BANK");
+                        if ui.button("+ NEW ASSET").clicked() {
+                            self.show_new_asset = true;
+                        }
                         if ui
-                            .selectable_label(project.selected_file == path, &path)
+                            .add_sized(
+                                [ui.available_width(), 40.0],
+                                egui::Button::new("DISPLAY / PALETTE")
+                                    .selected(self.asset_name == "DISPLAY"),
+                            )
                             .clicked()
                         {
-                            match project.select_source(&path) {
-                                Ok(()) => self.view = View::Code,
-                                Err(error) => self.status = error,
+                            self.open_display();
+                        }
+                        let names: Vec<String> =
+                            self.project.as_ref().map_or_else(Vec::new, |project| {
+                                project.manifest.assets.keys().cloned().collect()
+                            });
+                        for name in names {
+                            let selected = self.asset_name == name
+                                || self
+                                    .sprite
+                                    .as_ref()
+                                    .is_some_and(|sprite| sprite.name == name);
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 40.0],
+                                    egui::Button::new(&name).selected(selected),
+                                )
+                                .clicked()
+                            {
+                                self.open_asset(&name);
+                            }
+                        }
+                    });
+            });
+        egui::CentralPanel::default()
+            .frame(ui_theme::screen_frame())
+            .show(root, |ui| match self.view {
+                View::Code => {
+                    if let Some(project) = self.project.as_mut() {
+                        ui_theme::legend(ui, "SOURCE / LIVE EDITOR");
+                        ui.heading(&project.selected_file);
+                        let response = ui.add_sized(
+                            ui.available_size(),
+                            egui::TextEdit::multiline(&mut project.editor_text)
+                                .font(egui::TextStyle::Monospace)
+                                .code_editor()
+                                .desired_rows(30),
+                        );
+                        if response.changed() {
+                            project.dirty = true;
+                        }
+                    }
+                }
+                View::Sprites => self.sprite_ui(ui),
+                View::Assets => {
+                    if self.asset_name.is_empty() {
+                        ui.heading("ASSETS");
+                        ui.label("Choose a map, font, sound or music asset from the project list.");
+                    } else {
+                        ui.heading(&self.asset_name);
+                        ui.label(&self.asset_path);
+                        let tile_sets = self.project.as_ref().map_or_else(Vec::new, |project| {
+                            project
+                                .manifest
+                                .assets
+                                .iter()
+                                .filter_map(|(name, asset)| {
+                                    (asset.kind == modl_core::AssetKind::TileSet)
+                                        .then(|| project.files.get(&asset.path))
+                                        .flatten()
+                                        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+                                        .map(|value| (name.clone(), value))
+                                })
+                                .collect::<Vec<_>>()
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("APPLY JSON").clicked() {
+                                self.status = match self.sync_asset() {
+                                    Ok(()) => "ASSET APPLIED".to_owned(),
+                                    Err(error) => error,
+                                };
+                            }
+                            if ui.button("IMPORT ASSET").clicked() {
+                                self.import_asset_file();
+                            }
+                            if ui.button("EXPORT ASSET").clicked() {
+                                self.export_asset_file();
+                            }
+                        });
+                        if self
+                            .asset_workbench
+                            .as_ref()
+                            .is_some_and(|editor| editor.kind == modl_core::AssetKind::TileSet)
+                        {
+                            ui.horizontal(|ui| {
+                                if ui.button("IMPORT TILE PNG").clicked() {
+                                    self.import_tile_png();
+                                }
+                                if ui.button("EXPORT TILE PNG").clicked() {
+                                    self.export_tile_png();
+                                }
+                            });
+                        }
+                        if self
+                            .project
+                            .as_ref()
+                            .and_then(|project| project.manifest.assets.get(&self.asset_name))
+                            .is_some_and(|asset| {
+                                matches!(
+                                    asset.kind,
+                                    modl_core::AssetKind::Sound | modl_core::AssetKind::Music
+                                )
+                            })
+                        {
+                            ui.horizontal(|ui| {
+                                if ui.button("PREVIEW AUDIO").clicked() {
+                                    self.render_asset_wav(false);
+                                }
+                                if ui.button("EXPORT WAV").clicked() {
+                                    self.render_asset_wav(true);
+                                }
+                            });
+                        }
+                        ui.collapsing("EDIT RAW JSON", |ui| {
+                            if let Some(workbench) = &self.asset_workbench {
+                                if ui.button("SYNC SOURCE").clicked() {
+                                    self.asset_text = workbench.source().unwrap_or_default();
+                                }
+                            }
+                            if ui
+                                .add(
+                                    egui::TextEdit::multiline(&mut self.asset_text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .code_editor()
+                                        .desired_rows(12),
+                                )
+                                .changed()
+                            {
+                                self.asset_dirty = true;
+                                self.asset_workbench = None;
+                            }
+                        });
+                        if let Some(workbench) = self.asset_workbench.as_mut() {
+                            ui.separator();
+                            if workbench.ui(ui, &sprite::palette(), &tile_sets) {
+                                self.asset_dirty = true;
                             }
                         }
                     }
                 }
-                ui.separator();
-                ui.label("ASSETS");
-                if ui.button("+ NEW ASSET").clicked() {
-                    self.show_new_asset = true;
-                }
-                if ui
-                    .selectable_label(self.asset_name == "DISPLAY", "DISPLAY / PALETTE")
-                    .clicked()
-                {
-                    self.open_display();
-                }
-                let names: Vec<String> = self.project.as_ref().map_or_else(Vec::new, |project| {
-                    project.manifest.assets.keys().cloned().collect()
-                });
-                for name in names {
-                    let selected = self.asset_name == name
-                        || self
-                            .sprite
-                            .as_ref()
-                            .is_some_and(|sprite| sprite.name == name);
-                    if ui.selectable_label(selected, &name).clicked() {
-                        self.open_asset(&name);
+                View::Player => {
+                    ui_theme::legend(ui, "DISPLAY / 240 x 144");
+                    ui.heading("CARTRIDGE PLAYER");
+                    ui.label(
+                        RichText::new("ARROWS + Z X A S  /  Q W  /  ENTER").color(ui_theme::MUTED),
+                    );
+                    ui.add_space(12.0);
+                    if let Some(texture) = &self.texture {
+                        let mut available = ui.available_size();
+                        if self.debugging {
+                            available.y = (available.y - 210.0).max(144.0);
+                        }
+                        let scale = ((available.x - 12.0) / SCREEN_WIDTH as f32)
+                            .min((available.y - 12.0) / SCREEN_HEIGHT as f32)
+                            .floor()
+                            .max(1.0);
+                        let size =
+                            egui::vec2(SCREEN_WIDTH as f32 * scale, SCREEN_HEIGHT as f32 * scale);
+                        ui.horizontal(|ui| {
+                            ui.add_space((ui.available_width() - size.x - 12.0).max(0.0) * 0.5);
+                            let (bezel, _) = ui.allocate_exact_size(
+                                size + egui::vec2(12.0, 12.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(bezel, 1.0, ui_theme::CASE_LIGHT);
+                            ui.painter().rect_stroke(
+                                bezel,
+                                1.0,
+                                egui::Stroke::new(2.0, ui_theme::EDGE),
+                                egui::StrokeKind::Inside,
+                            );
+                            let image_rect =
+                                egui::Rect::from_min_size(bezel.min + egui::vec2(6.0, 6.0), size);
+                            let response = ui
+                                .put(image_rect, egui::Image::new((texture.id(), size)))
+                                .on_hover_cursor(egui::CursorIcon::Crosshair);
+                            self.screen_rect = Some(response.rect);
+                        });
+                    } else {
+                        ui.label(
+                            RichText::new(if self.running {
+                                "BOOTING CARTRIDGE..."
+                            } else {
+                                "NO CARTRIDGE RUNNING  /  PRESS RUN"
+                            })
+                            .color(ui_theme::CYAN),
+                        );
                     }
+                    if self.debugging {
+                        self.debugger_ui(ui);
+                    }
+                }
+                View::Manifest => {
+                    ui.heading("cart.toml");
+                    if ui.button("APPLY MANIFEST").clicked() {
+                        self.apply_manifest();
+                    }
+                    ui.add_sized(
+                        ui.available_size(),
+                        egui::TextEdit::multiline(&mut self.manifest_text)
+                            .font(egui::TextStyle::Monospace)
+                            .code_editor(),
+                    );
                 }
             });
-        egui::CentralPanel::default().show(root, |ui| match self.view {
-            View::Code => {
-                if let Some(project) = self.project.as_mut() {
-                    ui.heading(&project.selected_file);
-                    let response = ui.add_sized(
-                        ui.available_size(),
-                        egui::TextEdit::multiline(&mut project.editor_text)
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
-                            .desired_rows(30),
-                    );
-                    if response.changed() {
-                        project.dirty = true;
-                    }
-                }
-            }
-            View::Sprites => self.sprite_ui(ui),
-            View::Assets => {
-                if self.asset_name.is_empty() {
-                    ui.heading("ASSETS");
-                    ui.label("Choose a map, font, sound or music asset from the project list.");
-                } else {
-                    ui.heading(&self.asset_name);
-                    ui.label(&self.asset_path);
-                    let tile_sets = self.project.as_ref().map_or_else(Vec::new, |project| {
-                        project
-                            .manifest
-                            .assets
-                            .iter()
-                            .filter_map(|(name, asset)| {
-                                (asset.kind == modl_core::AssetKind::TileSet)
-                                    .then(|| project.files.get(&asset.path))
-                                    .flatten()
-                                    .and_then(|bytes| serde_json::from_slice(bytes).ok())
-                                    .map(|value| (name.clone(), value))
-                            })
-                            .collect::<Vec<_>>()
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("APPLY JSON").clicked() {
-                            self.status = match self.sync_asset() {
-                                Ok(()) => "ASSET APPLIED".to_owned(),
-                                Err(error) => error,
-                            };
-                        }
-                        if ui.button("IMPORT ASSET").clicked() {
-                            self.import_asset_file();
-                        }
-                        if ui.button("EXPORT ASSET").clicked() {
-                            self.export_asset_file();
-                        }
-                    });
-                    if self
-                        .asset_workbench
-                        .as_ref()
-                        .is_some_and(|editor| editor.kind == modl_core::AssetKind::TileSet)
-                    {
-                        ui.horizontal(|ui| {
-                            if ui.button("IMPORT TILE PNG").clicked() {
-                                self.import_tile_png();
-                            }
-                            if ui.button("EXPORT TILE PNG").clicked() {
-                                self.export_tile_png();
-                            }
-                        });
-                    }
-                    if self
-                        .project
-                        .as_ref()
-                        .and_then(|project| project.manifest.assets.get(&self.asset_name))
-                        .is_some_and(|asset| {
-                            matches!(
-                                asset.kind,
-                                modl_core::AssetKind::Sound | modl_core::AssetKind::Music
-                            )
-                        })
-                    {
-                        ui.horizontal(|ui| {
-                            if ui.button("PREVIEW AUDIO").clicked() {
-                                self.render_asset_wav(false);
-                            }
-                            if ui.button("EXPORT WAV").clicked() {
-                                self.render_asset_wav(true);
-                            }
-                        });
-                    }
-                    ui.collapsing("EDIT RAW JSON", |ui| {
-                        if let Some(workbench) = &self.asset_workbench {
-                            if ui.button("SYNC SOURCE").clicked() {
-                                self.asset_text = workbench.source().unwrap_or_default();
-                            }
-                        }
-                        if ui
-                            .add(
-                                egui::TextEdit::multiline(&mut self.asset_text)
-                                    .font(egui::TextStyle::Monospace)
-                                    .code_editor()
-                                    .desired_rows(12),
-                            )
-                            .changed()
-                        {
-                            self.asset_dirty = true;
-                            self.asset_workbench = None;
-                        }
-                    });
-                    if let Some(workbench) = self.asset_workbench.as_mut() {
-                        ui.separator();
-                        if workbench.ui(ui, &sprite::palette(), &tile_sets) {
-                            self.asset_dirty = true;
-                        }
-                    }
-                }
-            }
-            View::Player => {
-                ui.heading("PLAYER");
-                ui.label("ARROWS + Z X A S • Q W • ENTER");
-                ui.add_space(12.0);
-                if let Some(texture) = &self.texture {
-                    let mut available = ui.available_size();
-                    if self.debugging {
-                        available.y = (available.y - 210.0).max(144.0);
-                    }
-                    let scale = (available.x / SCREEN_WIDTH as f32)
-                        .min(available.y / SCREEN_HEIGHT as f32)
-                        .floor()
-                        .max(1.0);
-                    let size =
-                        egui::vec2(SCREEN_WIDTH as f32 * scale, SCREEN_HEIGHT as f32 * scale);
-                    let response = ui
-                        .add(egui::Image::new((texture.id(), size)))
-                        .on_hover_cursor(egui::CursorIcon::Crosshair);
-                    self.screen_rect = Some(response.rect);
-                } else {
-                    ui.label(if self.running {
-                        "BOOTING CARTRIDGE..."
-                    } else {
-                        "PRESS RUN TO START"
-                    });
-                }
-                if self.debugging {
-                    self.debugger_ui(ui);
-                }
-            }
-            View::Manifest => {
-                ui.heading("cart.toml");
-                if ui.button("APPLY MANIFEST").clicked() {
-                    self.apply_manifest();
-                }
-                ui.add_sized(
-                    ui.available_size(),
-                    egui::TextEdit::multiline(&mut self.manifest_text)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor(),
-                );
-            }
-        });
         self.send_frame(&context);
         self.cursors.paint(&context);
         if self.running {
@@ -3311,16 +3443,17 @@ fn main() -> eframe::Result {
     let start = std::env::args_os().nth(1).map(PathBuf::from);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("MOD-01 Native Studio")
+            .with_title("MOD-01 / Color Development Unit")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "MOD-01 Native Studio",
+        "MOD-01 / Color Development Unit",
         options,
         Box::new(move |creation| {
             ui_assets::install_font(&creation.egui_ctx);
+            ui_theme::install(&creation.egui_ctx);
             Ok(Box::new(StudioApp::new(start, &creation.egui_ctx)))
         }),
     )

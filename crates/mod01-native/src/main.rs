@@ -26,6 +26,7 @@ mod replay;
 mod runtime;
 mod save_manager;
 mod sprite;
+mod syntax;
 mod ui_assets;
 mod ui_theme;
 
@@ -137,6 +138,7 @@ struct StudioApp {
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
     sprite: Option<SpriteEditor>,
+    modl_highlighter: syntax::ModlHighlighter,
     sprite_texture: Option<TextureHandle>,
     sprite_name: String,
     asset_name: String,
@@ -214,6 +216,7 @@ impl StudioApp {
             gamepads: Gilrs::new().ok(),
             texture: None,
             sprite: None,
+            modl_highlighter: syntax::ModlHighlighter::default(),
             sprite_texture: None,
             sprite_name: "hero".to_owned(),
             asset_name: String::new(),
@@ -2916,12 +2919,18 @@ impl eframe::App for StudioApp {
                     if let Some(project) = self.project.as_mut() {
                         ui_theme::legend(ui, "SOURCE / LIVE EDITOR");
                         ui.heading(&project.selected_file);
+                        let highlighter = &mut self.modl_highlighter;
+                        let mut layouter =
+                            |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                                highlighter.layout(ui, text.as_str(), wrap_width)
+                            };
                         let response = ui.add_sized(
                             ui.available_size(),
                             egui::TextEdit::multiline(&mut project.editor_text)
                                 .font(egui::TextStyle::Monospace)
                                 .code_editor()
-                                .desired_rows(30),
+                                .desired_rows(30)
+                                .layouter(&mut layouter),
                         );
                         if response.changed() {
                             project.dirty = true;

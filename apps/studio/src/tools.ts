@@ -130,7 +130,9 @@ export async function openAssetWorkbench(
     const tree = requireElement(root, '.workbench-tree');
     appendWorkbenchTree(tree, project, assets, selectedAsset, (name) => {
       selectedAsset = name;
-      void render().catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+      void render().catch((error: unknown) => {
+        setToolStatus(root, errorMessage(error), true);
+      });
     });
     const selection = requireElement(root, '.workbench-selection');
     const selected = selectedAsset === undefined ? undefined : manifest.assets[selectedAsset];
@@ -205,7 +207,9 @@ function appendWorkbenchTree(
     button.className = name === selected ? 'selected' : '';
     button.textContent = `${name} [${asset.kind}]`;
     button.title = asset.path;
-    button.addEventListener('click', () => select(name));
+    button.addEventListener('click', () => {
+      select(name);
+    });
     tree.append(button);
   }
 }
@@ -259,19 +263,25 @@ function bindWorkbenchActions(
         previous = assetSnapshots(manifest, project.files);
         await callbacks.save();
       },
-    }).catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+    }).catch((error: unknown) => {
+      setToolStatus(root, errorMessage(error), true);
+    });
   });
   root.querySelector('[data-workbench="undo"]')?.addEventListener('click', () => {
     if (selected === undefined) return;
     void applyAssetHistory(selected.path, project, callbacks, histories, 'undo')
       .then(render)
-      .catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+      .catch((error: unknown) => {
+        setToolStatus(root, errorMessage(error), true);
+      });
   });
   root.querySelector('[data-workbench="redo"]')?.addEventListener('click', () => {
     if (selected === undefined) return;
     void applyAssetHistory(selected.path, project, callbacks, histories, 'redo')
       .then(render)
-      .catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+      .catch((error: unknown) => {
+        setToolStatus(root, errorMessage(error), true);
+      });
   });
   root
     .querySelector<HTMLButtonElement>('[data-workbench="delete"]')
@@ -290,7 +300,9 @@ function bindWorkbenchActions(
           if (selected !== undefined) histories.delete(selected.path);
           return render();
         })
-        .catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+        .catch((error: unknown) => {
+          setToolStatus(root, errorMessage(error), true);
+        });
     });
   root.querySelector('[data-workbench="export"]')?.addEventListener('click', () => {
     if (selected === undefined) return;
@@ -317,7 +329,9 @@ function bindWorkbenchActions(
           await recordAndSave(before);
           await render();
         })
-        .catch((error: unknown) => setToolStatus(root, errorMessage(error), true));
+        .catch((error: unknown) => {
+          setToolStatus(root, errorMessage(error), true);
+        });
     });
 }
 
@@ -412,7 +426,8 @@ function firstMapPayload(
   const asset = Object.values(manifest.assets).find((candidate) => candidate.kind === 'map');
   if (asset === undefined) return undefined;
   const parsed = readJson<{ layers?: unknown } | undefined>(files[asset.path], undefined);
-  const layer = Array.isArray(parsed?.layers) ? parsed.layers[0] : undefined;
+  const layers: unknown = parsed?.layers;
+  const layer: unknown = Array.isArray(layers) ? (layers as unknown[])[0] : undefined;
   if (
     typeof layer !== 'object' ||
     layer === null ||
@@ -486,9 +501,9 @@ function renderWorkbenchRecipes(
     button.textContent = `GEN ${recipe.id}`;
     button.title = `${recipe.algorithm} -> ${recipe.output}`;
     button.addEventListener('click', () => {
-      void generate(recipe).catch((error: unknown) =>
-        setToolStatus(root, errorMessage(error), true),
-      );
+      void generate(recipe).catch((error: unknown) => {
+        setToolStatus(root, errorMessage(error), true);
+      });
     });
     target.append(button);
   }
@@ -2812,7 +2827,7 @@ function upsertTopLevel(manifest: string, key: string, value: string | number): 
 }
 
 function paletteCss(index: number): string {
-  const offset = clamp(index, 0, 31) * 4;
+  const offset = clamp(index, 0, HARDWARE.paletteSize - 1) * 4;
   const red = MASTER_PALETTE_RGBA[offset] ?? 0;
   const green = MASTER_PALETTE_RGBA[offset + 1] ?? 0;
   const blue = MASTER_PALETTE_RGBA[offset + 2] ?? 0;
@@ -2822,7 +2837,7 @@ function paletteCss(index: number): string {
 function indexedRgba(indexed: Uint8Array, transparentZero: boolean): Uint8Array {
   const rgba = new Uint8Array(indexed.length * 4);
   for (let pixel = 0; pixel < indexed.length; pixel += 1) {
-    const color = clamp(indexed[pixel] ?? 0, 0, 31);
+    const color = clamp(indexed[pixel] ?? 0, 0, HARDWARE.paletteSize - 1);
     const palette = color * 4;
     rgba[pixel * 4] = MASTER_PALETTE_RGBA[palette] ?? 0;
     rgba[pixel * 4 + 1] = MASTER_PALETTE_RGBA[palette + 1] ?? 0;

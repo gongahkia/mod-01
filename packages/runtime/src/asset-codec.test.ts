@@ -72,7 +72,7 @@ describe('source-visible asset codec', () => {
       { ...source, displayPath: '../display.m01p' },
       { ...source, files: { '/hero.m01g': new Uint8Array(1) } },
       { ...source, files: { 'hero.m01g': [1, 2] } },
-      { ...source, files: { 'hero.m01g': new Uint8Array(2 * 1024 * 1024) } },
+      { ...source, files: { 'hero.m01g': new Uint8Array(16 * 1024 * 1024) } },
       { ...source, declarations: { hero: { kind: 'javascript', path: 'hero.m01g' } } },
     ]) {
       expect(isRuntimeAssetSource(bad)).toBe(false);

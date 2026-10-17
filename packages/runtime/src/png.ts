@@ -116,8 +116,12 @@ export function convertRgbaToIndexed(
 ): Uint8Array {
   if (!Number.isSafeInteger(alphaThreshold) || alphaThreshold < 0 || alphaThreshold > 255)
     throw new RangeError('PNG alpha threshold must be 0-255');
-  if (!Number.isSafeInteger(transparentIndex) || transparentIndex < 0 || transparentIndex >= 32)
-    throw new RangeError('PNG transparent index must be 0-31');
+  if (
+    !Number.isSafeInteger(transparentIndex) ||
+    transparentIndex < 0 ||
+    transparentIndex >= HARDWARE.paletteSize
+  )
+    throw new RangeError('PNG transparent index must be 0-255');
   const output = new Uint8Array(image.width * image.height);
   const bayer = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5] as const;
   for (let pixel = 0; pixel < output.length; pixel += 1) {

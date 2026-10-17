@@ -1,10 +1,30 @@
 # MOD-01 Hardware Revision 1
 
+## Hardware Revision 2 additions
+
+Projects opt in with `hardware_revision = 2`; newly created native projects do so by default.
+Revision 2 keeps the 240×144 display, 60 Hz rendering, save size, work budget, and first 32
+palette colours. It raises the packed cartridge and shared visual capacities to 1 MiB, sprite
+axes to 128 pixels, and the master palette to 256 fixed RGB entries. Indices 32–247 form a 6×6×6
+RGB cube at channel values 0, 51, 102, 153, 204, and 255. Indices 248–255 are eight greys.
+The native editor creates 64×64 sprites by default. Sprite file revision 2 carries the larger
+dimensions and colour indices; file revision 1 retains its 64-pixel, 32-colour validation.
+
+The legacy 128 KiB visual address window at `0x30000` still aliases the first 128 KiB. When a
+visual bank grows beyond it, allocation descriptors point into a contiguous 1 MiB bank at
+`0x210000`; both windows refer to the same backing pixels. The ROM begins at its original
+`0x60000` address and continues at `0x100000` after the first 256 KiB. The first 32 palette
+entries stay at `0x50080`; entries 32–255 are at `0x200000`. Each of the 32 logical remap entries
+can target any of the 256 colours. Indices 32–255 used directly bypass the 32-entry logical
+remap. Cartridge status reports the capacity for the cartridge's hardware revision.
+
+The rest of this document records the frozen Revision 1 profile and original addresses.
+
 This is the frozen byte-addressed machine contract used by the Worker, standalone player and
 headless host. Its public limits retain the measured alpha profile; [LIMITS.md](LIMITS.md) records
 both the baseline and V1 measurements.
 
-| Facility                        |          Current value |
+| Facility                        |       Revision 1 value |
 | ------------------------------- | ---------------------: |
 | Display                         | 240x144 indexed pixels |
 | Render cadence                  |                  60 Hz |

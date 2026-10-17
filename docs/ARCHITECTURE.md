@@ -1,7 +1,7 @@
 # Architecture
 
-MOD-01 is a static browser application backed by one compiler and cartridge implementation shared
-with the native CLI.
+MOD-01 has a Rust native desktop Studio and a maintained static browser Studio. They share the
+Rust compiler, cartridge format, and deterministic TypeScript console core.
 
 ## Package ownership
 
@@ -10,6 +10,8 @@ with the native CLI.
   analysis.
 - `crates/modl-wasm`: a deliberately narrow WebAssembly boundary over `modl-core`.
 - `crates/mod01-cli`: native command family and stdio language server, both using `modl-core`.
+- `crates/mod01-native`: native egui/eframe Studio, layered sprite editor, desktop input/audio,
+  project persistence, and a bounded child-process bridge to the console runtime.
 - `packages/runtime`: deterministic hardware model, worker protocol, indexed graphics, input, audio,
   persistence adapters, debugger, replay, and export support.
 - `apps/studio`: 240x144 shell and integrated tools. It consumes the runtime and compiler bridge but
@@ -46,6 +48,12 @@ exports are reproducible without a JavaScript build step; the runtime package bu
 The headless host is generated from `headless.ts`, embedded in the native CLI, and accepts only a
 bounded JSON request prepared by Rust. Imported `.m01c` files are unpacked and recompiled from their
 source before execution, so their archived build entry is never trusted as executable input.
+The native Studio compiles source with `modl-core`, then passes the generated program, verified ROM,
+and source-visible assets to `native-host.mjs` over line-oriented JSON. Node runs with its permission
+model enabled, an empty environment apart from process essentials, and read access only to the host
+bundle. Rust enforces a response size and time limit, converts indexed pixels to a native texture,
+plays PCM through CPAL, and gathers up to four controllers through gilrs. Distribution bundles the
+Node executable alongside the Rust app, with no webview or browser Worker.
 The Vite build emits a service worker from the final hashed asset inventory, so offline caching
 tracks the actual build instead of a handwritten filename list.
 

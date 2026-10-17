@@ -198,7 +198,6 @@ describe('hardware byte bus', () => {
     for (const [offset, value] of [
       [0, 2],
       [1, 1],
-      [8, 32],
     ]) {
       expect(() => {
         bus.write(MEMORY.raster + (offset ?? 0), value ?? 0, 1, span, true);
@@ -379,9 +378,6 @@ describe('hardware byte bus', () => {
     for (const operation of [
       () => {
         bus.write(MEMORY.display, 0, 1, span);
-      },
-      () => {
-        bus.write(MEMORY.back, 32, 1, span);
       },
       () => {
         bus.fill(MEMORY.back + HARDWARE.width * HARDWARE.height - 1, 1, 2, span);

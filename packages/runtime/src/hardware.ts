@@ -2,25 +2,26 @@ export const HARDWARE = Object.freeze({
   width: 240,
   height: 144,
   frameRate: 60,
-  paletteSize: 32,
+  paletteSize: 256,
+  rasterPaletteSize: 32,
   transparentColor: 0,
-  visualCapacityBytes: 128 * 1024,
+  visualCapacityBytes: 1024 * 1024,
   saveCapacityBytes: 8 * 1024,
-  cartridgeCapacityBytes: 256 * 1024,
+  cartridgeCapacityBytes: 1024 * 1024,
   drawCommandsPerFrame: 4096,
   workUnitsPerFrame: 50_000,
   audioVoices: 8,
   audioSampleRate: 48_000,
   trackerChannels: 8,
   controllerPorts: 4,
-  spriteMaximumAxis: 64,
+  spriteMaximumAxis: 128,
   tileSize: 8,
 } as const);
 
 export type HardwareProfile = typeof HARDWARE;
 
 /** Original MOD-01 RGB master palette. Logical index 0 is also the sprite transparency key. */
-export const MASTER_PALETTE = Object.freeze([
+const ORIGINAL_PALETTE = [
   '#17141f',
   '#292532',
   '#403946',
@@ -53,7 +54,22 @@ export const MASTER_PALETTE = Object.freeze([
   '#654777',
   '#936397',
   '#c38aae',
-] as const);
+] as const;
+
+/** Hardware Revision 2 keeps the original 32 colours, then adds a 216-colour cube and eight greys. */
+export const MASTER_PALETTE = Object.freeze([
+  ...ORIGINAL_PALETTE,
+  ...Array.from({ length: 216 }, (_, index) => {
+    const red = Math.floor(index / 36) * 51;
+    const green = (Math.floor(index / 6) % 6) * 51;
+    const blue = (index % 6) * 51;
+    return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+  }),
+  ...Array.from({ length: 8 }, (_, index) => {
+    const value = (index * 29 + 26).toString(16).padStart(2, '0');
+    return `#${value}${value}${value}`;
+  }),
+]);
 
 export const MASTER_PALETTE_RGBA = Object.freeze(
   MASTER_PALETTE.flatMap((hex) => [

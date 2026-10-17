@@ -27,6 +27,8 @@ interface Allocation {
   readonly validate?: (offset: number, bytes: Uint8Array) => boolean;
 }
 
+const LEGACY_VISUAL_BYTES = 128 * 1024;
+
 /** A single packed, little-endian visual image; all drawing views alias these bytes. */
 export class VisualAssetStore {
   private readonly entries = new Map<string, StoredVisualAsset>();
@@ -36,6 +38,7 @@ export class VisualAssetStore {
   private readonly descriptors: Uint8Array;
   private readonly allocationTable: Uint8Array;
   private readonly info = new Uint8Array(24);
+  private readonly addressBase: number;
   public readonly display: DisplayConfiguration | undefined;
   public readonly usedBytes: number;
 
@@ -53,8 +56,9 @@ export class VisualAssetStore {
     }
     if (display !== undefined) usedBytes += 32 + display.raster.length * 38;
     if (usedBytes > HARDWARE.visualCapacityBytes)
-      throw new RangeError('visual assets exceed the 128 KiB shared capacity');
+      throw new RangeError('visual assets exceed the 1 MiB shared capacity');
     this.usedBytes = usedBytes;
+    this.addressBase = usedBytes > LEGACY_VISUAL_BYTES ? MEMORY.visualExtended : MEMORY.visual;
     this.descriptors = new Uint8Array(sorted.length * MEMORY.assetStride);
     const descriptorView = new DataView(this.descriptors.buffer);
     for (const [id, asset] of sorted.entries()) {
@@ -82,7 +86,7 @@ export class VisualAssetStore {
       const offset = index * MEMORY.allocationStride;
       [
         entry.kind,
-        MEMORY.visual + entry.offset,
+        this.addressBase + entry.offset,
         entry.bytes.length,
         entry.width,
         entry.height,
@@ -98,7 +102,7 @@ export class VisualAssetStore {
       MEMORY.assets,
       this.allocations.length,
       MEMORY.allocations,
-      display === undefined ? 0 : MEMORY.visual + usedBytes - 32 - display.raster.length * 38,
+      display === undefined ? 0 : this.addressBase + usedBytes - 32 - display.raster.length * 38,
     ].forEach((value, field) => {
       info.setUint32(field * 4, value, true);
     });
@@ -139,10 +143,21 @@ export class VisualAssetStore {
       {
         name: 'visual store',
         address: MEMORY.visual,
-        bytes: this.bytes,
+        bytes: this.bytes.subarray(0, LEGACY_VISUAL_BYTES),
         writable: true,
         validate: (offset: number, bytes: Uint8Array) => this.validate(offset, bytes),
       },
+      ...(this.addressBase === MEMORY.visualExtended
+        ? [
+            {
+              name: 'visual store extended',
+              address: MEMORY.visualExtended,
+              bytes: this.bytes,
+              writable: true,
+              validate: (offset: number, bytes: Uint8Array) => this.validate(offset, bytes),
+            },
+          ]
+        : []),
       {
         name: 'visual allocation status',
         address: MEMORY.visualInfo,
@@ -309,14 +324,10 @@ export class VisualAssetStore {
   }
 
   private storeDisplay(display: DisplayConfiguration): DisplayConfiguration {
-    if (
-      display.remap.length !== 32 ||
-      display.remap.some((value) => value >= 32) ||
-      display.raster.length > 144
-    )
+    if (display.remap.length !== HARDWARE.rasterPaletteSize || display.raster.length > 144)
       throw new TypeError('invalid display defaults');
     const remap = this.allocate(4, 32, 1, display.remap, 0, (_offset, bytes) =>
-      bytes.every((value) => value < 32),
+      bytes.every((value) => value < HARDWARE.paletteSize),
     );
     let previous = -1;
     const raster = display.raster.map((row) => {
@@ -327,8 +338,7 @@ export class VisualAssetStore {
         ![row.scrollX, row.scrollY].every(
           (value) => Number.isInteger(value) && value >= -32768 && value <= 32767,
         ) ||
-        row.remap.length !== 32 ||
-        row.remap.some((value) => value >= 32)
+        row.remap.length !== HARDWARE.rasterPaletteSize
       )
         throw new TypeError('invalid display raster defaults');
       previous = row.line;
@@ -340,7 +350,9 @@ export class VisualAssetStore {
       encoded.set(row.remap, 6);
       const bytes = this.allocate(5, 38, 1, encoded, 0, (offset, part) =>
         part.every((value, index) =>
-          offset + index < 2 ? value === encoded[offset + index] : offset + index < 6 || value < 32,
+          offset + index < 2
+            ? value === encoded[offset + index]
+            : offset + index < 6 || value < HARDWARE.paletteSize,
         ),
       );
       const stored = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

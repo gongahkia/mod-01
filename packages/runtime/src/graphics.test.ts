@@ -201,15 +201,17 @@ describe('indexed graphics hardware', () => {
 
   it('enforces asset, sprite, palette, transform, and command limits', () => {
     const maximum = new Uint8Array(HARDWARE.spriteMaximumAxis ** 2);
-    const assets = Array.from({ length: 33 }, (_, index): IndexedSprite => ({
+    const assets = Array.from({ length: 65 }, (_, index): IndexedSprite => ({
       kind: 'sprite',
       name: `sprite-${String(index)}`,
       width: HARDWARE.spriteMaximumAxis,
       height: HARDWARE.spriteMaximumAxis,
       pixels: maximum,
     }));
-    expect(() => new VisualAssetStore(assets)).toThrow(/128 KiB/);
-    expect(() => new IndexedGraphics().executeFrame([command('clear', [32])])).toThrow(/0 and 31/);
+    expect(() => new VisualAssetStore(assets)).toThrow(/1 MiB/);
+    expect(() => new IndexedGraphics().executeFrame([command('clear', [256])])).toThrow(
+      /0 and 255/,
+    );
     expect(() =>
       new IndexedGraphics(
         new VisualAssetStore([

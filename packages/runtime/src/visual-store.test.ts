@@ -120,7 +120,6 @@ describe('packed visual hardware storage', () => {
     const bus = new MemoryBus(store.memoryRegions(), () => {});
     const saved = bus.snapshot();
     for (const [address, value] of [
-      [MEMORY.visual, 32],
       [MEMORY.visual + 1, 2],
       [MEMORY.visual + 2, 1],
     ])
@@ -134,14 +133,13 @@ describe('packed visual hardware storage', () => {
     const invalid = structuredClone(saved);
     const bytes = invalid.regions[0]?.bytes;
     if (bytes === undefined) throw new Error('missing visual memory');
-    bytes[0] = 23;
     bytes[2] = 1;
     expect(() => {
       bus.restore(invalid);
     }).toThrow(/snapshot/);
     deepStrictEqual(bus.snapshot(), saved);
-    bus.write(MEMORY.visual + HARDWARE.visualCapacityBytes - 1, 255, 1, span);
-    expect(bus.read(MEMORY.visual + HARDWARE.visualCapacityBytes - 1, 1, span)).toBe(255);
+    bus.write(MEMORY.visual + 128 * 1024 - 1, 255, 1, span);
+    expect(bus.read(MEMORY.visual + 128 * 1024 - 1, 1, span)).toBe(255);
     expect(() => {
       bus.write(MEMORY.visual, 1, 1, span, true);
     }).toThrow(expect.objectContaining({ code: 'M019011' }));
@@ -168,13 +166,12 @@ describe('packed visual hardware storage', () => {
     expect(() => {
       bus.write(MEMORY.visual + 32, 1, 1, span);
     }).toThrow(expect.objectContaining({ code: 'M019022' }));
-    expect(() => {
-      bus.write(MEMORY.visual + 38, 32, 1, span);
-    }).toThrow(expect.objectContaining({ code: 'M019022' }));
+    bus.write(MEMORY.visual + 38, 32, 1, span);
+    expect(bus.read(MEMORY.visual + 38, 1, span)).toBe(32);
   });
 
   it('accounts for exact capacity and bounds descriptors independently of host alignment', () => {
-    const full = Array.from({ length: 32 }, (_, index): VisualAsset => ({
+    const full = Array.from({ length: 256 }, (_, index): VisualAsset => ({
       kind: 'sprite',
       name: `s${String(index)}`,
       width: 64,
@@ -183,14 +180,36 @@ describe('packed visual hardware storage', () => {
     }));
     expect(new VisualAssetStore(full).usedBytes).toBe(HARDWARE.visualCapacityBytes);
     expect(() => new VisualAssetStore(full, { remap: new Uint8Array(32), raster: [] })).toThrow(
-      /128 KiB/,
+      /1 MiB/,
     );
     expect(
       () => new VisualAssetStore(Array.from({ length: 4097 }, () => assets[2] as VisualAsset)),
     ).toThrow(/too many/);
-    expect(
-      MEMORY.allocations + HARDWARE.visualCapacityBytes * MEMORY.allocationStride,
-    ).toBeLessThanOrEqual(MEMORY.size);
+    expect(MEMORY.allocations + 4096 * MEMORY.allocationStride).toBeLessThanOrEqual(
+      MEMORY.cartridgeRomExtension,
+    );
+  });
+
+  it('maps larger revision-2 visual banks without moving legacy addresses', () => {
+    const sprites = Array.from({ length: 9 }, (_, index): VisualAsset => ({
+      kind: 'sprite',
+      name: `large${String(index)}`,
+      width: 128,
+      height: 128,
+      pixels: new Uint8Array(128 * 128).fill(index + 32),
+    }));
+    const store = new VisualAssetStore(sprites);
+    const bus = new MemoryBus(store.memoryRegions(), () => {});
+    expect(store.usedBytes).toBe(9 * 128 * 128);
+    expect(word32(bus, MEMORY.allocations + 8 * MEMORY.allocationStride + 4)).toBe(
+      MEMORY.visualExtended + 8 * 128 * 128,
+    );
+    expect(bus.read(MEMORY.visual, 1, span)).toBe(32);
+    expect(bus.read(MEMORY.visualExtended + 8 * 128 * 128, 1, span)).toBe(40);
+    bus.write(MEMORY.visualExtended + 8 * 128 * 128, 255, 1, span);
+    const last = store.get('large8');
+    if (last?.kind !== 'sprite') throw new Error('missing large sprite');
+    expect(last.pixels[0]).toBe(255);
   });
 
   it('packs font metadata immutably while glyph bitmap bytes alias the visual bus', () => {

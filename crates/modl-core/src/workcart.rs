@@ -57,6 +57,8 @@ struct WorkcartCartridge {
     version: String,
     entry: String,
     update_rate: u8,
+    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    hardware_revision: u8,
     #[serde(default)]
     compile_on_load: bool,
     #[serde(default)]
@@ -265,6 +267,7 @@ pub fn encode_workcart(
     let document = WorkcartDocument {
         format: WORKCART_FORMAT_REVISION,
         cartridge: WorkcartCartridge {
+            hardware_revision: manifest.hardware_revision,
             language: manifest.language_revision.clone(),
             id: manifest.id.clone(),
             title: manifest.title.clone(),
@@ -513,6 +516,7 @@ fn manifest_from_cartridge(
         version: cartridge.version,
         entry: cartridge.entry,
         update_rate: cartridge.update_rate,
+        hardware_revision: cartridge.hardware_revision,
         compile_on_load: cartridge.compile_on_load,
         label: cartridge.label,
         thumbnail: cartridge.thumbnail,
@@ -522,6 +526,14 @@ fn manifest_from_cartridge(
     let manifest_source =
         toml::to_string(&manifest).map_err(|error| workcart_error("M014020", error.to_string()))?;
     parse_project_manifest(&manifest_source)
+}
+
+const fn default_hardware_revision() -> u8 {
+    1
+}
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_one(value: &u8) -> bool {
+    *value == 1
 }
 
 fn validate_presentation_files(

@@ -157,7 +157,7 @@ describe('sandbox protocol', () => {
     for (const output of [
       undefined,
       { ...frame.output, indexedPixels: new Uint8Array(1) },
-      { ...frame.output, indexedPixels: new Uint8Array(HARDWARE.width * HARDWARE.height).fill(32) },
+      { ...frame.output, indexedPixels: new Uint16Array(HARDWARE.width * HARDWARE.height) },
       { ...frame.output, audio: { ...audio, left: new Float32Array(audio.left.length).fill(NaN) } },
       { ...frame.output, audio: { ...audio, activeVoices: 9 } },
       { ...frame.output, audio: { ...audio, extra: true } },

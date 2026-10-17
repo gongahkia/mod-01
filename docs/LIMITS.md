@@ -1,5 +1,13 @@
 # MOD-01 limits and calibration
 
+## Hardware Revision 2
+
+New native projects use `hardware_revision = 2`. The display stays 240×144 at 60 Hz, while sprite
+assets default to 64×64 and may reach 128×128. The master palette has 256 indexed colours, the
+shared visual bank holds 1 MiB, and a packed `.m01c` may hold 1 MiB. The first 32 palette colours,
+the original MMIO addresses, the 8 KiB save block, and the 50,000-work-unit frame limit remain
+stable. The legacy profile below still applies to revision-1 cartridges.
+
 The public profile was frozen during alpha after building and running all three original game cartridges through
 the public compiler, packer, worker, indexed renderer, and asset decoder. Work units are synthetic
 deterministic costs, not elapsed time or CPU instructions. Measurements below are representative

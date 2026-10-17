@@ -46,7 +46,7 @@ export function isRuntimeAssetSource(value: unknown): value is RuntimeAssetSourc
   for (const [path, data] of Object.entries(value.files)) {
     if (!canonicalAssetPath(path) || !(data instanceof Uint8Array)) return false;
     bytes += path.length + data.byteLength;
-    if (bytes > 2 * 1024 * 1024) return false;
+    if (bytes > 16 * 1024 * 1024) return false;
   }
   for (const [name, declaration] of Object.entries(value.declarations)) {
     if (
@@ -61,7 +61,7 @@ export function isRuntimeAssetSource(value: unknown): value is RuntimeAssetSourc
     )
       return false;
     bytes += name.length + declaration.path.length + declaration.kind.length;
-    if (bytes > 2 * 1024 * 1024) return false;
+    if (bytes > 16 * 1024 * 1024) return false;
   }
   return true;
 }
@@ -86,7 +86,7 @@ export interface RuntimeAssetBundle {
 }
 
 export interface DisplayAssetFile {
-  readonly revision: 1;
+  readonly revision: 1 | 2;
   readonly kind: 'display';
   readonly remap: readonly number[];
   readonly raster: readonly {
@@ -98,7 +98,7 @@ export interface DisplayAssetFile {
 }
 
 export interface SpriteAssetFile {
-  readonly revision: 1;
+  readonly revision: 1 | 2;
   readonly kind: 'sprite';
   readonly width: number;
   readonly height: number;
@@ -106,7 +106,7 @@ export interface SpriteAssetFile {
 }
 
 export interface TileSetAssetFile {
-  readonly revision: 1;
+  readonly revision: 1 | 2;
   readonly kind: 'tile_set';
   readonly tiles: readonly (readonly number[])[];
   readonly flags: readonly number[];
@@ -205,7 +205,7 @@ export function decodeRuntimeAssets(
   const display = decodeDisplay(displayPath, files);
   const visualBytes = visualStore.usedBytes + displayBytes(display);
   if (visualBytes > HARDWARE.visualCapacityBytes) {
-    throw new RangeError('visual assets exceed the 128 KiB shared capacity');
+    throw new RangeError('visual assets exceed the 1 MiB shared capacity');
   }
   return {
     visual,
@@ -235,10 +235,10 @@ function decodeSprite(
 ): IndexedSprite | IndexedAnimation {
   if (
     !isRecord(value) ||
-    value.revision !== 1 ||
+    (value.revision !== 1 && value.revision !== 2) ||
     value.kind !== 'sprite' ||
-    !boundedInteger(value.width, 1, 64) ||
-    !boundedInteger(value.height, 1, 64) ||
+    !boundedInteger(value.width, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.height, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
     !Array.isArray(value.frames) ||
     value.frames.length === 0 ||
     value.frames.length > 256
@@ -247,7 +247,7 @@ function decodeSprite(
   }
   const pixelCount = value.width * value.height;
   const frames = value.frames.map((frame) => {
-    if (!isNumberArray(frame, pixelCount, 0, 31)) {
+    if (!isNumberArray(frame, pixelCount, 0, value.revision === 1 ? 31 : 255)) {
       throw new TypeError(`sprite asset '${name}' has invalid indexed pixels`);
     }
     return {
@@ -268,7 +268,7 @@ function decodeSprite(
 function decodeTileSet(name: string, value: unknown): IndexedTileSet {
   if (
     !isRecord(value) ||
-    value.revision !== 1 ||
+    (value.revision !== 1 && value.revision !== 2) ||
     value.kind !== 'tile_set' ||
     !Array.isArray(value.tiles) ||
     value.tiles.length === 0 ||
@@ -278,7 +278,7 @@ function decodeTileSet(name: string, value: unknown): IndexedTileSet {
     throw new TypeError(`tile-set asset '${name}' is invalid`);
   }
   const tiles = value.tiles.map((pixels, index) => {
-    if (!isNumberArray(pixels, 64, 0, 31)) {
+    if (!isNumberArray(pixels, 64, 0, value.revision === 1 ? 31 : 255)) {
       throw new TypeError(`tile ${String(index)} in '${name}' has invalid indexed pixels`);
     }
     return {
@@ -397,9 +397,9 @@ function decodeDisplay(
   const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
   if (
     !isRecord(value) ||
-    value.revision !== 1 ||
+    (value.revision !== 1 && value.revision !== 2) ||
     value.kind !== 'display' ||
-    !isNumberArray(value.remap, HARDWARE.paletteSize, 0, HARDWARE.paletteSize - 1) ||
+    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255) ||
     !Array.isArray(value.raster) ||
     value.raster.length > HARDWARE.height
   ) {
@@ -413,7 +413,7 @@ function decodeDisplay(
       state.line <= previousLine ||
       !boundedInteger(state.scrollX, -32_768, 32_767) ||
       !boundedInteger(state.scrollY, -32_768, 32_767) ||
-      !isNumberArray(state.remap, HARDWARE.paletteSize, 0, HARDWARE.paletteSize - 1)
+      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255)
     ) {
       throw new TypeError('display configuration has invalid raster state');
     }
@@ -431,7 +431,7 @@ function decodeDisplay(
 function displayBytes(display: DisplayConfiguration | undefined): number {
   return display === undefined
     ? 0
-    : HARDWARE.paletteSize + display.raster.length * (HARDWARE.paletteSize + 6);
+    : HARDWARE.rasterPaletteSize + display.raster.length * (HARDWARE.rasterPaletteSize + 6);
 }
 
 function isNumberArray(

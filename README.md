@@ -10,11 +10,9 @@
 
 <p align="center"><strong>A local-first colour fantasy console from an alternate 1999.</strong></p>
 
-MOD-01 is a complete local-first fantasy console presented as a technically unusual, commercially
-unsuccessful colour handheld from 1999. Its V1 release candidate includes the statically typed MODL/1 language,
-Rust/Wasm compiler, deterministic worker runtime, 240x144 integrated Studio, source debugger and
-rewind, native CLI/LSP, reproducible cartridges, shared headless/offline standalone execution, three
-original pack-in games, three size-class showcases, a service cartridge, and a source-visible tutorial.
+MOD-01 is a local-first fantasy console presented as a technically unusual colour handheld from 1999. Its native desktop Studio uses a Rust interface with no webview, the Rust MODL compiler, and
+the shared deterministic game runtime in a restricted child process. The original browser Studio
+remains available for existing projects and its advanced browser tools.
 
 Made by @gongahkia. Copyright 2026 @gongahkia. All rights reserved. This repository is private and
 proprietary; cartridge authors retain ownership of their source and assets.
@@ -54,7 +52,27 @@ service cart, three size-class showcases, and the FIRST SIGNAL tutorial.
 
 ## Quick start
 
-Requirements are Node.js 22.22 or newer and Rust 1.98. `corepack enable` supplies the pinned pnpm
+For the native Studio, use Node.js 24 and Rust 1.98:
+
+```sh
+corepack enable
+pnpm install --frozen-lockfile
+pnpm native
+```
+
+`pnpm native -- path/to/project` opens a project immediately. The native Studio supports macOS,
+Windows, and Linux. It opens project directories or `.m01c` files, edits MODL source and declared
+assets, runs cartridges with keyboard and gamepad input, plays stereo audio, and saves/exports
+projects. Its layered sprite editor defaults to 64×64, supports up to 128×128 and 256 palette
+entries, and retains editable RGBA layers beside the compiled sprite asset. Debug mode supports
+source stepping and snapshot restore. `pnpm native:package` creates a desktop folder and portable
+archive that include the Node runtime used for cartridge execution; packaged users do not need a
+separate Node install.
+See [native Studio details](docs/STUDIO.md).
+
+For the original browser Studio and the full repository quality gate:
+
+Requirements are Node.js 24 and Rust 1.98. `corepack enable` supplies the pinned pnpm
 10.32.1; the repository's `rust-toolchain.toml` selects Rust, Clippy, rustfmt, and
 `wasm32-unknown-unknown`. The one setup command installs locked dependencies, installs the pinned
 `wasm-bindgen-cli` 0.2.128 when absent, installs the pinned Playwright Firefox and Chromium test
@@ -96,7 +114,7 @@ See the [interactive/from-scratch tutorial](docs/TUTORIAL.md), [runnable example
 ## Boundaries
 
 This V1 candidate has no cloud account, synchronization, hosted backend, gallery, network/multiplayer API,
-desktop GUI, third-party cartridge compatibility, raw JavaScript escape, true-colour path, samples,
+third-party cartridge compatibility, raw JavaScript escape, true-colour path, samples,
 physics engine, ECS, scene graph, or real 3D renderer. Worker containment is a practical browser
 boundary, not process-level isolation; [SECURITY.md](docs/SECURITY.md) states the exact limits.
 

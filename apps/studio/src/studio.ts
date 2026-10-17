@@ -1321,6 +1321,7 @@ export class StudioApp {
         seed: 0x4d30_3031,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: manifestUpdateRate(project.manifest),
+        hardwareRevision: parsedManifest.hardware_revision ?? 1,
         assets: {
           declarations: parsedManifest.assets,
           files: project.files,

@@ -15,8 +15,9 @@ use crate::{
 };
 
 const MAGIC: &[u8; 8] = b"MOD-01\x1a\x01";
-pub const CARTRIDGE_CAPACITY_BYTES: usize = 256 * 1024;
-const MAX_UNPACKED_BYTES: usize = 2 * 1024 * 1024;
+pub const CARTRIDGE_CAPACITY_BYTES: usize = 1024 * 1024;
+pub const LEGACY_CARTRIDGE_CAPACITY_BYTES: usize = 256 * 1024;
+const MAX_UNPACKED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
 const SHA256_INITIAL: [u32; 8] = [
     0x6a09_e667,
@@ -108,6 +109,8 @@ pub struct ProjectManifest {
     pub version: String,
     pub entry: String,
     pub update_rate: u8,
+    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    pub hardware_revision: u8,
     #[serde(default, skip_serializing_if = "is_false")]
     pub compile_on_load: bool,
     #[serde(default)]
@@ -139,6 +142,8 @@ pub struct PackedManifest {
     pub version: String,
     pub entry: String,
     pub update_rate: u8,
+    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    pub hardware_revision: u8,
     #[serde(default, skip_serializing_if = "is_false")]
     pub compile_on_load: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +319,7 @@ fn pack_materialized_project(
         version: manifest.version.clone(),
         entry: format!("source/{normalized_entry}"),
         update_rate: manifest.update_rate,
+        hardware_revision: manifest.hardware_revision,
         compile_on_load: manifest.compile_on_load,
         compiled_program,
         label,
@@ -330,19 +336,26 @@ fn pack_materialized_project(
     })?;
     insert_unique(&mut entries, "manifest.json".to_owned(), canonical_manifest)?;
     let bytes = encode_archive(&entries)?;
-    if bytes.len() > CARTRIDGE_CAPACITY_BYTES {
-        return Err(cartridge_error(
-            "M014005",
-            format!(
-                "packed cartridge is {} bytes; capacity is {CARTRIDGE_CAPACITY_BYTES}",
-                bytes.len()
-            ),
-        ));
-    }
+    ensure_capacity(bytes.len(), manifest.hardware_revision)?;
     Ok(PackedCartridge {
         bytes,
         manifest: packed_manifest,
     })
+}
+
+fn ensure_capacity(length: usize, hardware_revision: u8) -> Result<(), CartridgeError> {
+    let capacity = if hardware_revision == 1 {
+        LEGACY_CARTRIDGE_CAPACITY_BYTES
+    } else {
+        CARTRIDGE_CAPACITY_BYTES
+    };
+    if length > capacity {
+        return Err(cartridge_error(
+            "M014005",
+            format!("packed cartridge is {length} bytes; capacity is {capacity}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Links imported project modules and compiles them through the ordinary typed pipeline.
@@ -941,6 +954,14 @@ fn collect_project_entries(
             insert_unique(&mut entries, format!("source/{path}"), text.into_bytes())?;
         }
     }
+    if manifest.hardware_revision == 2 {
+        for (path, bytes) in project_files {
+            if path.starts_with("editor/sprites/") && path.ends_with(".m01paint") {
+                let path = normalize_project_path(path)?;
+                insert_unique(&mut entries, path, bytes.clone())?;
+            }
+        }
+    }
     let mut packed_assets = BTreeMap::new();
     for (name, asset) in &manifest.assets {
         let project_path = normalize_project_path(&asset.path)?;
@@ -1086,6 +1107,12 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
     let manifest: PackedManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
         cartridge_error("M014012", format!("packed manifest is invalid: {error}"))
     })?;
+    if manifest.hardware_revision == 1 && bytes.len() > LEGACY_CARTRIDGE_CAPACITY_BYTES {
+        return Err(cartridge_error(
+            "M014010",
+            "legacy cartridge exceeds 256 KiB".to_owned(),
+        ));
+    }
     if serde_json::to_vec(&manifest).ok().as_deref() != Some(manifest_bytes) {
         return Err(cartridge_error(
             "M014012",
@@ -1124,6 +1151,12 @@ pub fn unpack_cartridge_project(bytes: &[u8]) -> Result<UnpackedProject, Cartrid
         if let Some(project_path) = path.strip_prefix("source/") {
             insert_unpacked(&mut files, project_path, contents)?;
         }
+        if packed.hardware_revision == 2
+            && path.starts_with("editor/sprites/")
+            && path.ends_with(".m01paint")
+        {
+            insert_unpacked(&mut files, path, contents)?;
+        }
     }
     let mut assets = BTreeMap::new();
     for (name, asset) in &packed.assets {
@@ -1161,6 +1194,7 @@ pub fn unpack_cartridge_project(bytes: &[u8]) -> Result<UnpackedProject, Cartrid
         version: packed.version.clone(),
         entry,
         update_rate: packed.update_rate,
+        hardware_revision: packed.hardware_revision,
         compile_on_load: packed.compile_on_load,
         label,
         thumbnail,
@@ -1319,6 +1353,12 @@ fn validate_manifest(manifest: &ProjectManifest) -> Result<(), CartridgeError> {
             ),
         ));
     }
+    if !matches!(manifest.hardware_revision, 1 | 2) {
+        return Err(cartridge_error(
+            "M014006",
+            "hardware_revision must be 1 or 2".to_owned(),
+        ));
+    }
     if manifest.language_revision != LANGUAGE_REVISION {
         return Err(cartridge_error(
             "M014006",
@@ -1393,6 +1433,18 @@ fn validate_packed_manifest(
         return Err(cartridge_error(
             "M014012",
             "packed manifest requests an unsupported revision".to_owned(),
+        ));
+    }
+    if !matches!(manifest.hardware_revision, 1 | 2) {
+        return Err(cartridge_error(
+            "M014012",
+            "packed manifest has invalid hardware revision".to_owned(),
+        ));
+    }
+    if manifest.hardware_revision == 1 && entries.keys().any(|path| path.starts_with("editor/")) {
+        return Err(cartridge_error(
+            "M014012",
+            "legacy cartridge has editor documents".to_owned(),
         ));
     }
     let actual_files: BTreeMap<_, _> = entries
@@ -1501,6 +1553,14 @@ const fn is_false(value: &bool) -> bool {
     !*value
 }
 
+const fn default_hardware_revision() -> u8 {
+    1
+}
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_one(value: &u8) -> bool {
+    *value == 1
+}
+
 fn insert_unique(
     entries: &mut BTreeMap<String, Vec<u8>>,
     path: String,
@@ -1557,7 +1617,7 @@ fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, Cartri
         if output.len() > CARTRIDGE_CAPACITY_BYTES {
             return Err(cartridge_error(
                 "M014005",
-                "packed cartridge exceeds the 256 KiB capacity".to_owned(),
+                "packed cartridge exceeds the 1 MiB capacity".to_owned(),
             ));
         }
     }
@@ -1816,8 +1876,9 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CARTRIDGE_CAPACITY_BYTES, compile_project, decode_cartridge, load_cartridge_program,
-        pack_project, rle_decode, rle_encode, sha256_hex, unpack_cartridge_project,
+        CARTRIDGE_CAPACITY_BYTES, LEGACY_CARTRIDGE_CAPACITY_BYTES, compile_project,
+        decode_cartridge, load_cartridge_program, pack_project, rle_decode, rle_encode, sha256_hex,
+        unpack_cartridge_project,
     };
     use crate::CompileMode;
     use std::collections::BTreeMap;
@@ -1919,6 +1980,60 @@ path = "assets/hero.m01g"
                 .expect("source cart unpacks")
                 .manifest
                 .contains("compile_on_load = true")
+        );
+    }
+
+    #[test]
+    fn hardware_two_preserves_layered_sprite_source_in_cartridge() {
+        let source = manifest().replace(
+            "update_rate = 60",
+            "update_rate = 60\nhardware_revision = 2",
+        );
+        let mut project_files = files("\n");
+        let sidecar = br#"{"revision":1,"width":1,"height":1,"frames":[{"layers":[{"name":"Base","visible":true,"locked":false,"pixels":"/wAA/w=="}]}]}"#.to_vec();
+        project_files.insert("editor/sprites/hero.m01paint".to_owned(), sidecar.clone());
+        let packed = pack_project(&source, &project_files).expect("hardware two packs");
+        assert_eq!(packed.manifest.hardware_revision, 2);
+        let restored = unpack_cartridge_project(&packed.bytes).expect("hardware two unpacks");
+        assert!(restored.manifest.contains("hardware_revision = 2"));
+        assert_eq!(
+            restored.files.get("editor/sprites/hero.m01paint"),
+            Some(&sidecar)
+        );
+    }
+
+    #[test]
+    fn hardware_two_packs_a_detailed_layered_source_above_the_legacy_ceiling() {
+        let source = manifest().replace(
+            "update_rate = 60",
+            "update_rate = 60\nhardware_revision = 2",
+        );
+        let mut project_files = files("\n");
+        let mut state = 42_u32;
+        let pixels: Vec<u8> = (0..128 * 128 * 4)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                state.to_be_bytes()[0]
+            })
+            .collect();
+        let layer =
+            serde_json::json!({"name":"Base","visible":true,"locked":false,"pixels":pixels});
+        let sidecar = serde_json::to_vec(&serde_json::json!({
+            "revision":1,"width":128,"height":128,
+            "frames":[{"layers":[layer.clone()]},{"layers":[layer]}],
+        }))
+        .expect("encode layered source");
+        project_files.insert("editor/sprites/hero.m01paint".to_owned(), sidecar);
+        let packed =
+            pack_project(&source, &project_files).expect("hardware two packs detailed source");
+        assert!(packed.bytes.len() > LEGACY_CARTRIDGE_CAPACITY_BYTES);
+        assert!(packed.bytes.len() < CARTRIDGE_CAPACITY_BYTES);
+        assert_eq!(
+            decode_cartridge(&packed.bytes)
+                .unwrap()
+                .manifest
+                .hardware_revision,
+            2
         );
     }
 

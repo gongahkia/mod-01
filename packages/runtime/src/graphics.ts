@@ -180,7 +180,7 @@ export class IndexedGraphics {
     }
     if (command.name === 'pal') {
       const [from, to] = expectIntegers(command, 2);
-      this.displayRemap[expectColor(from)] = expectColor(to);
+      this.displayRemap[expectRemappableColor(from)] = expectColor(to);
     } else if (command.name === 'raster_scroll') {
       const [x, y] = expectIntegers(command, 2);
       this.rasterLiveView.setFloat64(0, x, true);
@@ -218,7 +218,7 @@ export class IndexedGraphics {
         const sourceX = wrap(x + previousScrollX, HARDWARE.width);
         const sourceY = wrap(y + previousScrollY, HARDWARE.height);
         const color = this.back[sourceY * HARDWARE.width + sourceX] ?? 0;
-        this.resolved[y * HARDWARE.width + x] = previousRemap[color] ?? 0;
+        this.resolved[y * HARDWARE.width + x] = previousRemap[color] ?? color;
       }
     }
 
@@ -319,7 +319,7 @@ export class IndexedGraphics {
     switch (command.name) {
       case 'clear': {
         const [color] = expectIntegers(command, 1);
-        this.back.fill(state.remap[expectColor(color)] ?? 0);
+        this.back.fill(state.remap[expectColor(color)] ?? color);
         return;
       }
       case 'pixel': {
@@ -369,7 +369,7 @@ export class IndexedGraphics {
         return;
       case 'pal': {
         const [from, to] = expectIntegers(command, 2);
-        state.remap[expectColor(from)] = expectColor(to);
+        state.remap[expectRemappableColor(from)] = expectColor(to);
         return;
       }
       case 'pal_reset':
@@ -456,7 +456,7 @@ export class IndexedGraphics {
     ) {
       return;
     }
-    this.back[screenY * HARDWARE.width + screenX] = state.remap[expectColor(color)] ?? 0;
+    this.back[screenY * HARDWARE.width + screenX] = state.remap[expectColor(color)] ?? color;
   }
 
   private line(
@@ -929,7 +929,8 @@ function copyDisplayConfiguration(display?: DisplayConfiguration): DisplayConfig
 
 function validRemap(remap: Uint8Array): boolean {
   return (
-    remap.length === HARDWARE.paletteSize && remap.every((color) => color < HARDWARE.paletteSize)
+    remap.length === HARDWARE.rasterPaletteSize &&
+    remap.every((color) => color < HARDWARE.paletteSize)
   );
 }
 
@@ -938,7 +939,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function identityRemap(): Uint8Array {
-  return Uint8Array.from({ length: HARDWARE.paletteSize }, (_, index) => index);
+  return Uint8Array.from({ length: HARDWARE.rasterPaletteSize }, (_, index) => index);
 }
 
 function expectIntegers(command: ConsoleCommand, count: 0): [];
@@ -986,7 +987,14 @@ function expectText(value: unknown): string {
 
 function expectColor(value: number): number {
   if (value < 0 || value >= HARDWARE.paletteSize) {
-    throw new RangeError('palette index must be between 0 and 31');
+    throw new RangeError('palette index must be between 0 and 255');
+  }
+  return value;
+}
+
+function expectRemappableColor(value: number): number {
+  if (value < 0 || value >= HARDWARE.rasterPaletteSize) {
+    throw new RangeError('palette remap source must be between 0 and 31');
   }
   return value;
 }

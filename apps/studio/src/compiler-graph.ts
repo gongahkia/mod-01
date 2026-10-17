@@ -189,7 +189,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asRecords(value: unknown): readonly Record<string, unknown>[] {
   return Array.isArray(value)
-    ? value.flatMap((entry) => (asRecord(entry) === undefined ? [] : [asRecord(entry)!]))
+    ? value.flatMap((entry: unknown) => {
+        const record = asRecord(entry);
+        return record === undefined ? [] : [record];
+      })
     : [];
 }
 

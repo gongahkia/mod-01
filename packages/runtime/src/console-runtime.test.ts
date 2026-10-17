@@ -312,7 +312,7 @@ describe('production console dispatcher', () => {
     const malformed = structuredClone(current);
     const visual = malformed.memory.regions.find((region) => region.address === MEMORY.visual);
     if (visual === undefined) throw new Error('missing visual region');
-    visual.bytes[0] = 32;
+    Object.defineProperty(visual, 'bytes', { value: new Uint8Array(3) });
     expect(() => {
       runtime.restore(malformed);
     }).toThrow(/snapshot/);
@@ -476,7 +476,7 @@ describe('production console dispatcher', () => {
       ['mem_write', [MEMORY.transparency, 1], 'M019021'],
       ['mem_write', [MEMORY.display, 0], 'M019021'],
       ['mem_write', [MEMORY.rasterLive, 0], 'M019021'],
-      ['mem_write', [MEMORY.back, 32], 'M019022'],
+      ['mem_write', [MEMORY.back, 256], 'M019022'],
       ['mem_write16', [0, 65536], 'M019022'],
       ['mem_fill', [MEMORY.back, 1, 50_000], 'M019001'],
     ];

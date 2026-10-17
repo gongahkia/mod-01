@@ -23,11 +23,23 @@ export function encodeIndexedGif(
     if (frame.length !== width * height || frame.some((color) => color >= HARDWARE.paletteSize))
       throw new TypeError('GIF frame is not canonical indexed MOD-01 output');
   }
+  const paletteSize = frames.some((frame) => frame.some((color) => color >= 32)) ? 256 : 32;
+  const codeSize = paletteSize === 256 ? 8 : 5;
   const chunks: Uint8Array[] = [];
   chunks.push(encoder.encode('GIF89a'));
-  chunks.push(Uint8Array.of(width & 0xff, width >>> 8, height & 0xff, height >>> 8, 0xf4, 0, 0));
-  const palette = new Uint8Array(32 * 3);
-  for (let color = 0; color < 32; color += 1) {
+  chunks.push(
+    Uint8Array.of(
+      width & 0xff,
+      width >>> 8,
+      height & 0xff,
+      height >>> 8,
+      paletteSize === 256 ? 0xf7 : 0xf4,
+      0,
+      0,
+    ),
+  );
+  const palette = new Uint8Array(paletteSize * 3);
+  for (let color = 0; color < paletteSize; color += 1) {
     palette[color * 3] = MASTER_PALETTE_RGBA[color * 4] ?? 0;
     palette[color * 3 + 1] = MASTER_PALETTE_RGBA[color * 4 + 1] ?? 0;
     palette[color * 3 + 2] = MASTER_PALETTE_RGBA[color * 4 + 2] ?? 0;
@@ -39,9 +51,21 @@ export function encodeIndexedGif(
     const delay = index % 3 === 2 ? 4 : 3;
     chunks.push(Uint8Array.of(0x21, 0xf9, 4, 4, delay, 0, 0, 0));
     chunks.push(
-      Uint8Array.of(0x2c, 0, 0, 0, 0, width & 0xff, width >>> 8, height & 0xff, height >>> 8, 0, 5),
+      Uint8Array.of(
+        0x2c,
+        0,
+        0,
+        0,
+        0,
+        width & 0xff,
+        width >>> 8,
+        height & 0xff,
+        height >>> 8,
+        0,
+        codeSize,
+      ),
     );
-    const compressed = literalLzw(frame);
+    const compressed = literalLzw(frame, codeSize);
     for (let offset = 0; offset < compressed.length; offset += 255) {
       const block = compressed.subarray(offset, offset + 255);
       chunks.push(Uint8Array.of(block.length), block);
@@ -52,19 +76,20 @@ export function encodeIndexedGif(
   return concatenate(chunks);
 }
 
-function literalLzw(pixels: Uint8Array): Uint8Array {
-  const clear = 32;
-  const end = 33;
+function literalLzw(pixels: Uint8Array, minimumCodeSize: number): Uint8Array {
+  const clear = 1 << minimumCodeSize;
+  const end = clear + 1;
+  const bits = minimumCodeSize + 1;
   const codes: number[] = [];
   for (let offset = 0; offset < pixels.length; offset += 30) {
     codes.push(clear);
     for (const pixel of pixels.subarray(offset, offset + 30)) codes.push(pixel);
   }
   codes.push(end);
-  const output = new Uint8Array(Math.ceil((codes.length * 6) / 8));
+  const output = new Uint8Array(Math.ceil((codes.length * bits) / 8));
   let bit = 0;
   for (const code of codes) {
-    for (let index = 0; index < 6; index += 1) {
+    for (let index = 0; index < bits; index += 1) {
       if ((code & (1 << index)) !== 0) {
         const byte = Math.floor(bit / 8);
         output[byte] = (output[byte] ?? 0) | (1 << (bit % 8));

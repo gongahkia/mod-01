@@ -103,9 +103,7 @@
         "visualBytes": 10695
       },
       "sizeClass": "64K",
-      "warnings": [
-        "within fixed cartridge, visual, work, command and voice limits"
-      ]
+      "warnings": ["within fixed cartridge, visual, work, command and voice limits"]
     },
     "assets": {
       "bass": {
@@ -257,9 +255,7 @@
         "visualBytes": 908
       },
       "sizeClass": "64K",
-      "warnings": [
-        "within fixed cartridge, visual, work, command and voice limits"
-      ]
+      "warnings": ["within fixed cartridge, visual, work, command and voice limits"]
     },
     "assets": {
       "bump": {
@@ -415,9 +411,7 @@
         "visualBytes": 440
       },
       "sizeClass": "64K",
-      "warnings": [
-        "within fixed cartridge, visual, work, command and voice limits"
-      ]
+      "warnings": ["within fixed cartridge, visual, work, command and voice limits"]
     },
     "assets": {
       "beacon": {

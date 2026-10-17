@@ -12,7 +12,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && vite build --config vite.headless.config.ts && vite build --config vite.standalone.config.ts && prettier --write standalone/headless-host.mjs standalone/player.js",
+    "build": "tsc -p tsconfig.build.json && vite build --config vite.headless.config.ts && vite build --config vite.native.config.ts && vite build --config vite.standalone.config.ts && prettier --write standalone/headless-host.mjs standalone/native-host.mjs standalone/player.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }

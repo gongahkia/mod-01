@@ -13,6 +13,8 @@
     "build": "pnpm --recursive --if-present run build",
     "check": "./scripts/check.sh",
     "dev": "pnpm --filter @mod01/studio dev",
+    "native": "pnpm --dir packages/runtime build && cargo run -p mod01-native",
+    "native:package": "pnpm --dir packages/runtime build && cargo build --release -p mod01-native && node scripts/package-native.mjs",
     "format": "prettier --write . && cargo fmt --all",
     "format:check": "prettier --check .",
     "lint": "eslint .",

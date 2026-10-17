@@ -1,5 +1,28 @@
 # Studio and external workflow
 
+## Native desktop Studio
+
+Run `pnpm native` during development or `pnpm native:package` to make a distributable folder for
+the current OS. The desktop interface is Rust/egui and contains no webview. It opens a project
+directory or canonical `.m01c`, can save an imported cartridge as a new project, edits MODL modules
+and the manifest, checks and packs with `modl-core`, and plays through the shared console runtime.
+Keyboard, pointer, four gamepad ports, PCM audio, and cartridge save commits use native host APIs.
+The bundled Node child has restricted filesystem/process permissions and a five-second response
+limit. Debug mode offers source-step events and snapshot restore. Other declared assets are editable
+as their source-visible JSON.
+
+The native sprite editor draws on RGBA layers, supports rename/reorder/visibility/locking,
+brushes, fill, pick, selection recolour/erase, frames with onion skinning, zoom/pan, undo/redo,
+PNG import/export, and 256-colour quantization. New sprites start at 64×64, can reach 128×128, and
+save both a runtime `.m01g` file and an editable `editor/sprites/*.m01paint` document. Hardware
+Revision 2 cartridges retain the layered source when packed and unpacked. Colour index zero is
+the sprite transparency key; the zero swatch selects the eraser. Layer pixels are base64 RGBA in
+the source-visible JSON document, and the editor also reads earlier numeric-array documents.
+
+The browser Studio below remains available for its visual map/font/audio editors, browser replay
+capture, and full source debugger while the native interface covers the core project and sprite
+workflow.
+
 The browser studio is local-only. Its project repository stores the current project, ten bounded
 pre-save recovery revisions, settings, and capability-scoped cartridge saves in IndexedDB. A
 cartridge worker receives only a validated copy of its own integer save values; it never receives

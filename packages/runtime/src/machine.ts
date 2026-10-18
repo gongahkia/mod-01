@@ -107,17 +107,13 @@ export interface MachineDebugStep {
   readonly booted?: true;
 }
 
-export interface LegacyMachineSnapshot {
-  readonly revision: 1;
+export interface MachineSnapshot {
+  readonly revision: 2;
   readonly frame: number;
   readonly rngState: number;
   readonly cartridge: CartridgeSnapshot;
   readonly input: InputFrame;
   readonly previousInput: InputFrame;
-}
-
-export interface MachineSnapshot extends Omit<LegacyMachineSnapshot, 'revision'> {
-  readonly revision: 2;
   readonly updateRate: 30 | 60;
   readonly budget: WorkBudgetSnapshot;
   readonly execution: ExecutionSnapshot;
@@ -363,10 +359,7 @@ export class DeterministicMachine implements CartridgeApi {
       throw new TypeError('invalid MOD-01 machine snapshot');
     }
     const snapshot = value;
-    if (
-      snapshot.revision === 2 &&
-      (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
-    )
+    if (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
       throw new TypeError('machine snapshot does not match the execution configuration');
     const previous = structuredClone(this.cartridge.snapshot());
     try {
@@ -375,22 +368,12 @@ export class DeterministicMachine implements CartridgeApi {
       this.cartridge.restore(previous);
       throw error;
     }
-    if (snapshot.revision === 2) {
-      this.budget.restore(snapshot.budget);
-      this.booted = snapshot.execution.booted;
-      this.completedUpdates = snapshot.execution.updates;
-      this.phase = snapshot.execution.phase;
-      this.rasterLine = snapshot.execution.rasterLine ?? undefined;
-      this.lastFault = structuredClone(snapshot.execution.fault);
-    } else {
-      this.budget.beginFrame();
-      this.booted = this.booted || snapshot.frame > 0;
-      this.completedUpdates =
-        this.updateRate === 60 ? snapshot.frame : Math.ceil(snapshot.frame / 2);
-      this.phase = 'idle';
-      this.rasterLine = undefined;
-      this.lastFault = null;
-    }
+    this.budget.restore(snapshot.budget);
+    this.booted = snapshot.execution.booted;
+    this.completedUpdates = snapshot.execution.updates;
+    this.phase = snapshot.execution.phase;
+    this.rasterLine = snapshot.execution.rasterLine ?? undefined;
+    this.lastFault = structuredClone(snapshot.execution.fault);
     this.currentFrame = snapshot.frame;
     this.rng.restore(snapshot.rngState);
     this.input = structuredClone(snapshot.input);
@@ -576,9 +559,7 @@ export class DeterministicMachine implements CartridgeApi {
   }
 }
 
-export function isMachineSnapshot(
-  value: unknown,
-): value is MachineSnapshot | LegacyMachineSnapshot {
+export function isMachineSnapshot(value: unknown): value is MachineSnapshot {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
@@ -593,7 +574,6 @@ export function isMachineSnapshot(
     typeof candidate.cartridge === 'object' &&
     candidate.cartridge !== null;
   if (!base) return false;
-  if (candidate.revision === 1) return Object.keys(candidate).length === 6;
   return (
     candidate.revision === 2 &&
     Object.keys(candidate).length === 9 &&

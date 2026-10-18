@@ -78,10 +78,6 @@ export function decodeReplayTrace(bytes: Uint8Array): ReplayTrace {
     throw new TypeError('replay JSON is invalid');
   }
   if (isReplayTrace(value, REPLAY_MAX_FRAMES)) return structuredClone(value);
-  if (isRecord(value) && hasExactKeys(value, ['frames'])) {
-    const migrated = { revision: 1 as const, frames: value.frames };
-    if (isReplayTrace(migrated, REPLAY_MAX_FRAMES)) return structuredClone(migrated);
-  }
   throw new TypeError('replay schema is invalid');
 }
 

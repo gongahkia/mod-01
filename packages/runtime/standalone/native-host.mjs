@@ -2627,10 +2627,7 @@ var DeterministicMachine = class {
   restore(value) {
     if (!isMachineSnapshot(value)) throw new TypeError('invalid MOD-01 machine snapshot');
     const snapshot = value;
-    if (
-      snapshot.revision === 2 &&
-      (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
-    )
+    if (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
       throw new TypeError('machine snapshot does not match the execution configuration');
     const previous = structuredClone(this.cartridge.snapshot());
     try {
@@ -2639,22 +2636,12 @@ var DeterministicMachine = class {
       this.cartridge.restore(previous);
       throw error;
     }
-    if (snapshot.revision === 2) {
-      this.budget.restore(snapshot.budget);
-      this.booted = snapshot.execution.booted;
-      this.completedUpdates = snapshot.execution.updates;
-      this.phase = snapshot.execution.phase;
-      this.rasterLine = snapshot.execution.rasterLine ?? void 0;
-      this.lastFault = structuredClone(snapshot.execution.fault);
-    } else {
-      this.budget.beginFrame();
-      this.booted = this.booted || snapshot.frame > 0;
-      this.completedUpdates =
-        this.updateRate === 60 ? snapshot.frame : Math.ceil(snapshot.frame / 2);
-      this.phase = 'idle';
-      this.rasterLine = void 0;
-      this.lastFault = null;
-    }
+    this.budget.restore(snapshot.budget);
+    this.booted = snapshot.execution.booted;
+    this.completedUpdates = snapshot.execution.updates;
+    this.phase = snapshot.execution.phase;
+    this.rasterLine = snapshot.execution.rasterLine ?? void 0;
+    this.lastFault = structuredClone(snapshot.execution.fault);
     this.currentFrame = snapshot.frame;
     this.rng.restore(snapshot.rngState);
     this.input = structuredClone(snapshot.input);
@@ -2854,7 +2841,6 @@ function isMachineSnapshot(value) {
     candidate.cartridge !== null
   ))
     return false;
-  if (candidate.revision === 1) return Object.keys(candidate).length === 6;
   return (
     candidate.revision === 2 &&
     Object.keys(candidate).length === 9 &&
@@ -4296,7 +4282,6 @@ function isConsoleRuntimeSnapshot(value) {
     value.revision === 6 &&
     Object.keys(value).length === 7 &&
     isMachineSnapshot(value.machine) &&
-    value.machine.revision === 2 &&
     isSaveSnapshot(value.save) &&
     isGraphicsSnapshot(value.graphics) &&
     isSynthSnapshot(value.audio) &&
@@ -4564,38 +4549,20 @@ function createConsoleRuntime(factory, configuration) {
     },
     snapshot: captureSnapshot,
     restore(value) {
-      const snapshot = readWorkerSnapshot(value);
+      if (!isConsoleRuntimeSnapshot(value))
+        throw new RuntimeFault('M019103', 'invalid console snapshot', {
+          start: 0,
+          end: 0,
+        });
+      const snapshot = value;
       const before = debugFrameActive ? boundarySnapshot : captureSnapshot();
       try {
         requireMachine().restore(snapshot.machine);
         debugFrameActive = false;
-        if (snapshot.revision === 6)
-          saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
-        else saveMemory.restore(snapshot.save, snapshot.pendingSaveWrites);
-        if (snapshot.revision >= 2) {
-          graphics.restore(snapshot.graphics);
-          synthesizer.restore(snapshot.audio);
-        }
-        if (snapshot.revision >= 4) bus.restore(snapshot.memory);
-        else if (snapshot.revision >= 2) {
-          const visual = new VisualAssetStore(assets.visual, assets.display).memoryRegions()[0];
-          if (visual === void 0) throw new TypeError('missing visual image');
-          if (snapshot.revision === 3 && isMemorySnapshot(snapshot.memory))
-            bus.restore({
-              revision: 1,
-              regions: [
-                ...snapshot.memory.regions,
-                {
-                  address: MEMORY.visual,
-                  bytes: visual.bytes,
-                },
-              ].sort((a, b) => a.address - b.address),
-            });
-          else {
-            ram.fill(0);
-            visualStore.memoryRegions()[0]?.bytes.set(visual.bytes);
-          }
-        }
+        saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
+        graphics.restore(snapshot.graphics);
+        synthesizer.restore(snapshot.audio);
+        bus.restore(snapshot.memory);
         boundarySnapshot = captureSnapshot();
       } catch (error) {
         requireMachine().restore(before.machine);
@@ -4917,44 +4884,6 @@ function readInteger(value, sourceSpan) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value))
     throw new RuntimeFault('M019009', 'console arguments must be safe integers', sourceSpan);
   return value;
-}
-function readWorkerSnapshot(value) {
-  if (
-    !isRecord(value) ||
-    (value.revision === 6 ? !isConsoleRuntimeSnapshot(value) : !isLegacyWorkerSnapshot(value))
-  )
-    throw new RuntimeFault('M019103', 'invalid worker snapshot', {
-      start: 0,
-      end: 0,
-    });
-  return {
-    revision: value.revision,
-    machine: value.machine,
-    save: value.save,
-    graphics: value.graphics,
-    audio: value.audio,
-    pendingSaveWrites: value.revision === 1 ? [] : value.pendingSaveWrites,
-    memory: value.memory,
-  };
-}
-function isLegacyWorkerSnapshot(value) {
-  if (
-    !isMachineSnapshot(value.machine) ||
-    value.machine.revision !== (value.revision === 5 ? 2 : 1) ||
-    !isSaveValues(value.save)
-  )
-    return false;
-  if (value.revision === 1) return Object.keys(value).length === 3;
-  if (value.revision !== 2 && value.revision !== 3 && value.revision !== 4 && value.revision !== 5)
-    return false;
-  return (
-    Object.keys(value).length === (value.revision === 2 ? 6 : 7) &&
-    isGraphicsSnapshot(value.graphics) &&
-    isSynthSnapshot(value.audio) &&
-    isPendingSaveWrites(value.pendingSaveWrites, value.save) &&
-    (value.revision === 2 ||
-      (isMemorySnapshot(value.memory) && graphicsMatchesMemory(value.graphics, value.memory)))
-  );
 }
 function graphicsMatchesMemory(graphics, memory) {
   return [

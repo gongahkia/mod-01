@@ -20,12 +20,9 @@ import type { MemoryRegionDescriptor } from './bus';
 import { MapQueryStore } from './map-query';
 import {
   SaveMemory,
-  isSaveValues,
-  isPendingSaveWrites,
   isSaveSnapshot,
   isPendingDeviceWrites,
   type SaveSnapshot,
-  type SaveValues,
   type SaveWrite,
 } from './save';
 import { isInputFrame, type InputFrame } from './input';
@@ -86,7 +83,6 @@ export function isConsoleRuntimeSnapshot(value: unknown): value is ConsoleRuntim
     value.revision === 6 &&
     Object.keys(value).length === 7 &&
     isMachineSnapshot(value.machine) &&
-    value.machine.revision === 2 &&
     isSaveSnapshot(value.save) &&
     isGraphicsSnapshot(value.graphics) &&
     isSynthSnapshot(value.audio) &&
@@ -341,35 +337,17 @@ export function createConsoleRuntime(
     },
     snapshot: captureSnapshot,
     restore(value) {
-      const snapshot = readWorkerSnapshot(value);
+      if (!isConsoleRuntimeSnapshot(value))
+        throw new RuntimeFault('M019103', 'invalid console snapshot', { start: 0, end: 0 });
+      const snapshot = value;
       const before = debugFrameActive ? boundarySnapshot : captureSnapshot();
       try {
         requireMachine().restore(snapshot.machine);
         debugFrameActive = false;
-        if (snapshot.revision === 6)
-          saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
-        else saveMemory.restore(snapshot.save, snapshot.pendingSaveWrites);
-        if (snapshot.revision >= 2) {
-          graphics.restore(snapshot.graphics);
-          synthesizer.restore(snapshot.audio);
-        }
-        if (snapshot.revision >= 4) bus.restore(snapshot.memory);
-        else if (snapshot.revision >= 2) {
-          const visual = new VisualAssetStore(assets.visual, assets.display).memoryRegions()[0];
-          if (visual === undefined) throw new TypeError('missing visual image');
-          if (snapshot.revision === 3 && isMemorySnapshot(snapshot.memory)) {
-            bus.restore({
-              revision: 1,
-              regions: [
-                ...snapshot.memory.regions,
-                { address: MEMORY.visual, bytes: visual.bytes },
-              ].sort((a, b) => a.address - b.address),
-            });
-          } else {
-            ram.fill(0);
-            visualStore.memoryRegions()[0]?.bytes.set(visual.bytes);
-          }
-        }
+        saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
+        graphics.restore(snapshot.graphics);
+        synthesizer.restore(snapshot.audio);
+        bus.restore(snapshot.memory);
         boundarySnapshot = captureSnapshot();
       } catch (error) {
         requireMachine().restore(before.machine);
@@ -709,53 +687,6 @@ function readInteger(value: unknown, sourceSpan: SourceSpan): number {
     throw new RuntimeFault('M019009', 'console arguments must be safe integers', sourceSpan);
   }
   return value;
-}
-
-function readWorkerSnapshot(value: unknown): {
-  revision: 1 | 2 | 3 | 4 | 5 | 6;
-  machine: unknown;
-  save: SaveValues | SaveSnapshot;
-  graphics: unknown;
-  audio: unknown;
-  pendingSaveWrites: readonly SaveWrite[];
-  memory: unknown;
-} {
-  if (
-    !isRecord(value) ||
-    (value.revision === 6 ? !isConsoleRuntimeSnapshot(value) : !isLegacyWorkerSnapshot(value))
-  ) {
-    throw new RuntimeFault('M019103', 'invalid worker snapshot', { start: 0, end: 0 });
-  }
-  return {
-    revision: value.revision as 1 | 2 | 3 | 4 | 5 | 6,
-    machine: value.machine,
-    save: value.save as SaveValues | SaveSnapshot,
-    graphics: value.graphics,
-    audio: value.audio,
-    pendingSaveWrites:
-      value.revision === 1 ? [] : (value.pendingSaveWrites as readonly SaveWrite[]),
-    memory: value.memory,
-  };
-}
-
-function isLegacyWorkerSnapshot(value: Record<string, unknown>): boolean {
-  if (
-    !isMachineSnapshot(value.machine) ||
-    value.machine.revision !== (value.revision === 5 ? 2 : 1) ||
-    !isSaveValues(value.save)
-  )
-    return false;
-  if (value.revision === 1) return Object.keys(value).length === 3;
-  if (value.revision !== 2 && value.revision !== 3 && value.revision !== 4 && value.revision !== 5)
-    return false;
-  return (
-    Object.keys(value).length === (value.revision === 2 ? 6 : 7) &&
-    isGraphicsSnapshot(value.graphics) &&
-    isSynthSnapshot(value.audio) &&
-    isPendingSaveWrites(value.pendingSaveWrites, value.save) &&
-    (value.revision === 2 ||
-      (isMemorySnapshot(value.memory) && graphicsMatchesMemory(value.graphics, value.memory)))
-  );
 }
 
 function graphicsMatchesMemory(graphics: GraphicsSnapshot, memory: MemorySnapshot): boolean {

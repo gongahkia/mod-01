@@ -630,54 +630,6 @@ export class Synthesizer {
   }
 }
 
-/** Small Web Audio queue used only after an explicit host-side resume gesture. */
-export class WebAudioSink {
-  private readonly context: AudioContext;
-  private readonly output: AudioNode;
-  private cursor = 0;
-
-  public constructor(
-    context = new AudioContext({ sampleRate: HARDWARE.audioSampleRate }),
-    volume = 1,
-  ) {
-    if (!Number.isFinite(volume) || volume < 0 || volume > 1)
-      throw new RangeError('audio volume must be between zero and one');
-    this.context = context;
-    const gain = context.createGain();
-    gain.gain.value = volume;
-    gain.connect(context.destination);
-    this.output = gain;
-  }
-
-  public get state(): AudioContextState {
-    return this.context.state;
-  }
-
-  public async resume(): Promise<void> {
-    await this.context.resume();
-    this.cursor = Math.max(this.cursor, this.context.currentTime);
-  }
-
-  public enqueue(frame: AudioFrame): void {
-    if (this.context.state !== 'running') {
-      return;
-    }
-    const buffer = this.context.createBuffer(2, frame.left.length, HARDWARE.audioSampleRate);
-    buffer.getChannelData(0).set(frame.left);
-    buffer.getChannelData(1).set(frame.right);
-    const source = this.context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.output);
-    this.cursor = Math.max(this.cursor, this.context.currentTime);
-    source.start(this.cursor);
-    this.cursor += frame.left.length / HARDWARE.audioSampleRate;
-  }
-
-  public async close(): Promise<void> {
-    await this.context.close();
-  }
-}
-
 function emptyVoice(slot: number): Voice {
   return {
     active: false,

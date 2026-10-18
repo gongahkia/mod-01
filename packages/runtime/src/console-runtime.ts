@@ -29,17 +29,17 @@ import {
   type SaveWrite,
 } from './save';
 import { isInputFrame, type InputFrame } from './input';
-import { isSandboxConfiguration } from './protocol';
+import { isConsoleConfiguration } from './protocol';
 import type {
   ConsoleCommand,
   DebugStackFrame,
   DebugTraceEvent,
-  SandboxConfiguration,
+  ConsoleConfiguration,
   SourceSpan,
-  WorkerResponse,
+  ConsoleFrame,
 } from './protocol';
 
-export type ConsoleFrame = Omit<Extract<WorkerResponse, { type: 'frame' }>, 'id' | 'type'>;
+export type { ConsoleFrame } from './protocol';
 
 export interface ConsoleDebugPause {
   readonly event: DebugTraceEvent;
@@ -96,13 +96,13 @@ export function isConsoleRuntimeSnapshot(value: unknown): value is ConsoleRuntim
   );
 }
 
-/** One production dispatcher for restricted Workers and deterministic headless hosts. */
+/** One production dispatcher for native Studio, standalone players and headless hosts. */
 export function createConsoleRuntime(
   factory: CartridgeFactory,
-  configuration: SandboxConfiguration,
+  configuration: ConsoleConfiguration,
 ): ConsoleRuntime {
-  if (!isSandboxConfiguration(configuration))
-    throw new RuntimeFault('M019100', 'invalid sandbox configuration', { start: 0, end: 0 });
+  if (!isConsoleConfiguration(configuration))
+    throw new RuntimeFault('M019100', 'invalid console configuration', { start: 0, end: 0 });
   const source = configuration.assets;
   const assets =
     source === undefined

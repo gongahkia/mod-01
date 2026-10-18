@@ -3892,7 +3892,7 @@ function isRecord$2(value) {
 }
 //#endregion
 //#region src/protocol.ts
-function isSandboxConfiguration(value) {
+function isConsoleConfiguration(value) {
   return (
     isRecord$1(value) &&
     hasExactKeys(value, [
@@ -3951,10 +3951,10 @@ function isConsoleRuntimeSnapshot(value) {
     graphicsMatchesMemory(value.graphics, value.memory)
   );
 }
-/** One production dispatcher for restricted Workers and deterministic headless hosts. */
+/** One production dispatcher for native Studio, standalone players and headless hosts. */
 function createConsoleRuntime(factory, configuration) {
-  if (!isSandboxConfiguration(configuration))
-    throw new RuntimeFault('M019100', 'invalid sandbox configuration', {
+  if (!isConsoleConfiguration(configuration))
+    throw new RuntimeFault('M019100', 'invalid console configuration', {
       start: 0,
       end: 0,
     });

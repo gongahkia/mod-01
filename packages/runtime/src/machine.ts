@@ -13,7 +13,7 @@ import {
   isInputFrame,
   type InputFrame,
 } from './input';
-import type { SandboxConfiguration, SourceSpan } from './protocol';
+import type { ConsoleConfiguration, SourceSpan } from './protocol';
 import { DeterministicRng } from './rng';
 import {
   isExecutionSnapshot,
@@ -140,7 +140,7 @@ export class DeterministicMachine implements CartridgeApi {
 
   public constructor(
     factory: CartridgeFactory,
-    configuration: SandboxConfiguration,
+    configuration: ConsoleConfiguration,
     hooks: RuntimeHooks = {},
   ) {
     if (![30, 60].includes(configuration.updateRate))

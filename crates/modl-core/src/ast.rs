@@ -314,6 +314,7 @@ pub enum UnaryOperator {
     Negate,
     Positive,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -332,4 +333,25 @@ pub enum BinaryOperator {
     Multiply,
     Divide,
     Remainder,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    ShiftRightUnsigned,
+}
+
+impl BinaryOperator {
+    #[must_use]
+    pub const fn bitwise_call(self) -> Option<&'static str> {
+        match self {
+            Self::BitAnd => Some("bit_and"),
+            Self::BitOr => Some("bit_or"),
+            Self::BitXor => Some("bit_xor"),
+            Self::ShiftLeft => Some("bit_shl"),
+            Self::ShiftRight => Some("bit_shr"),
+            Self::ShiftRightUnsigned => Some("bit_ushr"),
+            _ => None,
+        }
+    }
 }

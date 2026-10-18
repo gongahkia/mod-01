@@ -313,9 +313,15 @@ impl<'source> Lexer<'source> {
     }
 
     fn lex_symbol(&mut self, start: usize, end: usize) -> usize {
+        if self.bytes.get(start..start + 3) == Some(b">>>") {
+            self.push(TokenKind::ShiftRightUnsigned, start, start + 3);
+            return start + 3;
+        }
         let two = self.bytes.get(start..start + 2);
         let (kind, width) = match two {
             Some(b"->") => (Some(TokenKind::Arrow), 2),
+            Some(b"<<") => (Some(TokenKind::ShiftLeft), 2),
+            Some(b">>") => (Some(TokenKind::ShiftRight), 2),
             Some(b"..") => (Some(TokenKind::Range), 2),
             Some(b"==") => (Some(TokenKind::EqualEqual), 2),
             Some(b"!=") => (Some(TokenKind::BangEqual), 2),
@@ -339,6 +345,10 @@ impl<'source> Lexer<'source> {
                     b'*' => Some(TokenKind::Star),
                     b'/' => Some(TokenKind::Slash),
                     b'%' => Some(TokenKind::Percent),
+                    b'&' => Some(TokenKind::Ampersand),
+                    b'|' => Some(TokenKind::Pipe),
+                    b'^' => Some(TokenKind::Caret),
+                    b'~' => Some(TokenKind::Tilde),
                     b'=' => Some(TokenKind::Equal),
                     b'<' => Some(TokenKind::Less),
                     b'>' => Some(TokenKind::Greater),

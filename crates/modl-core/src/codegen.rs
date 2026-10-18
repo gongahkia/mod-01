@@ -1210,6 +1210,12 @@ impl<'input> Generator<'input> {
                     UnaryOperator::Negate => "-",
                     UnaryOperator::Positive => "+",
                     UnaryOperator::Not => "!",
+                    UnaryOperator::BitNot => {
+                        return format!(
+                            "consoleCall(\"bit_not\",[{operand}],{},{})",
+                            expression.span.start, expression.span.end
+                        );
+                    }
                 };
                 format!("({operator}{operand})")
             }
@@ -1222,6 +1228,12 @@ impl<'input> Generator<'input> {
                     && matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual);
                 let left = self.expression(left, context);
                 let right = self.expression(right, context);
+                if let Some(name) = operator.bitwise_call() {
+                    return format!(
+                        "consoleCall(\"{name}\",[{left},{right}],{},{})",
+                        expression.span.start, expression.span.end
+                    );
+                }
                 if enum_comparison {
                     let negate = if *operator == BinaryOperator::NotEqual {
                         "!"
@@ -1965,6 +1977,12 @@ const fn binary_operator(operator: BinaryOperator) -> &'static str {
         BinaryOperator::Multiply => "*",
         BinaryOperator::Divide => "/",
         BinaryOperator::Remainder => "%",
+        BinaryOperator::BitAnd => "&",
+        BinaryOperator::BitOr => "|",
+        BinaryOperator::BitXor => "^",
+        BinaryOperator::ShiftLeft => "<<",
+        BinaryOperator::ShiftRight => ">>",
+        BinaryOperator::ShiftRightUnsigned => ">>>",
     }
 }
 

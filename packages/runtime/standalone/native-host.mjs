@@ -2260,6 +2260,60 @@ function textCall(name, args, span, work) {
   }
 }
 //#endregion
+//#region src/bits.ts
+var CALLS = /* @__PURE__ */ new Set([
+  'bit_and',
+  'bit_or',
+  'bit_xor',
+  'bit_not',
+  'bit_shl',
+  'bit_shr',
+  'bit_ushr',
+]);
+function isBitCall(name) {
+  return CALLS.has(name);
+}
+/** Explicit 32-bit two's-complement words; large safe Ints never silently lose high bits. */
+function bitCall(name, args, span) {
+  const fail = () => {
+    throw new RuntimeFault(
+      'M019032',
+      'bit operations require 32-bit words and shift counts 0-31',
+      span,
+    );
+  };
+  if (!isBitCall(name) || args.length !== (name === 'bit_not' ? 1 : 2)) return fail();
+  const word = (value) =>
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= -2147483648 &&
+    value <= 4294967295
+      ? value
+      : fail();
+  const a = word(args[0]);
+  if (name === 'bit_not') return ~a;
+  const b = word(args[1]);
+  if (name.startsWith('bit_s') || name === 'bit_ushr') {
+    if (b < 0 || b > 31) return fail();
+  }
+  switch (name) {
+    case 'bit_and':
+      return a & b;
+    case 'bit_or':
+      return a | b;
+    case 'bit_xor':
+      return a ^ b;
+    case 'bit_shl':
+      return a << b;
+    case 'bit_shr':
+      return a >> b;
+    case 'bit_ushr':
+      return a >>> b;
+    default:
+      return fail();
+  }
+}
+//#endregion
 //#region src/system.ts
 var EXECUTION_PHASES = ['idle', 'start', 'update', 'draw', 'raster', 'output'];
 function isExecutionSnapshot(value, frame, rate, budget) {
@@ -2658,6 +2712,10 @@ var DeterministicMachine = class {
     }
   }
   call(name, arguments_, sourceSpan) {
+    if (isBitCall(name)) {
+      this.work(1, sourceSpan);
+      return bitCall(name, arguments_, sourceSpan);
+    }
     if (isTextCall(name))
       return textCall(name, arguments_, sourceSpan, (units, span) => {
         this.work(units, span);

@@ -73,3 +73,24 @@ Split output is bounded by its input and the fixed part limit. Sparse list holes
 are included in the extent but reading an uninitialized element still faults.
 
 Executable HUD/conversion assertions: [text.modl](../tests/conformance/text.modl).
+
+## Bit operations
+
+`&`, `|`, `^`, `~`, `<<`, `>>`, `>>>` operate on `Int` words. Equivalent typed
+calls are `bit_and(a,b)`, `bit_or(a,b)`, `bit_xor(a,b)`, `bit_not(a)`,
+`bit_shl(a,count)`, `bit_shr(a,count)`, and `bit_ushr(a,count)`.
+
+Inputs must be in `[-2147483648,4294967295]`: signed or unsigned spelling of one
+32-bit word. Results use signed two's-complement `Int`, except `>>>`/`bit_ushr`
+which return the unsigned value. Left shift wraps at 32 bits, right shift sign
+extends, unsigned right shift zero-fills. Shift counts must be 0–31; counts are
+**not** silently reduced modulo 32. Out-of-range words/counts fault `M019032`.
+Each operation costs one additional work unit plus generated call costs.
+
+Precedence, from tightest to loosest: unary, multiply/divide/remainder,
+add/subtract, shifts, `&`, `^`, `|`, range, comparisons, equality, `and`, `or`.
+Binary operators at one precedence associate left. In particular `1 << 2 + 1`
+means `1 << (2 + 1)`, and `value & 255 == 1` means `(value & 255) == 1`.
+Compile-time constant evaluation uses identical word/shift rules.
+
+Executable operator/call assertions: [bits.modl](../tests/conformance/bits.modl).

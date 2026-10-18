@@ -808,6 +808,7 @@ impl<'tokens> Parser<'tokens> {
             TokenKind::Minus => Some(UnaryOperator::Negate),
             TokenKind::Plus => Some(UnaryOperator::Positive),
             TokenKind::Not => Some(UnaryOperator::Not),
+            TokenKind::Tilde => Some(UnaryOperator::BitNot),
             _ => None,
         };
         if let Some(operator) = operator {
@@ -1109,11 +1110,17 @@ fn binary_operator(kind: &TokenKind) -> Option<(BinaryOperator, u8)> {
         TokenKind::Greater => (BinaryOperator::Greater, 4),
         TokenKind::GreaterEqual => (BinaryOperator::GreaterEqual, 4),
         TokenKind::Range => (BinaryOperator::Range, 5),
-        TokenKind::Plus => (BinaryOperator::Add, 6),
-        TokenKind::Minus => (BinaryOperator::Subtract, 6),
-        TokenKind::Star => (BinaryOperator::Multiply, 7),
-        TokenKind::Slash => (BinaryOperator::Divide, 7),
-        TokenKind::Percent => (BinaryOperator::Remainder, 7),
+        TokenKind::Pipe => (BinaryOperator::BitOr, 6),
+        TokenKind::Caret => (BinaryOperator::BitXor, 7),
+        TokenKind::Ampersand => (BinaryOperator::BitAnd, 8),
+        TokenKind::ShiftLeft => (BinaryOperator::ShiftLeft, 9),
+        TokenKind::ShiftRight => (BinaryOperator::ShiftRight, 9),
+        TokenKind::ShiftRightUnsigned => (BinaryOperator::ShiftRightUnsigned, 9),
+        TokenKind::Plus => (BinaryOperator::Add, 10),
+        TokenKind::Minus => (BinaryOperator::Subtract, 10),
+        TokenKind::Star => (BinaryOperator::Multiply, 11),
+        TokenKind::Slash => (BinaryOperator::Divide, 11),
+        TokenKind::Percent => (BinaryOperator::Remainder, 11),
         _ => return None,
     })
 }

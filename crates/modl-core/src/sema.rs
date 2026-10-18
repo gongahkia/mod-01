@@ -175,6 +175,12 @@ impl<'syntax> Analyzer<'syntax> {
         self.install_builtin_values();
         self.install_math_builtins();
         self.install_text_builtins();
+        self.builtin("bit_not", vec![Type::Int], Type::Int);
+        for name in [
+            "bit_and", "bit_or", "bit_xor", "bit_shl", "bit_shr", "bit_ushr",
+        ] {
+            self.builtin(name, vec![Type::Int, Type::Int], Type::Int);
+        }
     }
 
     fn install_text_builtins(&mut self) {
@@ -1264,6 +1270,7 @@ impl<'syntax> Analyzer<'syntax> {
                 );
                 let r#type = match operator {
                     UnaryOperator::Not if operand.r#type == Type::Bool => Type::Bool,
+                    UnaryOperator::BitNot if operand.r#type == Type::Int => Type::Int,
                     UnaryOperator::Negate | UnaryOperator::Positive
                         if operand.r#type.is_numeric() =>
                     {
@@ -1533,6 +1540,12 @@ impl<'syntax> Analyzer<'syntax> {
             BinaryOperator::Range if left.r#type == Type::Int && right.r#type == Type::Int => {
                 Type::Range
             }
+            op if op.bitwise_call().is_some()
+                && left.r#type == Type::Int
+                && right.r#type == Type::Int =>
+            {
+                Type::Int
+            }
             BinaryOperator::Add
             | BinaryOperator::Subtract
             | BinaryOperator::Multiply
@@ -1649,7 +1662,7 @@ impl<'syntax> Analyzer<'syntax> {
             })
             .collect::<Vec<_>>();
         let return_type = if special_builtin {
-            self.check_option_builtin(&callee_name, &arguments, span)
+            self.check_special_builtin(&callee_name, &arguments, span)
         } else {
             (*signature.return_type).clone()
         };
@@ -1682,7 +1695,7 @@ impl<'syntax> Analyzer<'syntax> {
         }
     }
 
-    fn check_option_builtin(
+    fn check_special_builtin(
         &mut self,
         name: &str,
         arguments: &[IrExpression],
@@ -1961,6 +1974,13 @@ impl<'syntax> Analyzer<'syntax> {
                     (UnaryOperator::Negate, ConstantValue::Int(value)) => {
                         value.checked_neg().map(ConstantValue::Int)
                     }
+                    (UnaryOperator::BitNot, ConstantValue::Int(value)) => {
+                        constant_bits(value).map(|value| {
+                            ConstantValue::Int(i64::from(i32::from_le_bytes(
+                                (!value).to_le_bytes(),
+                            )))
+                        })
+                    }
                     (UnaryOperator::Negate, ConstantValue::Num(value)) => {
                         Some(ConstantValue::Num(-value))
                     }
@@ -1990,6 +2010,29 @@ impl<'syntax> Analyzer<'syntax> {
         right: ConstantValue,
     ) -> Option<ConstantValue> {
         match (left, operator, right) {
+            (ConstantValue::Int(left), op, ConstantValue::Int(right))
+                if op.bitwise_call().is_some() =>
+            {
+                let left = constant_bits(left)?;
+                let right_bits = constant_bits(right)?;
+                let shift = u32::try_from(right).ok().filter(|value| *value < 32);
+                let value = match op {
+                    BinaryOperator::BitAnd => left & right_bits,
+                    BinaryOperator::BitOr => left | right_bits,
+                    BinaryOperator::BitXor => left ^ right_bits,
+                    BinaryOperator::ShiftLeft => left.wrapping_shl(shift?),
+                    BinaryOperator::ShiftRight => u32::from_le_bytes(
+                        (i32::from_le_bytes(left.to_le_bytes()) >> shift?).to_le_bytes(),
+                    ),
+                    BinaryOperator::ShiftRightUnsigned => {
+                        return Some(ConstantValue::Int(i64::from(left >> shift?)));
+                    }
+                    _ => return None,
+                };
+                Some(ConstantValue::Int(i64::from(i32::from_le_bytes(
+                    value.to_le_bytes(),
+                ))))
+            }
             (ConstantValue::Bool(left), BinaryOperator::And, ConstantValue::Bool(right)) => {
                 Some(ConstantValue::Bool(left && right))
             }
@@ -2336,6 +2379,14 @@ impl<'syntax> Analyzer<'syntax> {
     }
 }
 
+fn constant_bits(value: i64) -> Option<u32> {
+    u32::try_from(value).ok().or_else(|| {
+        i32::try_from(value)
+            .ok()
+            .map(|value| u32::from_le_bytes(value.to_le_bytes()))
+    })
+}
+
 fn error_expression(span: Span) -> IrExpression {
     IrExpression {
         kind: IrExpressionKind::Error,
@@ -2548,6 +2599,29 @@ on draw:
                 .any(|symbol| symbol.name == "mem_read"
                     && symbol.kind == crate::ir::SymbolKind::Function)
         );
+    }
+
+    #[test]
+    fn bit_operators_share_word_rules_in_constants_and_runtime_ir() {
+        let valid = analyze(
+            "assert 1 << 2 + 1 == 8\nassert ~0 == -1\nassert -1 >>> 0 == 4294967295\nassert 1 | 2 ^ 3 & 6 == 1\non start:\n  let word = 1 << 31\n  assert word >> 31 == -1\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "on start:\n  let bad = 1 & true\n  let worse = ~1.5\n  let count = 1 << 2.0\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013102")
+                .count(),
+            3
+        );
+        let overflow = analyze("assert 1 << 32 == 1\n", &AssetCatalog::default());
+        assert!(!overflow.diagnostics.is_empty());
     }
 
     #[test]

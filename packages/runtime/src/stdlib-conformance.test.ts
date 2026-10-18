@@ -20,7 +20,7 @@ describe('compiled standard library across production hosts', () => {
     if (temporary) rmSync(temporary, { recursive: true, force: true });
   });
 
-  for (const fixture of ['math', 'text']) {
+  for (const fixture of ['math', 'text', 'bits']) {
     for (const debug of [false, true]) {
       it(`executes ${fixture} assertions in ${debug ? 'debug' : 'release'}, native and headless`, async () => {
         const output = join(temporary, `${fixture}-${String(debug)}.mjs`);

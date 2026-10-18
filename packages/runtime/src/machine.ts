@@ -15,6 +15,7 @@ import {
 } from './input';
 import type { ConsoleConfiguration, SourceSpan } from './protocol';
 import { DeterministicRng } from './rng';
+import { isMathCall, mathCall } from './math';
 import {
   isExecutionSnapshot,
   isFaultSpan,
@@ -445,6 +446,10 @@ export class DeterministicMachine implements CartridgeApi {
   }
 
   public call(name: string, arguments_: readonly unknown[], sourceSpan: SourceSpan): unknown {
+    if (isMathCall(name))
+      return mathCall(name, arguments_, sourceSpan, (units, span) => {
+        this.work(units, span);
+      });
     switch (name) {
       case 'rng_num':
         expectArguments(name, arguments_, 0, sourceSpan);

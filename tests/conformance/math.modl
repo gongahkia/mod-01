@@ -1,0 +1,22 @@
+fn int_magnitude() -> Int:
+  return abs(-8)
+
+on start:
+  let integer = int_magnitude()
+  let mixed = max(1, 2.5)
+  assert integer == 8
+  assert mixed == 2.5
+  assert min(4, -1) == -1
+  assert clamp(99, 0, 10) == 10
+  assert floor(-1.2) == -2
+  assert ceil(-1.2) == -1
+  assert round(-1.5) == -1
+  assert trunc(-1.8) == -1
+  assert abs(sqrt(2) * sqrt(2) - 2) < 0.000000000001
+  assert abs(sin(1.5707963267948966) - 1) < 0.000000000001
+  assert abs(cos(3.141592653589793) + 1) < 0.000000000001
+  assert abs(atan2(1, -1) - 2.356194490192345) < 0.000000000001
+
+on draw:
+  clear(0)
+  pixel(12, 34, 11)

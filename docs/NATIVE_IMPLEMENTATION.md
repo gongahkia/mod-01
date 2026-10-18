@@ -54,3 +54,10 @@ choices remain outstanding.
 - Scope revalidated against the actual downloaded JSON; baseline is `d9918f7`.
 - Working branch: `feat/native-consolidation`.
 - Implementation and final verification remain open.
+- Browser Studio/Wasm/PWA removal: `5e17574`; browser adapters, sharing/storage
+  and worker protocol removal: `09090dd`. Web export removal is still pending the
+  standalone native game packager.
+- Numeric helpers: `docs/STANDARD_LIBRARY.md`, `math.test.ts`, the compiler's
+  numeric type tests, and `stdlib-conformance.test.ts` demonstrate release/debug,
+  native/headless execution, independent accuracy vectors, bounded costs and
+  snapshot replay. The final workspace gate remains mandatory.

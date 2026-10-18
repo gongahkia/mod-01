@@ -173,6 +173,20 @@ impl<'syntax> Analyzer<'syntax> {
         self.install_display_builtins();
         self.install_runtime_builtins();
         self.install_builtin_values();
+        self.install_math_builtins();
+    }
+
+    fn install_math_builtins(&mut self) {
+        for (name, count) in [("abs", 1), ("min", 2), ("max", 2), ("clamp", 3)] {
+            self.builtin(name, vec![Type::Unknown; count], Type::Unknown);
+        }
+        for name in ["floor", "ceil", "round", "trunc"] {
+            self.builtin(name, vec![Type::Num], Type::Int);
+        }
+        for name in ["sqrt", "sin", "cos"] {
+            self.builtin(name, vec![Type::Num], Type::Num);
+        }
+        self.builtin("atan2", vec![Type::Num, Type::Num], Type::Num);
     }
 
     fn install_shape_builtins(&mut self) {
@@ -1564,7 +1578,10 @@ impl<'syntax> Analyzer<'syntax> {
         };
         let callee_name = self.symbol(callee_symbol).name.clone();
         let special_builtin = self.symbol(callee_symbol).kind == SymbolKind::Builtin
-            && matches!(callee_name.as_str(), "some" | "is_some" | "unwrap_or");
+            && matches!(
+                callee_name.as_str(),
+                "some" | "is_some" | "unwrap_or" | "abs" | "min" | "max" | "clamp"
+            );
         let arguments = arguments
             .iter()
             .enumerate()
@@ -1618,6 +1635,23 @@ impl<'syntax> Analyzer<'syntax> {
         call_span: Span,
     ) -> Type {
         match name {
+            "abs" | "min" | "max" | "clamp" => {
+                let mut result = Type::Int;
+                for argument in arguments {
+                    if !argument.r#type.is_numeric() && !argument.r#type.is_error() {
+                        self.type_mismatch(
+                            argument.span,
+                            &argument.r#type,
+                            &Type::Num,
+                            "numeric helper argument",
+                        );
+                        result = Type::Error;
+                    } else if argument.r#type == Type::Num && result != Type::Error {
+                        result = Type::Num;
+                    }
+                }
+                result
+            }
             "some" => Type::Option(Box::new(
                 arguments
                     .first()
@@ -2445,6 +2479,28 @@ on draw:
                 .any(|symbol| symbol.name == "mem_read"
                     && symbol.kind == crate::ir::SymbolKind::Function)
         );
+    }
+
+    #[test]
+    fn numeric_helpers_preserve_integer_types_and_reject_non_numeric_arguments() {
+        let valid = analyze(
+            "fn small() -> Int:\n  return min(abs(-7), clamp(12, 1, 10))\nfn rounded() -> Int:\n  return round(sqrt(max(small(), 1.5)))\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "fn not_int() -> Int:\n  return min(1.5, 2)\non start:\n  let bad = abs(true)\n  let worse = clamp(1, \"two\", 3)\n  let missing = atan2(1)\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013101")
+                .count(),
+            3
+        );
+        assert!(invalid.diagnostics.iter().any(|d| d.code == "M013103"));
     }
 
     #[test]

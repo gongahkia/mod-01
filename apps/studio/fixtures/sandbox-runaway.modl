@@ -1,3 +1,0 @@
-on update:
-  while true:
-    let work = 1

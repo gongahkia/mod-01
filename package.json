@@ -12,19 +12,17 @@
   "scripts": {
     "build": "pnpm --recursive --if-present run build",
     "check": "./scripts/check.sh",
-    "dev": "pnpm --filter @mod01/studio dev",
+    "dev": "pnpm native",
     "native": "pnpm --dir packages/runtime build && cargo run -p mod01-native",
     "native:package": "pnpm --dir packages/runtime build && cargo build --release -p mod01-native && node scripts/package-native.mjs",
     "format": "prettier --write . && cargo fmt --all",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "pnpm build && playwright test",
-    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --recursive --if-present run typecheck"
+    "typecheck": "pnpm --recursive --if-present run typecheck"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.63.0",
     "@types/node": "26.4.1",
     "eslint": "10.10.0",
     "prettier": "3.9.6",

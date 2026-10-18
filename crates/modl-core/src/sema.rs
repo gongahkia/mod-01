@@ -174,6 +174,60 @@ impl<'syntax> Analyzer<'syntax> {
         self.install_runtime_builtins();
         self.install_builtin_values();
         self.install_math_builtins();
+        self.install_text_builtins();
+    }
+
+    fn install_text_builtins(&mut self) {
+        self.builtin(
+            "format_int",
+            vec![Type::Int, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "format_num",
+            vec![Type::Num, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "parse_int",
+            vec![Type::Text, Type::Int],
+            Type::Option(Box::new(Type::Int)),
+        );
+        self.builtin(
+            "parse_num",
+            vec![Type::Text],
+            Type::Option(Box::new(Type::Num)),
+        );
+        self.builtin("text_length", vec![Type::Text], Type::Int);
+        self.builtin(
+            "text_slice",
+            vec![Type::Text, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "text_code",
+            vec![Type::Text, Type::Int],
+            Type::Option(Box::new(Type::Int)),
+        );
+        self.builtin(
+            "text_char",
+            vec![Type::Int],
+            Type::Option(Box::new(Type::Text)),
+        );
+        self.builtin(
+            "text_pad",
+            vec![Type::Text, Type::Int, Type::Text],
+            Type::Text,
+        );
+        self.builtin(
+            "text_split",
+            vec![Type::Text, Type::Text],
+            Type::List {
+                element: Box::new(Type::Text),
+                capacity: 256,
+            },
+        );
+        self.builtin("list_length", vec![Type::Unknown], Type::Int);
     }
 
     fn install_math_builtins(&mut self) {
@@ -1580,7 +1634,7 @@ impl<'syntax> Analyzer<'syntax> {
         let special_builtin = self.symbol(callee_symbol).kind == SymbolKind::Builtin
             && matches!(
                 callee_name.as_str(),
-                "some" | "is_some" | "unwrap_or" | "abs" | "min" | "max" | "clamp"
+                "some" | "is_some" | "unwrap_or" | "abs" | "min" | "max" | "clamp" | "list_length"
             );
         let arguments = arguments
             .iter()
@@ -1635,6 +1689,21 @@ impl<'syntax> Analyzer<'syntax> {
         call_span: Span,
     ) -> Type {
         match name {
+            "list_length" => {
+                if let Some(argument) = arguments.first()
+                    && !matches!(
+                        argument.r#type,
+                        Type::List { .. } | Type::Array { .. } | Type::Error
+                    )
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        "M013101",
+                        argument.span,
+                        "list_length requires a fixed-capacity list or array",
+                    ));
+                }
+                Type::Int
+            }
             "abs" | "min" | "max" | "clamp" => {
                 let mut result = Type::Int;
                 for argument in arguments {
@@ -2478,6 +2547,27 @@ on draw:
                 .iter()
                 .any(|symbol| symbol.name == "mem_read"
                     && symbol.kind == crate::ir::SymbolKind::Function)
+        );
+    }
+
+    #[test]
+    fn text_helpers_return_typed_options_and_bounded_collections() {
+        let valid = analyze(
+            "state number: Option[Int] = parse_int(\"ff\", 16)\nstate real: Option[Num] = parse_num(\"1.25\")\nstate parts: List[Text, 256] = text_split(\"a,b\", \",\")\non start:\n  let label = format_int(unwrap_or(number, 0), 10, 4)\n  assert list_length(parts) == 2\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "on start:\n  let bad = text_slice(1, 0, 1)\n  let not_a_list = list_length(\"hi\")\n  let wrong_fallback = unwrap_or(parse_int(\"7\", 10), false)\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013101")
+                .count(),
+            3
         );
     }
 

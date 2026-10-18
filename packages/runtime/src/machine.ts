@@ -16,6 +16,7 @@ import {
 import type { ConsoleConfiguration, SourceSpan } from './protocol';
 import { DeterministicRng } from './rng';
 import { isMathCall, mathCall } from './math';
+import { isTextCall, textCall } from './text';
 import {
   isExecutionSnapshot,
   isFaultSpan,
@@ -446,6 +447,10 @@ export class DeterministicMachine implements CartridgeApi {
   }
 
   public call(name: string, arguments_: readonly unknown[], sourceSpan: SourceSpan): unknown {
+    if (isTextCall(name))
+      return textCall(name, arguments_, sourceSpan, (units, span) => {
+        this.work(units, span);
+      });
     if (isMathCall(name))
       return mathCall(name, arguments_, sourceSpan, (units, span) => {
         this.work(units, span);

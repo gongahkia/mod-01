@@ -272,7 +272,7 @@ impl<'input> Generator<'input> {
             None,
         );
         self.writer.line(
-            "const textIndex=(value,key,start,end)=>value.charCodeAt(boundedIndex(key,value.length,start,end));",
+            "const textIndex=(value,key,start,end)=>api.call(\"text_at\",[value,key],{start,end});",
             None,
         );
         self.writer.line(

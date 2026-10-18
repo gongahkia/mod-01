@@ -1,0 +1,26 @@
+on start:
+  assert format_int(-15, 16, 5) == "-000f"
+  assert format_num(12.5, 2, 8) == "   12.50"
+  assert unwrap_or(parse_int("7f", 16), -1) == 127
+  assert not is_some(parse_int("12x", 10))
+  assert unwrap_or(parse_num("-1.25e2"), 0.0) == -125
+  assert not is_some(parse_num("NaN"))
+  assert text_length("hello") == 5
+  assert "A"[0] == 65
+  assert text_slice("hello", 1, 4) == "ell"
+  assert text_pad("7", 3, "0") == "007"
+  let smile = unwrap_or(text_char(128578), "")
+  assert text_length(smile) == 1
+  assert smile[0] == 128578
+  assert unwrap_or(text_code(smile, 0), 0) == 128578
+  assert not is_some(text_char(55296))
+  assert not is_some(text_code("hi", 2))
+  let parts = text_split("one,two,", ",")
+  assert list_length(parts) == 3
+  assert parts[1] == "two"
+  assert parts[2] == ""
+
+on draw:
+  clear(0)
+  print("SCORE " + format_int(42, 10, 4), 8, 8, 7)
+  pixel(12, 34, 11)

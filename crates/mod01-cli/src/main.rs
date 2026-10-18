@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use modl_core::{
     AssetCatalog, AssetKind, CartridgePngMetadata, CompileMode, DecodedCartridge, Diagnostic,
     FileId, GeneratedProgram, ProjectManifest, SourceFile, WorkcartTest, WorkcartTestKind,
@@ -180,6 +180,8 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum ExportCommand {
+    /// Bundle a game with the native player, Node runtime and all source-visible assets.
+    Native(NativeExportArguments),
     /// Export one offline, source-inspectable standalone HTML player.
     Html {
         #[arg(default_value = ".")]
@@ -201,6 +203,67 @@ enum ExportCommand {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Args)]
+struct NativeExportArguments {
+    path: PathBuf,
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+    /// Native player binary for the selected platform (defaults to sibling mod01-studio).
+    #[arg(long)]
+    player: Option<PathBuf>,
+    #[arg(long)]
+    node: Option<PathBuf>,
+    #[arg(long)]
+    host: Option<PathBuf>,
+    #[arg(long)]
+    node_license: Option<PathBuf>,
+    /// Cross-platform exports require matching player and Node binaries; no cross-compilation is performed.
+    #[arg(long, value_enum)]
+    platform: Option<NativeTarget>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum NativeTarget {
+    Linux,
+    Windows,
+    Macos,
+}
+
+fn export_native_directory(arguments: &NativeExportArguments) -> ExitCode {
+    let result = (|| -> Result<PathBuf, String> {
+        let (rom, cart, _) = load_headless_cartridge(&arguments.path)
+            .map_err(|()| "cannot load native cartridge".to_owned())?;
+        let mut tools = modl_core::NativeToolchain::discover(
+            arguments.player.as_deref(),
+            arguments.node.as_deref(),
+            arguments.host.as_deref(),
+            arguments.node_license.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+        if let Some(platform) = arguments.platform {
+            tools.platform = match platform {
+                NativeTarget::Linux => modl_core::NativePlatform::Linux,
+                NativeTarget::Windows => modl_core::NativePlatform::Windows,
+                NativeTarget::Macos => modl_core::NativePlatform::Macos,
+            };
+        }
+        let output = arguments.output.clone().unwrap_or_else(|| {
+            project_output_directory(&arguments.path).join(format!("{}-native", cart.manifest.id))
+        });
+        modl_core::export_native_game(&output, &rom, &tools).map_err(|error| error.to_string())
+    })();
+    match result {
+        Ok(executable) => {
+            println!("exported native game {}", executable.display());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -240,6 +303,9 @@ fn main() -> ExitCode {
         Command::Fmt { check, paths } => format_files(&paths, check),
         Command::Pack { path, output } => pack_directory(&path, output.as_deref()),
         Command::Test { path } => test_directory(&path),
+        Command::Export {
+            command: ExportCommand::Native(arguments),
+        } => export_native_directory(&arguments),
         Command::Export {
             command: ExportCommand::Html { path, output },
         } => export_html_directory(&path, output.as_deref())

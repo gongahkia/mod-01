@@ -23,6 +23,32 @@ game. The native packager supplies the executable, canonical cartridge, runtime
 bundle and target-platform Node executable together. The executable finds runtime
 files relative to itself, independent of the current working directory.
 
+## Export a game
+
+```sh
+cargo build -p mod01-cli -p mod01-native
+target/debug/mod01 export native cartridges/pocket-relay --output dist/pocket-relay-game
+```
+
+Use a **new** output directory. Linux/Windows produce a game executable directory;
+macOS produces an application bundle inside the output directory. All include
+`game.m01c`, Node, the shared runtime and font/cursor/Node notices. No Node install
+is needed on the recipient's machine. Native system libraries and OS trust/signing
+rules still apply; build on the oldest supported OS baseline. Linux CI builds on
+Ubuntu 24.04. These are unsigned publisher artifacts, not notarized installers.
+
+`--player`, `--node`, `--host`, and `--node-license` select explicit toolchain files.
+`--platform linux|windows|macos` supports packaging existing target binaries, **not**
+cross-compilation. Player and Node platform/architecture headers must match. Only
+64-bit desktop binaries are supported. A Node distribution's full LICENSE must be
+available beside its executable or supplied explicitly. macOS universal binaries
+must first be built/provided as a target-specific 64-bit executable.
+
+`node scripts/verify-native-game.mjs` tests a native export from an unrelated
+working directory with an empty PATH: bundled Node must run, 120 display frames
+must match the original player, and packed bytes must equal the normal CLI pack.
+The macOS/Windows/Linux packaging matrix runs the same verification on each OS.
+
 For display-free QA through the **native production bridge**:
 
 ```sh

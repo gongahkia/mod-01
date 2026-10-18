@@ -82,6 +82,9 @@ jobs:
       - name: Test native runtime process
         run: pnpm --dir packages/runtime exec vitest run src/native-host.test.ts
 
+      - name: Package and launch a native game with its bundled Node
+        run: node scripts/verify-native-game.mjs target/release/mod01-studio${{ runner.os == 'Windows' && '.exe' || '' }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: mod01-native-${{ matrix.os }}

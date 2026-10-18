@@ -10,6 +10,7 @@ pub mod formatter;
 pub mod generator;
 pub mod ir;
 pub mod lexer;
+pub mod native_export;
 pub mod parser;
 pub mod sema;
 pub mod span;
@@ -33,6 +34,7 @@ pub use exporter::{
 pub use formatter::{FormatError, format_source};
 pub use generator::materialize_workcart_recipe;
 pub use lexer::lex;
+pub use native_export::{NativePlatform, NativeToolchain, export_native_game};
 pub use parser::{ParseOutput, parse};
 pub use sema::{AnalysisOutput, analyze_module};
 pub use span::{FileId, LineColumn, SourceFile, Span, Spanned};

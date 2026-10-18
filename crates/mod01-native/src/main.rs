@@ -21,6 +21,8 @@
 
 mod asset_tools;
 mod audio;
+mod launch;
+mod player;
 mod project;
 mod replay;
 mod runtime;
@@ -151,6 +153,8 @@ struct StudioApp {
     last_sprite_point: Option<(i32, i32)>,
     selection_anchor: Option<(usize, usize)>,
     running: bool,
+    player_mode: bool,
+    player_paused: bool,
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
@@ -229,6 +233,8 @@ impl StudioApp {
             last_sprite_point: None,
             selection_anchor: None,
             running: false,
+            player_mode: false,
+            player_paused: false,
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
@@ -1130,61 +1136,20 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let (Ok(rom), Ok(javascript)) = (project.pack(), project.javascript(debug)) else {
-            self.status = project.check().unwrap_or_else(|error| error);
-            return;
+        let save = match read_save(&project.manifest.id) {
+            Ok(save) => save,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
         };
-        let symbol_names = if debug {
-            modl_core::compile_project(
-                &project.manifest_source,
-                &project.files,
-                modl_core::CompileMode::Debug,
-            )
-            .map(|compiled| {
-                compiled
-                    .analysis
-                    .symbols
-                    .into_iter()
-                    .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default()
-        } else {
-            BTreeMap::new()
+        let command = match project.load_command(debug, &save) {
+            Ok(command) => command,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
         };
-        let files: serde_json::Map<String, Value> = project
-            .manifest
-            .assets
-            .values()
-            .filter_map(|asset| {
-                project
-                    .files
-                    .get(&asset.path)
-                    .map(|bytes| (asset.path.clone(), Value::String(STANDARD.encode(bytes))))
-            })
-            .chain(project.manifest.display.iter().filter_map(|path| {
-                project
-                    .files
-                    .get(path)
-                    .map(|bytes| (path.clone(), Value::String(STANDARD.encode(bytes))))
-            }))
-            .collect();
-        let save = read_save(&project.manifest.id).unwrap_or_default();
-        let command = json!({
-            "type":"load", "javascript":javascript,
-            "manifest": {
-                "id": project.manifest.id,
-                "hardwareRevision": project.manifest.hardware_revision,
-                "updateRate": project.manifest.update_rate,
-                "display": project.manifest.display,
-                "assets": project.manifest.assets,
-            },
-            "files": files,
-            "rom": STANDARD.encode(rom),
-            "save": STANDARD.encode(save),
-            "debug": debug,
-            "symbolNames": symbol_names,
-        });
         if let Some(audio) = &self.audio {
             audio.clear();
         }
@@ -1193,6 +1158,7 @@ impl StudioApp {
         match self.runtime.send(command) {
             Ok(()) => {
                 self.running = true;
+                self.player_paused = false;
                 self.debugging = debug;
                 self.snapshot = None;
                 self.debug_event.clear();
@@ -1219,6 +1185,7 @@ impl StudioApp {
 
     fn stop(&mut self) {
         self.running = false;
+        self.player_paused = false;
         self.debug_running = false;
         self.loaded = false;
         self.pending = false;
@@ -1404,6 +1371,7 @@ impl StudioApp {
             || !self.loaded
             || self.pending
             || self.debugging
+            || self.player_paused
             || self.view != View::Player
         {
             return;
@@ -2694,6 +2662,10 @@ impl eframe::App for StudioApp {
         let context = root.ctx().clone();
         self.process_events(&context);
         self.process_preview(&context);
+        if self.player_mode {
+            self.player_ui(root);
+            return;
+        }
         egui::Panel::top("toolbar")
             .frame(ui_theme::case_frame())
             .show(root, |ui| self.toolbar(ui));
@@ -3035,6 +3007,9 @@ impl eframe::App for StudioApp {
                     }
                 }
                 View::Player => {
+                    if ui.button("OPEN GAME VIEW").clicked() {
+                        self.player_mode = true;
+                    }
                     ui_theme::legend(ui, "DISPLAY / 240 x 144");
                     ui.heading("CARTRIDGE PLAYER");
                     ui.label(
@@ -3449,12 +3424,51 @@ fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn main() -> eframe::Result {
-    let start = std::env::args_os().nth(1).map(PathBuf::from);
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|directory| directory.join("game.m01c")))
+        .filter(|path| path.is_file());
+    let launch = match launch::parse(&args, bundled) {
+        Ok(launch) => launch,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let (start, player_mode) = match launch {
+        launch::Launch::Verify { path, frames } => {
+            match player::verify(&path, frames) {
+                Ok(result) => println!("{result}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        launch::Launch::Help => {
+            println!(
+                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N]]"
+            );
+            return Ok(());
+        }
+        launch::Launch::Studio(path) => (path, false),
+        launch::Launch::Player(path) => (Some(path), true),
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MOD-01 / Color Development Unit")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([900.0, 600.0]),
+            .with_inner_size(if player_mode {
+                [960.0, 650.0]
+            } else {
+                [1280.0, 800.0]
+            })
+            .with_min_inner_size(if player_mode {
+                [480.0, 320.0]
+            } else {
+                [900.0, 600.0]
+            }),
         ..Default::default()
     };
     eframe::run_native(
@@ -3463,7 +3477,19 @@ fn main() -> eframe::Result {
         Box::new(move |creation| {
             ui_assets::install_font(&creation.egui_ctx);
             ui_theme::install(&creation.egui_ctx);
-            Ok(Box::new(StudioApp::new(start, &creation.egui_ctx)))
+            let mut app = StudioApp::new(start, &creation.egui_ctx);
+            app.player_mode = player_mode;
+            if player_mode {
+                if let Some(project) = &app.project {
+                    creation
+                        .egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Title(
+                            project.manifest.title.clone(),
+                        ));
+                }
+                app.run();
+            }
+            Ok(Box::new(app))
         }),
     )
 }

@@ -5,11 +5,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
     CompileMode, ProjectManifest, compile_project, decode_cartridge, decode_cartridge_png,
     pack_project, parse_project_manifest, rewrite_workcart, unpack_cartridge_project,
     workcart_project_view,
 };
+use serde_json::{Value, json};
 
 const MAX_PROJECT_FILE: u64 = 16 * 1024 * 1024;
 const MAX_PROJECT_TOTAL: usize = 16 * 1024 * 1024;
@@ -270,6 +272,42 @@ impl NativeProject {
                     .collect::<Vec<_>>()
                     .join("\n")
             })
+    }
+
+    /// One compiler/load contract for Studio, packaged games and native smoke verification.
+    pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
+        let rom = self.pack()?;
+        let javascript = self.javascript(debug)?;
+        let symbol_names = if debug {
+            compile_project(&self.manifest_source, &self.files, CompileMode::Debug)
+                .map_err(|error| error.to_string())?
+                .analysis
+                .symbols
+                .into_iter()
+                .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
+                .collect::<BTreeMap<_, _>>()
+        } else {
+            BTreeMap::new()
+        };
+        let files: serde_json::Map<String, Value> = self
+            .manifest
+            .assets
+            .values()
+            .map(|asset| asset.path.as_str())
+            .chain(self.manifest.display.iter().map(String::as_str))
+            .filter_map(|path| {
+                self.files
+                    .get(path)
+                    .map(|bytes| (path.to_owned(), Value::String(STANDARD.encode(bytes))))
+            })
+            .collect();
+        Ok(json!({
+            "type": "load", "javascript": javascript,
+            "manifest": { "id": self.manifest.id, "hardwareRevision": self.manifest.hardware_revision,
+                "updateRate": self.manifest.update_rate, "display": self.manifest.display, "assets": self.manifest.assets },
+            "files": files, "rom": STANDARD.encode(rom), "save": STANDARD.encode(save),
+            "debug": debug, "symbolNames": symbol_names,
+        }))
     }
 }
 

@@ -3,9 +3,10 @@
 Status: source preservation and whole-game packing/admission are implemented in
 the shared Rust core. The production game scheduler implements boundary switching,
 asset reload, per-ID saves, input ownership and whole-game checkpoints, with real
-release/debug MODL tests. CLI/Studio controls, host adapters and cross-host
-verification are still being implemented. These workflows are not yet exposed
-as a complete native/CLI feature.
+release/debug MODL tests. CLI `pack`, `check`, `info --source`, `watch` and
+`run --headless` now retain/admit the whole game. Native Studio/player, remaining
+export/analysis integration and cross-host verification are still being implemented;
+these workflows are not yet exposed as a complete native feature.
 
 ## Authoring and admission
 
@@ -162,9 +163,9 @@ checkpoints. `game-runtime.test.ts` exercises actual compiler output in both mod
 replay input encoding, loads/reloads, tasks, faults, save isolation, 32 members,
 counter bounds and restoration failures.
 
-The native/headless adapters are still pending. Entry-only hosts reject these
-requests explicitly; the scheduler tests are not a claim that native/CLI
-multi-cart gameplay is complete.
+The headless adapter now uses this scheduler for every game. Native Studio/player,
+PNG/native export and bundle-wide analysis integration remain open; their
+entry-only paths reject dependencies instead of discarding them.
 
 `runtime_game::prepare_runtime_game` provides the shared Rust-to-host handoff
 from a privately admitted `PackedGame`. It compiles **every** member in the chosen
@@ -172,9 +173,9 @@ release/debug mode and retains each alias's own symbols, source map, manifest,
 declared asset/display bytes and canonical ≤1 MiB logical ROM. Asset bytes and
 ROM use base64 transport; authored source/artwork/auxiliary files are not module
 imports. The whole-game identity and compiler mode are attached once to this
-internal revision-1 host payload, not a new cartridge format. Both adapters will
-consume this same data structure instead of rebuilding different entry-only
-requests. Compiled JavaScript has an explicit inclusive 2 MiB-per-member transport
+internal revision-1 host payload, not a new cartridge format. The headless adapter
+consumes this data structure; native integration will use the same handoff instead
+of rebuilding an entry-only request. Compiled JavaScript has an inclusive 2 MiB-per-member transport
 bound, matching the existing native host limit; overflow is `M014072` and is
 alias-qualified. This helper does not execute JavaScript or boot any member.
 
@@ -188,7 +189,10 @@ Metadata is retained separately per alias, so identical source paths/symbol IDs 
 different cartridges cannot silently share one debugger map. Tests exercise real
 release/debug compiler output, unused invalid dependencies, deferred boot,
 prototype-named paths, metadata copying and malformed/bounded transport. This
-loader is not yet connected to the native/headless command handlers.
+loader is connected to headless execution; native command-handler integration is
+still open. CLI integration tests pack/run a shipping game larger than one ROM,
+cycle all 32 real MODL members, inspect whole source without Node, verify exact
+per-ID save values, and reject invalid unused members before starting Node.
 
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),

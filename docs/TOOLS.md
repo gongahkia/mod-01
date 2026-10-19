@@ -21,8 +21,13 @@ mod01 lsp
 
 `run` launches the native game surface. Build `mod01-native` beside the CLI or set
 `MOD01_PLAYER` to the player executable. `--headless` runs the deterministic
-console core under Node and emits a JSON trace; `--output`, `--input` and `--save`
-are headless options. Headless runs do not open a window or write local saves.
+console/game core under Node and emits a current revision-2 JSON trace;
+`--output`, `--input`, `--save`, `--saves` and `--parameter` are headless options.
+`--save` loads the entry's ≤8 KiB raw image; mutually exclusive `--saves` accepts
+a ≤512 KiB JSON catalog of declared persistent IDs to canonical base64 images.
+`--parameter` is initial Text, empty by default and ≤1,024 UTF-8 bytes. Headless
+runs do not open a window or write local saves. Replay input remains revision 1.
+See [trace identity and state hashes](CARTRIDGE_FORMAT.md).
 
 `watch` hashes the single authored workcart and repacks a canonical cartridge after changes.
 It does not serve HTTP or open a browser. Invalid edits report diagnostics and

@@ -2,21 +2,21 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hash, Hasher},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
     thread,
     time::Duration,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use modl_core::{
     AssetCatalog, AssetKind, CartridgePngMetadata, CompileMode, DecodedCartridge, Diagnostic,
     FileId, GeneratedProgram, ProjectManifest, SourceFile, WorkcartTest, WorkcartTestKind,
-    analyze_module, compile, compile_project, decode_cartridge, decode_cartridge_png,
-    encode_cartridge_png, encode_workcart, format_source, load_cartridge_program,
-    materialize_workcart_recipe, pack_workcart, parse_project_manifest, parse_workcart,
-    unpack_cartridge_project, unpack_workcart,
+    analyze_module, compile, compile_project, decode_cartridge_png, encode_cartridge_png,
+    encode_workcart, format_source, load_cartridge_program, materialize_workcart_recipe,
+    pack_workcart, parse_project_manifest, parse_workcart, unpack_cartridge_project,
 };
 
 const HEADLESS_HOST: &str = include_str!("../../../packages/runtime/standalone/headless-host.mjs");
@@ -49,6 +49,9 @@ struct LoadedProject {
 impl LoadedProject {
     fn pack(&self) -> Result<modl_core::PackedCartridge, modl_core::CartridgeError> {
         pack_workcart(&self.source)
+    }
+    fn pack_game(&self) -> Result<modl_core::game::PackedGame, modl_core::CartridgeError> {
+        modl_core::game::pack_game_workcart(&self.source)
     }
 }
 
@@ -134,6 +137,12 @@ enum Command {
         /// Optional raw save image of at most 8 KiB.
         #[arg(long)]
         save: Option<PathBuf>,
+        /// Initial save catalog JSON keyed by cartridge ID with canonical base64 byte images.
+        #[arg(long, conflicts_with = "save")]
+        saves: Option<PathBuf>,
+        /// Initial transfer parameter, at most 1024 UTF-8 bytes (headless only).
+        #[arg(long, default_value = "")]
+        parameter: String,
     },
     /// Repack a project whenever its files change.
     Watch {
@@ -321,19 +330,32 @@ fn main() -> ExitCode {
             seed,
             input,
             save,
+            saves,
+            parameter,
         } => {
             if headless {
                 run_headless(
                     &path,
-                    output.as_deref(),
-                    frames,
-                    seed,
-                    input.as_deref(),
-                    save.as_deref(),
+                    &HeadlessRun {
+                        output: output.as_deref(),
+                        frames,
+                        seed,
+                        input: input.as_deref(),
+                        save: save.as_deref(),
+                        saves: saves.as_deref(),
+                        parameter: &parameter,
+                    },
                 )
             } else {
-                if output.is_some() || input.is_some() || save.is_some() {
-                    eprintln!("--output, --input and --save require --headless");
+                if output.is_some()
+                    || input.is_some()
+                    || save.is_some()
+                    || saves.is_some()
+                    || !parameter.is_empty()
+                {
+                    eprintln!(
+                        "--output, --input, --save, --saves and --parameter require --headless"
+                    );
                     return ExitCode::FAILURE;
                 }
                 run_directory(&path)
@@ -448,59 +470,73 @@ fn run_directory(path: &Path) -> ExitCode {
     }
 }
 
-fn run_headless(
-    path: &Path,
-    output: Option<&Path>,
+struct HeadlessRun<'a> {
+    output: Option<&'a Path>,
     frames: u32,
     seed: u32,
-    input: Option<&Path>,
-    save: Option<&Path>,
-) -> ExitCode {
-    let Ok((rom, cartridge, program)) = load_headless_cartridge(path) else {
+    input: Option<&'a Path>,
+    save: Option<&'a Path>,
+    saves: Option<&'a Path>,
+    parameter: &'a str,
+}
+
+fn headless_request(
+    game: &modl_core::game::PackedGame,
+    mode: CompileMode,
+    frames: u32,
+    seed: u32,
+    trace: &serde_json::Value,
+    parameter: &str,
+    saves: BTreeMap<String, Vec<u8>>,
+) -> Result<serde_json::Value, String> {
+    if parameter.len() > 1024 {
+        return Err("transfer parameter exceeds 1024 UTF-8 bytes".to_owned());
+    }
+    let runtime = modl_core::runtime_game::prepare_runtime_game(game, mode)
+        .map_err(|error| error.to_string())?;
+    let saves = saves
+        .into_iter()
+        .map(|(id, image)| (id, STANDARD.encode(image)))
+        .collect::<BTreeMap<_, _>>();
+    Ok(
+        serde_json::json!({ "revision": 2, "game": runtime, "seed": seed,
+        "frames": frames, "trace": trace, "parameter": parameter, "saves": saves }),
+    )
+}
+
+fn run_headless(path: &Path, options: &HeadlessRun<'_>) -> ExitCode {
+    let Ok(game) = load_game(path) else {
         return ExitCode::FAILURE;
     };
-    let Ok(javascript) = std::str::from_utf8(&program) else {
-        eprintln!("{}: compiled program is not UTF-8", path.display());
+    let Ok(trace) = read_json_input(options.input) else {
         return ExitCode::FAILURE;
     };
-    let Ok(trace) = read_json_input(input) else {
+    let Ok(saves) = read_headless_saves(&game, options.save, options.saves) else {
         return ExitCode::FAILURE;
     };
-    let Ok(save_bytes) = read_save_image(save) else {
-        return ExitCode::FAILURE;
-    };
-    let files = match unpack_cartridge_project(&rom) {
-        Ok(view) => view.files,
+    let request = match headless_request(
+        &game,
+        CompileMode::Release,
+        options.frames,
+        options.seed,
+        &trace,
+        options.parameter,
+        saves,
+    ) {
+        Ok(request) => request,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
-    let manifest = &cartridge.manifest;
-    let request = serde_json::json!({
-        "revision": 1,
-        "javascript": javascript,
-        "manifest": {
-            "id": manifest.id,
-            "updateRate": manifest.update_rate,
-            "display": manifest.display,
-            "assets": manifest.assets,
-        },
-        "entries": files,
-        "rom": rom,
-        "seed": seed,
-        "frames": frames,
-        "trace": trace,
-        "save": save_bytes,
-    });
     let Ok(request) = serde_json::to_vec(&request) else {
         eprintln!("{}: could not encode headless request", path.display());
         return ExitCode::FAILURE;
     };
-    let Ok(serialized) = execute_headless_host(&request, frames) else {
+    let Ok(serialized) = execute_headless_host(&request, options.frames) else {
         return ExitCode::FAILURE;
     };
-    if let Some(output) = output {
+    if let Some(output) = options.output {
         if let Some(parent) = output.parent()
             && let Err(error) = fs::create_dir_all(parent)
         {
@@ -512,8 +548,9 @@ fn run_headless(
             return ExitCode::FAILURE;
         }
         println!(
-            "ran {} headlessly for {frames} frames -> {}",
+            "ran {} headlessly for {} frames -> {}",
             path.display(),
+            options.frames,
             output.display()
         );
     } else {
@@ -612,6 +649,105 @@ fn load_headless_cartridge(
     Ok((bytes, cartridge, program))
 }
 
+fn load_game(path: &Path) -> Result<modl_core::game::PackedGame, ()> {
+    let result = if path.is_dir() || is_workcart_path(path) {
+        load_project(path)?
+            .pack_game()
+            .map_err(|error| error.to_string())
+    } else if path
+        .extension()
+        .is_some_and(|extension| extension == "m01c" || extension == "png")
+    {
+        let bytes = read_bounded_file(
+            path,
+            modl_core::game::MAX_GAME_PACKED_BYTES + 8 * 1024 * 1024,
+        )
+        .map_err(|error| eprintln!("{}: {error}", path.display()))?;
+        let bytes = if path.extension().is_some_and(|extension| extension == "png") {
+            decode_cartridge_png(&bytes)
+                .map_err(|error| eprintln!("{}: {error}", path.display()))?
+                .cartridge
+        } else {
+            bytes
+        };
+        modl_core::game::decode_game(&bytes).map_err(|error| error.to_string())
+    } else {
+        Err("expected a current .m01w, .m01c or .m01c.png game".to_owned())
+    };
+    result.map_err(|error| eprintln!("{}: {error}", path.display()))
+}
+
+fn read_bounded_file(path: &Path, maximum: usize) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
+    if !metadata.is_file() || metadata.len() > maximum_u64 {
+        return Err(format!(
+            "input requires an ordinary file of at most {maximum} bytes"
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > maximum {
+        return Err(format!("input exceeds {maximum} bytes"));
+    }
+    Ok(bytes)
+}
+
+fn read_headless_saves(
+    game: &modl_core::game::PackedGame,
+    entry: Option<&Path>,
+    catalog: Option<&Path>,
+) -> Result<BTreeMap<String, Vec<u8>>, ()> {
+    if let Some(path) = entry {
+        return read_save_image(Some(path))
+            .map(|image| BTreeMap::from([(game.entry().manifest.id.clone(), image)]));
+    }
+    let Some(path) = catalog else {
+        return Ok(BTreeMap::new());
+    };
+    let read = || -> Result<BTreeMap<String, Vec<u8>>, String> {
+        let bytes = read_bounded_file(path, 512 * 1024)?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        let entries = value.as_object().ok_or_else(|| {
+            "save catalog must map cartridge IDs to base64 byte images".to_owned()
+        })?;
+        if entries.len() > 32 {
+            return Err("save catalog exceeds 32 cartridge identities".to_owned());
+        }
+        entries
+            .iter()
+            .map(|(id, image)| {
+                if !game
+                    .catalog()
+                    .cartridges()
+                    .values()
+                    .any(|member| &member.manifest.id == id)
+                {
+                    return Err(format!(
+                        "save catalog contains undeclared cartridge ID '{id}'"
+                    ));
+                }
+                let encoded = image
+                    .as_str()
+                    .filter(|value| value.len() <= 8192_usize.div_ceil(3) * 4)
+                    .ok_or_else(|| format!("invalid bounded save image for '{id}'"))?;
+                let image = STANDARD
+                    .decode(encoded)
+                    .map_err(|error| format!("invalid base64 save for '{id}': {error}"))?;
+                if image.len() > 8192 || STANDARD.encode(&image) != encoded {
+                    return Err(format!("invalid canonical 8 KiB save image for '{id}'"));
+                }
+                Ok((id.clone(), image))
+            })
+            .collect()
+    };
+    read().map_err(|error| eprintln!("{}: {error}", path.display()))
+}
+
 fn read_json_input(path: Option<&Path>) -> Result<serde_json::Value, ()> {
     let Some(path) = path else {
         return Ok(serde_json::json!({ "revision": 1, "frames": [] }));
@@ -635,7 +771,7 @@ fn read_save_image(path: Option<&Path>) -> Result<Vec<u8>, ()> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };
-    let bytes = fs::read(path).map_err(|error| {
+    let bytes = read_bounded_file(path, 8 * 1024).map_err(|error| {
         eprintln!("{}: {error}", path.display());
     })?;
     if bytes.len() > 8 * 1024 {
@@ -657,7 +793,7 @@ fn test_workcart(project: &LoadedProject) -> ExitCode {
         .workcart_tests
         .iter()
         .any(|test| test.kind == WorkcartTestKind::Replay)
-        .then(|| project.pack());
+        .then(|| project.pack_game());
     let mut passed = 0_usize;
     let mut failed = 0_usize;
     for test in &project.workcart_tests {
@@ -732,17 +868,29 @@ fn run_modl_test_payload(
     if let Some(diagnostic) = compilation.analysis.diagnostics.first() {
         return Err(format!("error[{}] {}", diagnostic.code, diagnostic.message));
     }
-    let generated = compilation
-        .generated
-        .ok_or_else(|| "test produced no executable program".to_owned())?;
-    let request = serde_json::json!({
-        "revision": 1,
-        "javascript": generated.javascript,
-        "manifest": { "id": project.manifest.id, "updateRate": project.manifest.update_rate,
-            "display": null, "assets": {} },
-        "entries": {}, "rom": [0], "seed": 0x4d30_3031_u32, "frames": 1,
-        "trace": { "revision": 1, "frames": [] }, "save": [],
+    if compilation.generated.is_none() {
+        return Err("test produced no executable program".to_owned());
+    }
+    // Unit tests are disposable ordinary current cartridges, not executable JS paired with
+    // a fake ROM. Their private entry is outside the authoring-only tests/ namespace.
+    "__mod01_tests__/main.modl".clone_into(&mut manifest.entry);
+    files.retain(|path, _| {
+        Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "modl")
     });
+    files.insert(manifest.entry.clone(), source.as_bytes().to_vec());
+    let source = encode_workcart(&manifest, &files, &[], &[]).map_err(|error| error.to_string())?;
+    let game = modl_core::game::pack_game_workcart(&source).map_err(|error| error.to_string())?;
+    let request = headless_request(
+        &game,
+        CompileMode::Debug,
+        1,
+        0x4d30_3031,
+        &serde_json::json!({ "revision": 1, "frames": [] }),
+        "",
+        BTreeMap::new(),
+    )?;
     let result = execute_headless_host(
         &serde_json::to_vec(&request).map_err(|error| error.to_string())?,
         1,
@@ -764,7 +912,7 @@ fn run_modl_test_payload(
 
 fn run_scripted_test_payload(
     root: Option<&Path>,
-    packed: &modl_core::PackedCartridge,
+    packed: &modl_core::game::PackedGame,
     source: &[u8],
 ) -> Result<(), String> {
     if source.len() > usize::try_from(MAX_TRACE_BYTES).unwrap_or(usize::MAX) {
@@ -799,18 +947,20 @@ fn run_scripted_test_payload(
         }
         None => Vec::new(),
     };
-    let (cartridge, program) =
-        load_cartridge_program(&packed.bytes).map_err(|error| error.to_string())?;
-    let javascript = std::str::from_utf8(&program)
-        .map_err(|_| "packed project has no UTF-8 program".to_owned())?;
-    let manifest = &cartridge.manifest;
-    let request = serde_json::json!({
-        "revision": 1, "javascript": javascript,
-        "manifest": { "id": manifest.id, "updateRate": manifest.update_rate,
-            "display": manifest.display, "assets": manifest.assets },
-        "entries": unpack_cartridge_project(&packed.bytes).map_err(|error| error.to_string())?.files, "rom": packed.bytes, "seed": seed, "frames": frames,
-        "trace": trace, "save": save,
-    });
+    let parameter = spec.get("parameter").map_or(Ok(""), |value| {
+        value
+            .as_str()
+            .ok_or_else(|| "scripted parameter must be Text".to_owned())
+    })?;
+    let request = headless_request(
+        packed,
+        CompileMode::Release,
+        frames,
+        seed,
+        &trace,
+        parameter,
+        BTreeMap::from([(packed.entry().manifest.id.clone(), save)]),
+    )?;
     let result = execute_headless_host(
         &serde_json::to_vec(&request).map_err(|error| error.to_string())?,
         frames,
@@ -1018,14 +1168,14 @@ fn pack_directory(path: &Path, output: Option<&Path>) -> ExitCode {
     let Ok(project) = load_project(path) else {
         return ExitCode::FAILURE;
     };
-    let packed = match project.pack() {
+    let packed = match project.pack_game() {
         Ok(packed) => packed,
         Err(error) => {
             eprintln!("{}: {error}", path.display());
             return ExitCode::FAILURE;
         }
     };
-    if let Err(error) = decode_cartridge(&packed.bytes) {
+    if let Err(error) = modl_core::game::decode_game(packed.bytes()) {
         eprintln!("{}: post-pack validation failed: {error}", path.display());
         return ExitCode::FAILURE;
     }
@@ -1039,15 +1189,15 @@ fn pack_directory(path: &Path, output: Option<&Path>) -> ExitCode {
         eprintln!("{}: {error}", parent.display());
         return ExitCode::FAILURE;
     }
-    if let Err(error) = fs::write(&output, &packed.bytes) {
+    if let Err(error) = fs::write(&output, packed.bytes()) {
         eprintln!("{}: {error}", output.display());
         return ExitCode::FAILURE;
     }
     println!(
-        "packed {} ({} bytes, {} files)",
+        "packed {} ({} bytes, {} cartridges)",
         output.display(),
-        packed.bytes.len(),
-        packed.manifest.files.len()
+        packed.bytes().len(),
+        packed.catalog().cartridges().len()
     );
     ExitCode::SUCCESS
 }
@@ -1091,17 +1241,11 @@ fn directory_fingerprint(path: &Path) -> Result<u64, std::io::Error> {
 fn info(path: Option<&Path>, source: bool) -> ExitCode {
     if source {
         let path = path.unwrap_or_else(|| Path::new("."));
-        let result = load_headless_cartridge(path)
-            .and_then(|(rom, _, _)| {
-                unpack_workcart(&rom).map_err(|error| {
-                    eprintln!("{error}");
-                })
+        let result = load_game(path).and_then(|game| {
+            modl_core::parse_workcart(game.source()).map_err(|error| {
+                eprintln!("{error}");
             })
-            .and_then(|source| {
-                modl_core::parse_workcart(&source).map_err(|error| {
-                    eprintln!("{error}");
-                })
-            });
+        });
         return match result {
             Ok(project) => {
                 println!(
@@ -1197,20 +1341,17 @@ fn report_sections(
     (sizes, largest_entries)
 }
 
-fn profile_cartridge(
-    bytes: &[u8],
-    cartridge: &DecodedCartridge,
-    program: &[u8],
-) -> Result<serde_json::Value, String> {
-    let manifest = &cartridge.manifest;
-    let request = serde_json::json!({
-        "revision": 1,
-        "javascript": std::str::from_utf8(program).map_err(|_| "compiled program is not UTF-8")?,
-        "manifest": { "id": manifest.id, "updateRate": manifest.update_rate,
-            "display": manifest.display, "assets": manifest.assets },
-        "entries": unpack_cartridge_project(bytes).map_err(|error| error.to_string())?.files, "rom": bytes, "seed": 0x4d30_3031_u32,
-        "frames": 60, "trace": { "revision": 1, "frames": [] }, "save": [],
-    });
+fn profile_cartridge(bytes: &[u8]) -> Result<serde_json::Value, String> {
+    let game = modl_core::game::decode_game(bytes).map_err(|error| error.to_string())?;
+    let request = headless_request(
+        &game,
+        CompileMode::Release,
+        60,
+        0x4d30_3031,
+        &serde_json::json!({ "revision": 1, "frames": [] }),
+        "",
+        BTreeMap::new(),
+    )?;
     let runtime = execute_headless_host(
         &serde_json::to_vec(&request).map_err(|error| error.to_string())?,
         60,
@@ -1230,7 +1371,7 @@ fn cartridge_size_class(bytes: usize) -> &'static str {
 }
 
 fn cartridge_report(path: &Path) -> Result<serde_json::Value, String> {
-    let (bytes, cartridge, program) = load_headless_cartridge(path)
+    let (bytes, cartridge, _) = load_headless_cartridge(path)
         .map_err(|()| "could not load cartridge for analysis".to_owned())?;
     let sections = archive_sections(&bytes)?;
     let unpacked = unpack_cartridge_project(&bytes).map_err(|error| error.to_string())?;
@@ -1266,7 +1407,7 @@ fn cartridge_report(path: &Path) -> Result<serde_json::Value, String> {
         .sort_by_key(|value| std::cmp::Reverse(value["sourceBytes"].as_u64().unwrap_or_default()));
     largest_symbols.truncate(8);
 
-    let runtime = profile_cartridge(&bytes, &cartridge, &program)?;
+    let runtime = profile_cartridge(&bytes)?;
     let summary = runtime
         .get("summary")
         .cloned()
@@ -1391,9 +1532,13 @@ fn load_project(path: &Path) -> Result<LoadedProject, ()> {
 }
 
 fn load_workcart(path: &Path) -> Result<LoadedProject, ()> {
-    let source = fs::read_to_string(path).map_err(|error| {
-        eprintln!("{}: {error}", path.display());
-    })?;
+    let bytes = read_bounded_file(path, modl_core::workcart::MAX_WORKCART_DOCUMENT_BYTES).map_err(
+        |error| {
+            eprintln!("{}: {error}", path.display());
+        },
+    )?;
+    let source =
+        String::from_utf8(bytes).map_err(|error| eprintln!("{}: {error}", path.display()))?;
     let project = parse_workcart(&source).map_err(|error| {
         eprintln!("{}: {error}", path.display());
     })?;
@@ -1614,7 +1759,7 @@ fn check_files(paths: &[PathBuf]) -> ExitCode {
             ) {
                 Ok(output) if output.analysis.diagnostics.is_empty() => {
                     if assets.is_valid()
-                        && let Err(error) = project.pack()
+                        && let Err(error) = project.pack_game()
                     {
                         eprintln!("{}: {error}", path.display());
                         failed = true;

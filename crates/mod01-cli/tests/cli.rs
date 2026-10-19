@@ -7,10 +7,367 @@ use std::{
     time::Duration,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mod01"))
+}
+
+fn game_fixture(count: usize, padding: bool) -> String {
+    let mut main =
+        modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+    "cli-game-main".clone_into(&mut main.manifest.id);
+    main.files.insert(
+        main.manifest.entry.clone(),
+        include_str!("../../../tests/conformance/game-main.modl")
+            .as_bytes()
+            .to_vec(),
+    );
+    if padding {
+        main.files.insert(
+            "authoring/notes.txt".to_owned(),
+            (0..600_000)
+                .map(|index| b'a' + u8::try_from((index * 17 + index / 29) % 26).unwrap())
+                .collect(),
+        );
+    }
+    let mut children = Vec::new();
+    for index in 0..count {
+        let alias = if index == 0 {
+            "main".to_owned()
+        } else if count == 2 {
+            "arena".to_owned()
+        } else {
+            format!("level{index}")
+        };
+        let mut member = main.clone();
+        if index != 0 {
+            member.manifest.id = format!("cli-game-member-{index}");
+            member.manifest.update_rate = 30;
+        }
+        let code = if count == 2 {
+            if index == 0 {
+                include_str!("../../../tests/conformance/game-main.modl")
+            } else {
+                include_str!("../../../tests/conformance/game-arena.modl")
+            }
+            .to_owned()
+        } else {
+            let next = if index + 1 == count {
+                "main".to_owned()
+            } else {
+                format!("level{}", index + 1)
+            };
+            format!(
+                "on start:\n  save_set_int(\"visits\", save_get_int(\"visits\", 0) + 1)\non update:\n  load_cart(\"{next}\", \"\")\non draw:\n  clear({index})\n"
+            )
+        };
+        member
+            .files
+            .insert(member.manifest.entry.clone(), code.into_bytes());
+        if index == 0 {
+            main = member;
+        } else {
+            children.push(modl_core::bundle::BundleSource {
+                alias,
+                source: modl_core::encode_workcart(&member.manifest, &member.files, &[], &[])
+                    .unwrap(),
+            });
+        }
+    }
+    modl_core::workcart::encode_workcart_with_bundle(
+        &main.manifest,
+        &main.files,
+        &[],
+        &[],
+        &children,
+    )
+    .unwrap()
+}
+
+fn game_trace(
+    path: &Path,
+    frames: u32,
+    parameter: &str,
+    input: Option<&Path>,
+    saves: Option<&Path>,
+) -> Value {
+    let mut command = binary();
+    command.arg("run").arg(path).args([
+        "--headless",
+        "--frames",
+        &frames.to_string(),
+        "--parameter",
+        parameter,
+    ]);
+    if let Some(path) = input {
+        command.arg("--input").arg(path);
+    }
+    if let Some(path) = saves {
+        command.arg("--saves").arg(path);
+    }
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    serde_json::from_slice(&result.stdout).unwrap()
+}
+
+#[test]
+fn whole_games_larger_than_one_rom_pack_check_inspect_and_run_identically_from_source_or_bytes() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-whole-game-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let source = game_fixture(2, true);
+    let path = directory.join("cart.m01w");
+    let rom = directory.join("game.m01c");
+    fs::write(&path, &source).unwrap();
+    let game = modl_core::game::pack_game_workcart(&source).unwrap();
+    assert!(game.bytes().len() > 1024 * 1024);
+    for member in game.catalog().cartridges().values() {
+        assert!(member.bytes.len() < 1024 * 1024);
+    }
+    for command in ["check", "pack"] {
+        let mut call = binary();
+        call.arg(command).arg(&path).env("PATH", "");
+        if command == "pack" {
+            call.arg("--output").arg(&rom);
+        }
+        let result = call.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    assert_eq!(fs::read(&rom).unwrap(), game.bytes());
+    let inspected = binary()
+        .arg("info")
+        .arg(&rom)
+        .arg("--source")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        inspected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+    let view: Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    assert_eq!(view["bundle"][0]["alias"], "arena");
+    let trace = directory.join("input.json");
+    let saves = directory.join("saves.json");
+    fs::write(&trace, serde_json::to_vec(&json!({ "revision": 1, "frames": [{ "frame": 1, "controllers": [], "menuAction": 1 }, { "frame": 3, "controllers": [], "menuAction": 1 }] })).unwrap()).unwrap();
+    fs::write(&saves, serde_json::to_vec(&json!({ "cli-game-main": STANDARD.encode(br#"{"visits":4}"#), "cli-game-member-1": STANDARD.encode(br#"{"visits":9}"#) })).unwrap()).unwrap();
+    let result = game_trace(&path, 5, "root", Some(&trace), Some(&saves));
+    assert_eq!(
+        result,
+        game_trace(&rom, 5, "root", Some(&trace), Some(&saves))
+    );
+    assert_eq!(result["game"]["identity"], game.identity());
+    assert_eq!(result["revision"], 2);
+    assert!(result.get("fault").is_none(), "{result}");
+    assert_eq!(
+        result["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|frame| frame["cartridgeAlias"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["main", "main", "arena", "arena", "main"]
+    );
+    assert_eq!(
+        result["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|frame| frame["cartridgeFrame"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [0, 1, 0, 1, 0]
+    );
+    assert_eq!(
+        result["game"]["members"]["main"]["bytes"],
+        game.entry().bytes.len()
+    );
+    assert_ne!(
+        result["configuration"]["initialSaves"]["cli-game-main"],
+        result["summary"]["finalSaves"]["cli-game-main"]
+    );
+    assert_ne!(
+        result["summary"]["finalSaves"]["cli-game-main"],
+        result["summary"]["finalSaves"]["cli-game-member-1"]
+    );
+    // Independently hashed 8192-byte images: compact {"visits":6/10}, then zero padding.
+    assert_eq!(
+        result["summary"]["finalSaves"]["cli-game-main"],
+        "a08902a957e6143c8f899136eb55e113dc1e2e753851c2360120c15858fe5aab"
+    );
+    assert_eq!(
+        result["summary"]["finalSaves"]["cli-game-member-1"],
+        "48fc1535e7a2174973efec247f4b8144b47ec04283fe9c040520e7ce9764f664"
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn headless_cycles_all_32_real_cartridges_and_does_not_persist_a_faulted_transition() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-game-cycle-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("cart.m01w");
+    fs::write(&path, game_fixture(32, false)).unwrap();
+    let result = binary()
+        .arg("run")
+        .arg(&path)
+        .args(["--headless", "--frames", "64"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let result: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(result.get("fault").is_none());
+    assert_eq!(result["summary"]["completedFrames"], 64);
+    assert_eq!(result["game"]["members"].as_object().unwrap().len(), 32);
+    for (index, frame) in result["frames"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(frame["frame"], index);
+        assert_eq!(frame["cartridgeFrame"], 0);
+        assert_eq!(
+            frame["cartridgeAlias"],
+            if index % 32 == 0 {
+                "main".to_owned()
+            } else {
+                format!("level{}", index % 32)
+            }
+        );
+    }
+    let images = result["summary"]["finalSaves"].as_object().unwrap();
+    assert_eq!(images.len(), 32);
+    assert!(images.values().all(|hash| hash == &images["cli-game-main"]));
+    assert_eq!(
+        images["cli-game-main"],
+        "eba2288c6628220918c52fde25fefaf6508e445696d6f9c750d3f497ab733b17"
+    ); // visits=2
+    fs::write(&path, game_fixture(2, false)).unwrap();
+    let trace = directory.join("fault.json");
+    fs::write(
+        &trace,
+        br#"{"revision":1,"frames":[{"frame":1,"controllers":[],"menuAction":3}]}"#,
+    )
+    .unwrap();
+    let result = binary()
+        .arg("run")
+        .arg(&path)
+        .args([
+            "--headless",
+            "--frames",
+            "3",
+            "--parameter",
+            "root",
+            "--input",
+        ])
+        .arg(trace)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let result: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(result["fault"]["cartridgeAlias"], "main");
+    assert_eq!(result["fault"]["frame"], 1);
+    assert_eq!(result["fault"]["cartridgeFrame"], 1);
+    assert_eq!(result["frames"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        result["summary"]["finalSaveSha256"],
+        result["frames"][0]["saveSha256"]
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_need_no_node() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-game-invalid-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let path = directory.join("cart.m01w");
+    let saves = directory.join("saves.json");
+    fs::write(&path, game_fixture(2, false)).unwrap();
+    for value in [
+        json!({ "arena": "" }),
+        json!({ "cli-game-main": "AR==" }),
+        json!({ "cli-game-main": STANDARD.encode(vec![0; 8193]) }),
+        json!([]),
+    ] {
+        fs::write(&saves, serde_json::to_vec(&value).unwrap()).unwrap();
+        let result = binary()
+            .arg("run")
+            .arg(&path)
+            .args(["--headless", "--frames", "1", "--saves"])
+            .arg(&saves)
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(!String::from_utf8_lossy(&result.stderr).contains("could not start"));
+    }
+    let result = binary()
+        .arg("run")
+        .arg(&path)
+        .args(["--headless", "--parameter", &"x".repeat(1025)])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("1024 UTF-8 bytes"));
+    let mut project = modl_core::parse_workcart(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut child = modl_core::parse_workcart(&project.bundle[0].source).unwrap();
+    child.files.insert(
+        child.manifest.entry.clone(),
+        b"on draw:\n  absent_function()\n".to_vec(),
+    );
+    project.bundle[0].source =
+        modl_core::encode_workcart(&child.manifest, &child.files, &[], &[]).unwrap();
+    fs::write(
+        &path,
+        modl_core::workcart::encode_workcart_with_bundle(
+            &project.manifest,
+            &project.files,
+            &[],
+            &[],
+            &project.bundle,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for command in ["check", "pack", "run"] {
+        let mut call = binary();
+        call.arg(command).arg(&path).env("PATH", "");
+        if command == "run" {
+            call.arg("--headless");
+        }
+        let result = call.output().unwrap();
+        assert!(!result.status.success());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("arena"), "{command}: {error}");
+        assert!(!error.contains("could not start"));
+    }
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
@@ -784,7 +1141,7 @@ fn headless_run_emits_deterministic_machine_readable_traces_for_projects_and_car
         serde_json::from_slice(&fs::read(&second).expect("cartridge trace reads"))
             .expect("cartridge trace is JSON");
     assert_eq!(project_trace, cartridge_trace);
-    assert_eq!(project_trace["revision"], 1);
+    assert_eq!(project_trace["revision"], 2);
     assert_eq!(project_trace["summary"]["completedFrames"], 3);
     assert_eq!(project_trace["configuration"]["seed"], 7);
     assert_eq!(project_trace["frames"].as_array().map(Vec::len), Some(3));

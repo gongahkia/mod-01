@@ -117,7 +117,14 @@ layouts, reproducibility boundaries and OS signing requirements.
 ## Headless and replay interchange
 
 `mod01 run PROJECT_OR_CARTRIDGE --headless` uses the same compiler/core.
-Flags include `--seed`, `--frames`, `--input`, `--save` and `--output`.
+Flags include `--seed`, `--frames`, `--input`, `--save`, `--saves`,
+`--parameter` and `--output`. `--save` supplies the entry cartridge's raw image;
+`--saves` instead reads a JSON object of persistent cartridge IDs to canonical
+base64 byte images. They are mutually exclusive. Missing declared IDs start with
+zeroed 8 KiB images; undeclared IDs, malformed base64 or over-capacity images fail
+before running code. The save-catalog file is bounded to 512 KiB. The optional
+initial transfer parameter defaults to empty Text and is bounded to 1,024 UTF-8
+bytes. Headless execution never writes user save files.
 The current input JSON schema is revision 1: ordered, non-overlapping records
 with frame, optional duration, four-port button assignments and optional
 complete pointer state. An optional `menuAction` integer 1–5 records a cartridge
@@ -126,11 +133,35 @@ are rejected; absence means no activation. Navigation and pause duration are
 host state, not extra machine frames. The current `.m01rec` envelope also uses revision 1;
 other replay schemas are rejected.
 
-Trace results include framebuffer, state, audio-command, Float32 little-endian
-PCM and committed-save hashes, work usage and stable fault/span details.
-Limits are 36,000 frames, 8 MiB trace input, 16 MiB decoded files, 1 MiB ROM
-and 8 KiB save data. A modeled cartridge fault is reported in the trace;
-malformed host input exits unsuccessfully.
+The current headless request/result schema is revision 2; the input replay schema
+above remains revision 1. There is no older-request fallback. Every source/raw/PNG
+run uses shared whole-game Rust admission and the production game scheduler,
+including one-member games. `game.identity` covers the complete shipping artifact;
+`game.members` records each alias's own ID, logical ROM size and SHA-256.
+`cartridge` describes the initial logical member, not an oversized bundle ROM.
+
+Results identify each frame's producing alias, persistent ID, local frame and
+global game frame, plus work usage, framebuffer/audio-command/Float32
+little-endian PCM hashes and fault/span details. Following-state checkpoints may
+already contain the next prepared cartridge, while the output still belongs to
+the previous one. `stateSha256` covers the whole running game, input barrier and
+all saves, excluding only artifact identity and compiler mode: this allows authored
+tests to assert state without a self-referential hash of their own source.
+`snapshotSha256` includes that identity/mode binding too. Summary fields use the
+`finalStateSha256`/`finalSnapshotSha256` names. Whole-catalog save hashes and per-ID
+`initialSaves`/`finalSaves` hashes make save ownership observable.
+
+Canonical trace hashing sorts object keys by ASCII/code-unit order. Byte arrays
+are represented as `{ "$bytes": "lowercase hex" }`; Float32 arrays use
+`{ "$float32le": "lowercase little-endian hex" }`, avoiding host-specific JSON
+encoding and per-frame million-element temporary number arrays. Per-ID save hashes
+remain SHA-256 of the exact padded 8 KiB committed bytes.
+
+Limits are 36,000 global frames, 8 MiB replay input, up to 32 declared members,
+16 MiB decoded data/1 MiB logical ROM/8 KiB saves per member, and the shared
+bounded game transport. A modeled frame fault is reported without applying its
+pending transition or persisting that frame's save catalog; malformed host input
+exits unsuccessfully.
 
 ## Reproducibility and size classes
 

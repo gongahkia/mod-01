@@ -1,4 +1,30 @@
 import { createHash } from 'node:crypto';
+//#region src/errors.ts
+var RuntimeFault = class extends Error {
+  code;
+  sourceSpan;
+  constructor(code, message, sourceSpan) {
+    super(message);
+    this.name = 'RuntimeFault';
+    this.code = code;
+    this.sourceSpan = sourceSpan;
+  }
+};
+var BudgetExceeded = class extends RuntimeFault {
+  used;
+  limit;
+  constructor(used, limit, sourceSpan) {
+    super(
+      'M019001',
+      `frame used ${String(used)} synthetic work units; limit is ${String(limit)}`,
+      sourceSpan,
+    );
+    this.name = 'BudgetExceeded';
+    this.used = used;
+    this.limit = limit;
+  }
+};
+//#endregion
 //#region src/palette.json
 var palette_default = [
   [23, 20, 31],
@@ -294,32 +320,6 @@ var MASTER_PALETTE_RGBA = Object.freeze(
     255,
   ]),
 );
-//#endregion
-//#region src/errors.ts
-var RuntimeFault = class extends Error {
-  code;
-  sourceSpan;
-  constructor(code, message, sourceSpan) {
-    super(message);
-    this.name = 'RuntimeFault';
-    this.code = code;
-    this.sourceSpan = sourceSpan;
-  }
-};
-var BudgetExceeded = class extends RuntimeFault {
-  used;
-  limit;
-  constructor(used, limit, sourceSpan) {
-    super(
-      'M019001',
-      `frame used ${String(used)} synthetic work units; limit is ${String(limit)}`,
-      sourceSpan,
-    );
-    this.name = 'BudgetExceeded';
-    this.used = used;
-    this.limit = limit;
-  }
-};
 //#endregion
 //#region src/bus.ts
 var MEMORY = Object.freeze({
@@ -3065,6 +3065,149 @@ function boundedInteger(value, minimum, maximum) {
 function isRecord$9(value) {
   return typeof value === 'object' && value !== null;
 }
+function isCartridgeAlias(value) {
+  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
+}
+function isTransferParameter(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= 1024 &&
+    value.isWellFormed() &&
+    new TextEncoder().encode(value).length <= 1024
+  );
+}
+function isCartridgeEnvironment(value) {
+  if (!record$3(value) || !Array.isArray(value.aliases)) return false;
+  const aliases = value.aliases;
+  return (
+    exact$3(value, ['alias', 'parameter', 'aliases', 'reloadCosts']) &&
+    isCartridgeAlias(value.alias) &&
+    isTransferParameter(value.parameter) &&
+    aliases.length >= 1 &&
+    aliases.length <= 32 &&
+    Object.keys(aliases).length === aliases.length &&
+    Array.from(aliases).every(isCartridgeAlias) &&
+    new Set(aliases).size === aliases.length &&
+    aliases.includes('main') &&
+    aliases.includes(value.alias) &&
+    record$3(value.reloadCosts) &&
+    Object.entries(value.reloadCosts).every(
+      ([alias, cost]) =>
+        aliases.includes(alias) &&
+        typeof cost === 'number' &&
+        Number.isSafeInteger(cost) &&
+        cost >= 1 &&
+        cost <= HARDWARE.workUnitsPerFrame,
+    )
+  );
+}
+function request(value) {
+  if (!record$3(value) || !isCartridgeAlias(value.alias)) return false;
+  return value.kind === 'load'
+    ? exact$3(value, ['kind', 'alias', 'parameter']) && isTransferParameter(value.parameter)
+    : value.kind === 'reload' && exact$3(value, ['kind', 'alias']);
+}
+function isCartridgeControlSnapshot(value) {
+  return (
+    record$3(value) &&
+    exact$3(value, ['revision', 'alias', 'parameter', 'pending']) &&
+    value.revision === 1 &&
+    isCartridgeAlias(value.alias) &&
+    isTransferParameter(value.parameter) &&
+    (value.pending === null || request(value.pending))
+  );
+}
+/** A cartridge can request a boundary operation, never a filesystem read or an immediate reset. */
+var CartridgeControl = class {
+  alias;
+  parameter;
+  aliases;
+  reloadCosts;
+  pending = null;
+  constructor(environment) {
+    if (!isCartridgeEnvironment(environment)) throw new TypeError('invalid cartridge environment');
+    this.alias = environment.alias;
+    this.parameter = environment.parameter;
+    this.aliases = new Set(environment.aliases);
+    this.reloadCosts = new Map(Object.entries(environment.reloadCosts));
+  }
+  call(name, args, span, context, charge) {
+    if (name === 'cart_parameter') {
+      if (args.length !== 0) fail('cart_parameter expects no arguments', span);
+      charge(1 + new TextEncoder().encode(this.parameter).length, span);
+      return this.parameter;
+    }
+    if (name !== 'load_cart' && name !== 'reload_assets')
+      fail('unknown cartridge control call', span);
+    if (!['start', 'update', 'draw', 'menu'].includes(context.phase))
+      fail('cartridge changes require a non-raster cartridge callback', span);
+    if (
+      args.length !== (name === 'load_cart' ? 2 : 1) ||
+      !isCartridgeAlias(args[0]) ||
+      !this.aliases.has(args[0])
+    )
+      fail('cartridge change requires a declared local alias', span);
+    if (this.pending !== null) fail('only one cartridge change can be requested per frame', span);
+    const alias = args[0];
+    if (name === 'load_cart') {
+      if (!isTransferParameter(args[1]))
+        fail('transfer parameter exceeds 1024 UTF-8 bytes or is not well-formed Text', span);
+      const parameter = args[1];
+      charge(1 + alias.length + new TextEncoder().encode(parameter).length, span);
+      this.pending = {
+        kind: 'load',
+        alias,
+        parameter,
+      };
+    } else {
+      const cost = this.reloadCosts.get(alias);
+      if (cost === void 0)
+        fail('asset bank names/kinds are incompatible with the current cartridge', span);
+      charge(cost, span);
+      this.pending = {
+        kind: 'reload',
+        alias,
+      };
+    }
+  }
+  pendingRequest() {
+    return this.pending === null ? null : { ...this.pending };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      alias: this.alias,
+      parameter: this.parameter,
+      pending: this.pendingRequest(),
+    };
+  }
+  restore(value) {
+    if (
+      !isCartridgeControlSnapshot(value) ||
+      value.alias !== this.alias ||
+      value.parameter !== this.parameter ||
+      (value.pending !== null &&
+        (!this.aliases.has(value.pending.alias) ||
+          (value.pending.kind === 'reload' && !this.reloadCosts.has(value.pending.alias))))
+    )
+      fail('invalid or mismatched cartridge-control snapshot', {
+        start: 0,
+        end: 0,
+      });
+    this.pending = value.pending === null ? null : { ...value.pending };
+  }
+};
+function fail(message, span) {
+  throw new RuntimeFault('M019017', message, span);
+}
+function record$3(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$3(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
 //#endregion
 //#region src/budget.ts
 function isWorkBudgetSnapshot(value) {
@@ -4821,41 +4964,6 @@ function hasExactKeys$2(value, expected) {
   const actual = Object.keys(value).sort();
   return actual.length === expected.length && expected.every((key) => actual.includes(key));
 }
-function isCartridgeAlias(value) {
-  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
-}
-function isTransferParameter(value) {
-  return (
-    typeof value === 'string' &&
-    value.length <= 1024 &&
-    value.isWellFormed() &&
-    new TextEncoder().encode(value).length <= 1024
-  );
-}
-function request(value) {
-  if (!record(value) || !isCartridgeAlias(value.alias)) return false;
-  return value.kind === 'load'
-    ? exact(value, ['kind', 'alias', 'parameter']) && isTransferParameter(value.parameter)
-    : value.kind === 'reload' && exact(value, ['kind', 'alias']);
-}
-function isCartridgeControlSnapshot(value) {
-  return (
-    record(value) &&
-    exact(value, ['revision', 'alias', 'parameter', 'pending']) &&
-    value.revision === 1 &&
-    isCartridgeAlias(value.alias) &&
-    isTransferParameter(value.parameter) &&
-    (value.pending === null || request(value.pending))
-  );
-}
-function record(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-function exact(value, keys) {
-  return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
 //#endregion
 //#region src/console-runtime.ts
 function isConsoleRuntimeSnapshot(value) {
@@ -5534,6 +5642,786 @@ var MEMORY_CALLS = /* @__PURE__ */ new Map([
   ['mem_copy', 3],
   ['mem_fill', 3],
 ]);
+//#endregion
+//#region src/game-definition.ts
+/** Private scheduler-owned copies of immutable member data and initial save images. */
+var GameCatalog = class {
+  identity;
+  seed;
+  debug;
+  parameter;
+  initialSaves;
+  members = /* @__PURE__ */ new Map();
+  constructor(definition) {
+    if (
+      !record$2(definition) ||
+      !exact$2(definition, [
+        'identity',
+        'seed',
+        'members',
+        ...(definition.debug === void 0 ? [] : ['debug']),
+        ...(definition.parameter === void 0 ? [] : ['parameter']),
+        ...(definition.saves === void 0 ? [] : ['saves']),
+      ]) ||
+      typeof definition.identity !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(definition.identity) ||
+      !Number.isSafeInteger(definition.seed) ||
+      definition.seed < 0 ||
+      definition.seed > 4294967295 ||
+      (definition.debug !== void 0 && typeof definition.debug !== 'boolean') ||
+      !isTransferParameter(definition.parameter ?? '') ||
+      !Array.isArray(definition.members) ||
+      definition.members.length < 1 ||
+      definition.members.length > 32 ||
+      Object.keys(definition.members).length !== definition.members.length
+    )
+      throw new TypeError('invalid admitted game definition');
+    this.identity = definition.identity;
+    this.seed = definition.seed;
+    this.debug = definition.debug === true;
+    this.parameter = definition.parameter ?? '';
+    const ids = /* @__PURE__ */ new Set();
+    for (const raw of definition.members) {
+      if (
+        !record$2(raw) ||
+        !exact$2(raw, ['alias', 'id', 'factory', 'configuration']) ||
+        !isCartridgeAlias(raw.alias) ||
+        typeof raw.id !== 'string' ||
+        !/^[a-z0-9][a-z0-9.-]{2,63}$/.test(raw.id) ||
+        typeof raw.factory !== 'function' ||
+        !record$2(raw.configuration) ||
+        ['seed', 'debug', 'save'].some((key) => Object.hasOwn(raw.configuration, key)) ||
+        this.members.has(raw.alias) ||
+        ids.has(raw.id)
+      )
+        throw new TypeError('invalid or duplicate game member alias/save identity');
+      const configuration = structuredClone(raw.configuration);
+      if (
+        !isConsoleConfiguration({
+          ...configuration,
+          seed: this.seed,
+          debug: this.debug,
+        })
+      )
+        throw new TypeError(`invalid console configuration for '${raw.alias}'`);
+      const data = configuration;
+      const decoded =
+        data.assets === void 0
+          ? decodeRuntimeAssets({}, {})
+          : decodeRuntimeAssets(
+              data.assets.declarations,
+              data.assets.files,
+              data.assets.displayPath,
+            );
+      const names =
+        data.assets === void 0
+          ? (data.maps ?? []).map((map) => [map.name, 'map'])
+          : Object.entries(data.assets.declarations).map(([name, asset]) => [name, asset.kind]);
+      names.sort(([a = ''], [b = '']) => (a < b ? -1 : a > b ? 1 : 0));
+      const metadata =
+        HARDWARE.visualAllocations * MEMORY.allocationStride +
+        4096 * MEMORY.assetStride +
+        decoded.audio.length * MEMORY.audioAssetStride;
+      this.members.set(raw.alias, {
+        alias: raw.alias,
+        id: raw.id,
+        factory: raw.factory,
+        configuration: data,
+        signature: JSON.stringify(names),
+        reloadUnits: 1 + Math.ceil((HARDWARE.visualCapacityBytes + metadata) / 64),
+      });
+      ids.add(raw.id);
+    }
+    if (!this.members.has('main')) throw new TypeError('game requires a main entry cartridge');
+    if (
+      definition.saves !== void 0 &&
+      (!record$2(definition.saves) || Object.keys(definition.saves).some((id) => !ids.has(id)))
+    )
+      throw new TypeError('initial saves contain an undeclared cartridge identity');
+    const saves = /* @__PURE__ */ new Map();
+    for (const id of [...ids].sort()) {
+      const image =
+        definition.saves !== void 0 && Object.hasOwn(definition.saves, id)
+          ? definition.saves[id]
+          : void 0;
+      if (image !== void 0 && !isSaveImage(image))
+        throw new TypeError(`invalid save image for '${id}'`);
+      saves.set(id, new SaveMemory(image).deviceSnapshot().committed);
+    }
+    this.initialSaves = saves;
+  }
+  member(alias) {
+    const member = this.members.get(alias);
+    if (member === void 0) throw new TypeError(`unknown local cartridge '${alias}'`);
+    return member;
+  }
+  ids() {
+    return [...this.members.values()].map((member) => member.id).sort();
+  }
+  compatible(alias, bank) {
+    const a = this.members.get(alias),
+      b = this.members.get(bank);
+    return (
+      a !== void 0 &&
+      b !== void 0 &&
+      a.signature === b.signature &&
+      (a.configuration.assets === void 0) === (b.configuration.assets === void 0) &&
+      isConsoleConfiguration({
+        ...(alias === bank
+          ? a.configuration
+          : reloadConfiguration(a.configuration, b.configuration)),
+        seed: this.seed,
+        debug: this.debug,
+      })
+    );
+  }
+  prepare(alias, parameter, bank, save, deferBoot) {
+    if (!isTransferParameter(parameter) || !this.compatible(alias, bank))
+      throw new TypeError('incompatible game cartridge context/bank');
+    const member = this.member(alias),
+      donor = this.member(bank);
+    const aliases = [...this.members.keys()].sort();
+    const control = new CartridgeControl({
+      alias,
+      parameter,
+      aliases,
+      reloadCosts: Object.fromEntries(
+        aliases
+          .filter((name) => this.compatible(alias, name))
+          .map((name) => [name, this.member(name).reloadUnits]),
+      ),
+    });
+    const configuration =
+      alias === bank
+        ? member.configuration
+        : reloadConfiguration(member.configuration, donor.configuration);
+    return {
+      runtime: createConsoleRuntime(
+        member.factory,
+        {
+          ...configuration,
+          seed: this.seed,
+          debug: this.debug,
+          save,
+        },
+        {
+          cartridge: control,
+          deferBoot,
+        },
+      ),
+      control,
+    };
+  }
+};
+function reloadConfiguration(active, donor) {
+  const base = {
+    updateRate: active.updateRate,
+    workUnitsPerFrame: active.workUnitsPerFrame,
+    ...(active.hardwareRevision === void 0 ? {} : { hardwareRevision: active.hardwareRevision }),
+    ...(active.rom === void 0 ? {} : { rom: active.rom }),
+  };
+  const bank = donor.assets;
+  if (bank === void 0)
+    return {
+      ...base,
+      ...(donor.maps === void 0 ? {} : { maps: donor.maps }),
+    };
+  const files = Object.fromEntries(
+    Object.values(bank.declarations).map(({ path }) => [path, bank.files[path]]),
+  );
+  const ownDisplay = active.assets?.displayPath;
+  let displayPath = null;
+  if (typeof ownDisplay === 'string') {
+    let suffix = 0;
+    do displayPath = `__mod01__/retained-display-${String(suffix++)}.json`;
+    while (Object.hasOwn(files, displayPath));
+    const display = active.assets?.files[ownDisplay];
+    if (display === void 0) throw new TypeError('active display source missing');
+    files[displayPath] = display;
+  }
+  const assets = {
+    declarations: bank.declarations,
+    files,
+    displayPath,
+  };
+  return {
+    ...base,
+    assets,
+  };
+}
+function record$2(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$2(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/input-barrier.ts
+function isInputBarrierSnapshot(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const object = value;
+  return (
+    Object.keys(object).length === 3 &&
+    ['revision', 'controllers', 'pointer'].every((key) => Object.hasOwn(object, key)) &&
+    object.revision === 1 &&
+    Array.isArray(object.controllers) &&
+    object.controllers.length === 4 &&
+    Object.keys(object.controllers).length === 4 &&
+    Array.from(object.controllers).every(
+      (mask) =>
+        typeof mask === 'number' &&
+        Number.isInteger(mask) &&
+        mask >= 0 &&
+        mask < 1 << BUTTONS.length,
+    ) &&
+    typeof object.pointer === 'number' &&
+    Number.isInteger(object.pointer) &&
+    object.pointer >= 0 &&
+    object.pointer <= 3
+  );
+}
+/** Loads quarantine already-held controls until release; data reloads retain this owner unchanged. */
+var InputBarrier = class {
+  controllers = [0, 0, 0, 0];
+  pointer = 0;
+  quarantine(input) {
+    validate(input);
+    this.controllers = input.controllers.map(buttonMask);
+    this.pointer = Number(input.pointer.primary) | (Number(input.pointer.secondary) << 1);
+  }
+  apply(input) {
+    validate(input);
+    const controllers = input.controllers.map((controller, port) => {
+      const held = buttonMask(controller);
+      const blocked = (this.controllers[port] ?? 0) & held;
+      this.controllers[port] = blocked;
+      return {
+        buttons: Object.fromEntries(
+          BUTTONS.map((button, index) => [
+            button,
+            controller.buttons[button] && (blocked & (1 << index)) === 0,
+          ]),
+        ),
+      };
+    });
+    this.pointer &= Number(input.pointer.primary) | (Number(input.pointer.secondary) << 1);
+    return {
+      controllers,
+      pointer: {
+        ...input.pointer,
+        primary: input.pointer.primary && (this.pointer & 1) === 0,
+        secondary: input.pointer.secondary && (this.pointer & 2) === 0,
+      },
+      ...(input.menuAction === void 0 ? {} : { menuAction: input.menuAction }),
+    };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      controllers: [...this.controllers],
+      pointer: this.pointer,
+    };
+  }
+  restore(value) {
+    if (!isInputBarrierSnapshot(value))
+      throw new RuntimeFault('M019103', 'invalid input-owner snapshot', {
+        start: 0,
+        end: 0,
+      });
+    this.controllers = [...value.controllers];
+    this.pointer = value.pointer;
+  }
+};
+function buttonMask(controller) {
+  return BUTTONS.reduce(
+    (mask, button, index) => mask | (Number(controller.buttons[button]) << index),
+    0,
+  );
+}
+function validate(input) {
+  if (!isInputFrame(input))
+    throw new RuntimeFault('M019008', 'invalid controller input frame', {
+      start: 0,
+      end: 0,
+    });
+}
+//#endregion
+//#region src/game-runtime.ts
+/** One pre-admitted game, one global input/replay timeline, no host I/O at a transition. */
+var GameRuntime = class {
+  catalog;
+  binding;
+  alias = 'main';
+  parameter;
+  bankAlias = 'main';
+  frame = 0;
+  saves;
+  barrier = new InputBarrier();
+  input;
+  constructor(definition) {
+    this.catalog = new GameCatalog(definition);
+    this.parameter = this.catalog.parameter;
+    this.saves = new Map([...this.catalog.initialSaves].map(([id, bytes]) => [id, bytes.slice()]));
+    this.binding = this.catalog.prepare(
+      this.alias,
+      this.parameter,
+      this.bankAlias,
+      this.saved(this.alias),
+      false,
+    );
+  }
+  runFrame(input) {
+    this.validateInput(input);
+    this.assertExecution(false);
+    const effective = this.frameInput(input);
+    return this.complete(this.binding.runtime.runFrame(effective));
+  }
+  stepDebug(input) {
+    this.validateInput(input);
+    if (!this.catalog.debug)
+      throw new RuntimeFault('M019104', 'statement stepping requires a debug cartridge', {
+        start: 0,
+        end: 0,
+      });
+    this.assertExecution(true);
+    const effective = this.binding.runtime.inspectExecution().booted
+      ? this.frameInput(input)
+      : input;
+    const result = this.binding.runtime.stepDebug(effective);
+    if ('frame' in result) return { frame: this.complete(result.frame) };
+    return {
+      ...result,
+      ...this.location(),
+    };
+  }
+  inspect() {
+    const execution = this.binding.runtime.inspectExecution();
+    return {
+      ...execution,
+      ...this.location(),
+      frame: this.frame,
+      cartridgeFrame: execution.frame,
+      parameter: this.parameter,
+      bankAlias: this.bankAlias,
+      pending: this.binding.control.pendingRequest(),
+    };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      identity: this.catalog.identity,
+      seed: this.catalog.seed,
+      debug: this.catalog.debug,
+      frame: this.frame,
+      alias: this.alias,
+      parameter: this.parameter,
+      bankAlias: this.bankAlias,
+      saves: Object.fromEntries([...this.saves].map(([id, bytes]) => [id, bytes.slice()])),
+      inputBarrier: this.barrier.snapshot(),
+      console: this.binding.runtime.snapshot(),
+    };
+  }
+  restore(value) {
+    try {
+      if (
+        !record$1(value) ||
+        !exact$1(value, [
+          'revision',
+          'identity',
+          'seed',
+          'debug',
+          'frame',
+          'alias',
+          'parameter',
+          'bankAlias',
+          'saves',
+          'inputBarrier',
+          'console',
+        ]) ||
+        value.revision !== 1 ||
+        value.identity !== this.catalog.identity ||
+        value.seed !== this.catalog.seed ||
+        value.debug !== this.catalog.debug ||
+        typeof value.frame !== 'number' ||
+        !Number.isSafeInteger(value.frame) ||
+        value.frame < 0 ||
+        !isCartridgeAlias(value.alias) ||
+        !isTransferParameter(value.parameter) ||
+        !isCartridgeAlias(value.bankAlias) ||
+        !this.catalog.compatible(value.alias, value.bankAlias) ||
+        !isConsoleRuntimeSnapshot(value.console) ||
+        value.console.machine.frame > value.frame ||
+        value.console.cartridgeControl === null ||
+        value.console.cartridgeControl.alias !== value.alias ||
+        value.console.cartridgeControl.parameter !== value.parameter ||
+        !isInputBarrierSnapshot(value.inputBarrier) ||
+        !record$1(value.saves) ||
+        !exact$1(value.saves, this.catalog.ids())
+      )
+        throw new TypeError('invalid game checkpoint context');
+      const saves = /* @__PURE__ */ new Map();
+      for (const [id, bytes] of Object.entries(value.saves)) {
+        if (!(bytes instanceof Uint8Array) || bytes.length !== HARDWARE.saveCapacityBytes)
+          throw new TypeError('invalid committed game save image');
+        saves.set(id, bytes.slice());
+      }
+      const binding = this.catalog.prepare(
+        value.alias,
+        value.parameter,
+        value.bankAlias,
+        value.console.save.committed,
+        true,
+      );
+      binding.runtime.restore(value.console);
+      const barrier = new InputBarrier();
+      barrier.restore(value.inputBarrier);
+      this.binding = binding;
+      this.barrier = barrier;
+      this.saves = saves;
+      this.frame = value.frame;
+      this.alias = value.alias;
+      this.parameter = value.parameter;
+      this.bankAlias = value.bankAlias;
+      this.input = void 0;
+    } catch (error) {
+      throw new RuntimeFault(
+        'M019103',
+        error instanceof Error ? error.message : 'invalid game checkpoint',
+        {
+          start: 0,
+          end: 0,
+        },
+      );
+    }
+  }
+  inspectMemory(address, length) {
+    return this.binding.runtime.inspectMemory(address, length);
+  }
+  editMemory(address, bytes) {
+    this.binding.runtime.editMemory(address, bytes);
+  }
+  memoryRegions() {
+    return this.binding.runtime.memoryRegions();
+  }
+  inspectMenu() {
+    return this.binding.runtime.inspectMenu();
+  }
+  location() {
+    return {
+      cartridgeAlias: this.alias,
+      cartridgeId: this.catalog.member(this.alias).id,
+    };
+  }
+  saved(alias) {
+    const bytes = this.saves.get(this.catalog.member(alias).id);
+    if (bytes === void 0) throw new TypeError('missing admitted save identity');
+    return bytes;
+  }
+  validateInput(input) {
+    if (!isInputFrame(input))
+      throw new RuntimeFault('M019008', 'invalid controller input frame', {
+        start: 0,
+        end: 0,
+      });
+    if (this.frame === Number.MAX_SAFE_INTEGER)
+      throw new RuntimeFault('M019012', 'game display-frame counter is exhausted', {
+        start: 0,
+        end: 0,
+      });
+  }
+  frameInput(raw) {
+    this.input ??= {
+      raw: structuredClone(raw),
+      effective: this.barrier.apply(raw),
+    };
+    return this.input.effective;
+  }
+  assertExecution(allowSuspended) {
+    const status = this.binding.runtime.inspectExecution();
+    if (status.fault !== null)
+      throw new RuntimeFault(
+        'M019014',
+        'cartridge faulted; restart or restore a healthy checkpoint',
+        status.fault.sourceSpan,
+      );
+    if (!allowSuspended && status.phase !== 'idle')
+      throw new RuntimeFault('M019014', 'cartridge is already executing', {
+        start: 0,
+        end: 0,
+      });
+  }
+  complete(output) {
+    const frame = {
+      ...output,
+      ...this.location(),
+      cartridgeFrame: output.frame,
+      frame: this.frame,
+    };
+    const request = this.binding.control.pendingRequest();
+    if (output.saveCommit !== void 0) this.saves.set(frame.cartridgeId, output.saveCommit.slice());
+    if (request?.kind === 'load') {
+      const next = this.catalog.prepare(
+        request.alias,
+        request.parameter,
+        request.alias,
+        this.saved(request.alias),
+        true,
+      );
+      if (this.input === void 0) throw new TypeError('missing completed game input');
+      this.barrier.quarantine(this.input.raw);
+      this.binding = next;
+      this.alias = request.alias;
+      this.parameter = request.parameter;
+      this.bankAlias = request.alias;
+    } else if (request?.kind === 'reload') {
+      const before = this.binding.runtime.snapshot();
+      const next = this.catalog.prepare(
+        this.alias,
+        this.parameter,
+        request.alias,
+        this.saved(this.alias),
+        true,
+      );
+      const fresh = next.runtime.snapshot();
+      const retained = /* @__PURE__ */ new Set([
+        MEMORY.ram,
+        MEMORY.front,
+        MEMORY.back,
+        MEMORY.display,
+        MEMORY.draw,
+        MEMORY.transparency,
+        MEMORY.pattern,
+        MEMORY.rasterLive,
+        MEMORY.raster,
+      ]);
+      const oldRegions = new Map(before.memory.regions.map((region) => [region.address, region]));
+      next.runtime.restore({
+        ...before,
+        audio: fresh.audio,
+        cartridgeControl: {
+          ...before.cartridgeControl,
+          pending: null,
+        },
+        memory: {
+          ...fresh.memory,
+          regions: fresh.memory.regions.map((region) =>
+            retained.has(region.address) ? (oldRegions.get(region.address) ?? region) : region,
+          ),
+        },
+      });
+      this.binding = next;
+      this.bankAlias = request.alias;
+    }
+    this.frame++;
+    this.input = void 0;
+    return frame;
+  }
+};
+function createGameRuntime(definition) {
+  return new GameRuntime(definition);
+}
+function record$1(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$1(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/game-loader.ts
+/** Validates every member's data before importing any Rust-admitted compiled module. */
+async function loadRuntimeGame(payload, options) {
+  if (
+    !record(payload) ||
+    !exact(payload, ['revision', 'identity', 'debug', 'members']) ||
+    payload.revision !== 1 ||
+    typeof payload.identity !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(payload.identity) ||
+    typeof payload.debug !== 'boolean' ||
+    !record(payload.members) ||
+    Object.keys(payload.members).length < 1 ||
+    Object.keys(payload.members).length > 32 ||
+    !Object.hasOwn(payload.members, 'main')
+  )
+    throw new TypeError('invalid current runtime game payload');
+  const members = [];
+  const metadata = /* @__PURE__ */ new Map();
+  let transportBytes = 0;
+  for (const [alias, raw] of Object.entries(payload.members)) {
+    if (
+      !isCartridgeAlias(alias) ||
+      !record(raw) ||
+      !exact(raw, ['javascript', 'sourceMap', 'symbolNames', 'manifest', 'files', 'rom']) ||
+      typeof raw.javascript !== 'string' ||
+      !raw.javascript.isWellFormed() ||
+      raw.javascript.length === 0 ||
+      Buffer.byteLength(raw.javascript, 'utf8') > 2097152 ||
+      typeof raw.sourceMap !== 'string' ||
+      !raw.sourceMap.isWellFormed() ||
+      Buffer.byteLength(raw.sourceMap, 'utf8') > 134217728 ||
+      !record(raw.symbolNames) ||
+      Object.entries(raw.symbolNames).some(
+        ([key, value]) =>
+          !/^s[0-9]{1,10}$/.test(key) ||
+          typeof value !== 'string' ||
+          value.length < 1 ||
+          value.length > 1024 ||
+          !value.isWellFormed(),
+      ) ||
+      !record(raw.manifest) ||
+      !exact(raw.manifest, ['id', 'hardwareRevision', 'updateRate', 'display', 'assets']) ||
+      typeof raw.manifest.id !== 'string' ||
+      raw.manifest.hardwareRevision !== 2 ||
+      (raw.manifest.updateRate !== 30 && raw.manifest.updateRate !== 60) ||
+      (raw.manifest.display !== null && typeof raw.manifest.display !== 'string') ||
+      !record(raw.files) ||
+      Object.keys(raw.files).length > 4096
+    )
+      throw new TypeError(`invalid runtime member '${alias}'`);
+    let fileBytes = 0;
+    for (const [path, value] of Object.entries(raw.files)) {
+      fileBytes += path.length + runtimeByteLength(value, 16777216);
+      if (fileBytes > 16777216)
+        throw new RangeError(`runtime member '${alias}' asset byte transport exceeds 16 MiB`);
+    }
+    transportBytes +=
+      Buffer.byteLength(raw.javascript, 'utf8') +
+      Buffer.byteLength(raw.sourceMap, 'utf8') +
+      runtimeByteLength(raw.rom, HARDWARE.cartridgeCapacityBytes) +
+      fileBytes;
+    if (transportBytes > 536870912) throw new RangeError('runtime game transport exceeds 512 MiB');
+    validateSourceMap(raw.sourceMap);
+    const files = Object.fromEntries(
+      Object.entries(raw.files).map(([path, value]) => [path, decodeRuntimeBytes(value, 16777216)]),
+    );
+    const assets = {
+      declarations: raw.manifest.assets,
+      files,
+      displayPath: raw.manifest.display,
+    };
+    if (!isRuntimeAssetSource(assets))
+      throw new TypeError(`invalid runtime asset source '${alias}'`);
+    const rom = decodeRuntimeBytes(raw.rom, HARDWARE.cartridgeCapacityBytes);
+    const manifest = {
+      id: raw.manifest.id,
+      hardwareRevision: raw.manifest.hardwareRevision,
+      updateRate: raw.manifest.updateRate,
+      display: raw.manifest.display,
+      assets: structuredClone(assets.declarations),
+    };
+    const symbolNames = Object.fromEntries(
+      Object.entries(raw.symbolNames).map(([key, value]) => [key, String(value)]),
+    );
+    const encodedFiles = Object.fromEntries(
+      Object.entries(raw.files).map(([key, value]) => [key, String(value)]),
+    );
+    metadata.set(alias, {
+      javascript: raw.javascript,
+      sourceMap: raw.sourceMap,
+      symbolNames,
+      manifest,
+      files: encodedFiles,
+      rom: String(raw.rom),
+    });
+    members.push({
+      alias,
+      id: manifest.id,
+      factory: () => {
+        throw new Error('compiled module has not been admitted');
+      },
+      configuration: {
+        updateRate: manifest.updateRate,
+        workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
+        hardwareRevision: manifest.hardwareRevision,
+        assets,
+        rom,
+      },
+    });
+  }
+  const definition = {
+    ...options,
+    identity: payload.identity,
+    debug: payload.debug,
+    members,
+  };
+  new GameCatalog(definition);
+  const compiled = [];
+  for (const member of members) {
+    const data = metadata.get(member.alias);
+    if (data === void 0) throw new TypeError('missing admitted runtime metadata');
+    const module = await import(
+      `data:text/javascript;base64,${Buffer.from(data.javascript).toString('base64')}`
+    );
+    if (!record(module) || typeof module.default !== 'function')
+      throw new TypeError(`compiled runtime member '${member.alias}' has no factory`);
+    compiled.push({
+      ...member,
+      factory: module.default,
+    });
+  }
+  return {
+    runtime: createGameRuntime({
+      ...definition,
+      members: compiled,
+    }),
+    metadata,
+  };
+}
+/** Canonical base64 only: Buffer's permissive decoder must not silently repair host data. */
+function decodeRuntimeBytes(value, maximum) {
+  runtimeByteLength(value, maximum);
+  if (typeof value !== 'string') throw new TypeError('invalid runtime byte transport');
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.byteLength > maximum || bytes.toString('base64') !== value)
+    throw new TypeError('noncanonical runtime byte transport');
+  return Uint8Array.from(bytes);
+}
+function runtimeByteLength(value, maximum) {
+  if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 0 ||
+    typeof value !== 'string' ||
+    value.length > Math.ceil(maximum / 3) * 4 ||
+    value.length % 4 !== 0
+  )
+    throw new TypeError('invalid bounded runtime byte transport');
+  const length = (value.length / 4) * 3 - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+  if (length > maximum) throw new RangeError('runtime byte transport exceeds decoded bound');
+  return length;
+}
+function validateSourceMap(source) {
+  const map = JSON.parse(source);
+  if (
+    !record(map) ||
+    !exact(map, ['version', 'file', 'sources', 'sourcesContent', 'names', 'mappings']) ||
+    map.version !== 3 ||
+    map.file !== 'cartridge.js' ||
+    typeof map.mappings !== 'string' ||
+    !strings(map.sources) ||
+    map.sources.length < 1 ||
+    map.sources.length > 4096 ||
+    !strings(map.sourcesContent) ||
+    map.sourcesContent.length !== map.sources.length ||
+    !strings(map.names)
+  )
+    throw new TypeError('invalid compiler source map');
+}
+function strings(value) {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === 'string' && item.isWellFormed())
+  );
+}
+function record(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
 new TextEncoder();
 new TextDecoder('utf-8', { fatal: true });
 var REPLAY_MAX_FRAMES = 36e3;
@@ -5644,27 +6532,33 @@ function hasOnlyKeys(value, expected) {
 async function runHeadless(value) {
   if (!isHeadlessRequest(value)) throw new TypeError('invalid MOD-01 headless request');
   const request = value;
-  const factory = readFactory(
-    await import(
-      `data:text/javascript;base64,${Buffer.from(request.javascript).toString('base64')}`
-    ),
-  );
-  const files = Object.fromEntries(
-    Object.entries(request.entries).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
-  );
-  decodeRuntimeAssets(request.manifest.assets, files, request.manifest.display);
-  const runtime = createConsoleRuntime(factory, {
+  const { runtime, metadata } = await loadRuntimeGame(request.game, {
     seed: request.seed,
-    workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
-    updateRate: request.manifest.updateRate,
-    assets: {
-      declarations: request.manifest.assets,
-      files,
-      displayPath: request.manifest.display,
-    },
-    save: Uint8Array.from(request.save),
-    rom: Uint8Array.from(request.rom),
+    parameter: request.parameter,
+    saves: Object.fromEntries(
+      Object.entries(request.saves).map(([id, image]) => [
+        id,
+        decodeRuntimeBytes(image, HARDWARE.saveCapacityBytes),
+      ]),
+    ),
   });
+  const initial = runtime.snapshot();
+  const members = Object.fromEntries(
+    [...metadata].map(([alias, member]) => {
+      const rom = decodeRuntimeBytes(member.rom, HARDWARE.cartridgeCapacityBytes);
+      return [
+        alias,
+        {
+          id: member.manifest.id,
+          bytes: rom.length,
+          sha256: sha256(rom),
+        },
+      ];
+    }),
+  );
+  const main = metadata.get('main'),
+    entry = members.main;
+  if (main === void 0 || entry === void 0) throw new TypeError('missing admitted game entry');
   const inputs = replayInputFrames(request.trace);
   const frameResults = [];
   const commandHash = createHash('sha256');
@@ -5690,17 +6584,25 @@ async function runHeadless(value) {
       voicePeak = Math.max(voicePeak, result.output.audio.activeVoices);
       frameResults.push({
         frame: result.frame,
+        cartridgeFrame: result.cartridgeFrame,
+        cartridgeAlias: result.cartridgeAlias,
+        cartridgeId: result.cartridgeId,
         workUnits: result.workUnits,
         framebufferSha256: sha256(result.output.indexedPixels),
-        stateSha256: sha256(canonicalBytes(snapshot)),
+        stateSha256: sha256(stateBytes(snapshot)),
+        snapshotSha256: sha256(canonicalBytes(snapshot)),
         audioCommandSha256: sha256(commands),
         pcmSha256: sha256(framePcm),
-        saveSha256: sha256(snapshot.save.committed),
+        saveSha256: sha256(canonicalBytes(snapshot.saves)),
       });
     } catch (error) {
       if (!(error instanceof RuntimeFault)) throw error;
+      const status = runtime.inspect();
       fault = {
         frame,
+        cartridgeFrame: status.cartridgeFrame,
+        cartridgeAlias: status.cartridgeAlias,
+        cartridgeId: status.cartridgeId,
         code: error.code,
         message: error.message,
         sourceSpan: error.sourceSpan,
@@ -5710,18 +6612,21 @@ async function runHeadless(value) {
   const finalSnapshot = runtime.snapshot();
   const final = frameResults.at(-1);
   return {
-    revision: 1,
-    cartridge: {
-      id: request.manifest.id,
-      bytes: request.rom.length,
-      sha256: sha256(Uint8Array.from(request.rom)),
+    revision: 2,
+    cartridge: entry,
+    game: {
+      identity: initial.identity,
+      members,
     },
     configuration: {
       seed: request.seed,
       requestedFrames: request.frames,
-      updateRate: request.manifest.updateRate,
+      updateRate: main.manifest.updateRate,
       inputTraceSha256: sha256(canonicalBytes(request.trace)),
-      initialSaveSha256: sha256(Uint8Array.from(request.save)),
+      initialSaveSha256: sha256(canonicalBytes(initial.saves)),
+      initialSaves: saveHashes(initial),
+      parameter: request.parameter,
+      debug: initial.debug,
     },
     frames: frameResults,
     summary: {
@@ -5733,23 +6638,20 @@ async function runHeadless(value) {
       voicePeak,
       busMappedBytes: runtime.memoryRegions().reduce((total, region) => total + region.length, 0),
       finalFramebufferSha256: final?.framebufferSha256 ?? sha256(/* @__PURE__ */ new Uint8Array()),
-      finalStateSha256: sha256(canonicalBytes(finalSnapshot)),
+      finalStateSha256: sha256(stateBytes(finalSnapshot)),
+      finalSnapshotSha256: sha256(canonicalBytes(finalSnapshot)),
       audioCommandsSha256: commandHash.digest('hex'),
       pcmSha256: pcmHash.digest('hex'),
-      finalSaveSha256: sha256(finalSnapshot.save.committed),
+      finalSaveSha256: sha256(canonicalBytes(finalSnapshot.saves)),
+      finalSaves: saveHashes(finalSnapshot),
     },
     ...(fault === void 0 ? {} : { fault }),
   };
 }
 function isHeadlessRequest(value) {
-  if (!isRecord(value) || !hasExactKeys(value, HEADLESS_KEYS) || value.revision !== 1) return false;
+  if (!isRecord(value) || !hasExactKeys(value, HEADLESS_KEYS) || value.revision !== 2) return false;
   if (
-    typeof value.javascript !== 'string' ||
-    value.javascript.length === 0 ||
-    value.javascript.length > 2097152 ||
-    !isManifest(value.manifest) ||
-    !isByteRecord(value.entries, 4096, 16777216) ||
-    !isByteArray(value.rom, HARDWARE.cartridgeCapacityBytes) ||
+    !isRecord(value.game) ||
     typeof value.seed !== 'number' ||
     !Number.isSafeInteger(value.seed) ||
     value.seed < 0 ||
@@ -5759,72 +6661,20 @@ function isHeadlessRequest(value) {
     value.frames < 0 ||
     value.frames > 36e3 ||
     !isReplayTrace(value.trace, value.frames) ||
-    !isByteArray(value.save, HARDWARE.saveCapacityBytes)
+    typeof value.parameter !== 'string' ||
+    !isRecord(value.saves) ||
+    Object.keys(value.saves).length > 32 ||
+    Object.entries(value.saves).some(
+      ([id, image]) =>
+        !/^[a-z0-9][a-z0-9.-]{2,63}$/.test(id) ||
+        typeof image !== 'string' ||
+        image.length > Math.ceil(HARDWARE.saveCapacityBytes / 3) * 4,
+    )
   )
     return false;
   return true;
 }
-var HEADLESS_KEYS = [
-  'revision',
-  'javascript',
-  'manifest',
-  'entries',
-  'rom',
-  'seed',
-  'frames',
-  'trace',
-  'save',
-];
-function isManifest(value) {
-  return (
-    isRecord(value) &&
-    hasExactKeys(value, ['id', 'updateRate', 'display', 'assets']) &&
-    typeof value.id === 'string' &&
-    /^[a-z0-9][a-z0-9.-]{2,63}$/.test(value.id) &&
-    (value.updateRate === 30 || value.updateRate === 60) &&
-    (value.display === null || typeof value.display === 'string') &&
-    isAssetDeclarations(value.assets)
-  );
-}
-function isAssetDeclarations(value) {
-  if (!isRecord(value) || Object.keys(value).length > 4096) return false;
-  return Object.values(value).every(
-    (asset) =>
-      isRecord(asset) &&
-      hasExactKeys(asset, ['kind', 'path']) &&
-      typeof asset.kind === 'string' &&
-      ['sprite', 'animation', 'tile_set', 'map', 'font', 'sound', 'music'].includes(asset.kind) &&
-      typeof asset.path === 'string' &&
-      asset.path.length > 0 &&
-      asset.path.length <= 1024,
-  );
-}
-function isByteRecord(value, entryLimit, byteLimit) {
-  if (!isRecord(value) || Object.keys(value).length > entryLimit) return false;
-  let total = 0;
-  for (const [path, bytes] of Object.entries(value)) {
-    if (path.length === 0 || path.length > 1024 || !isByteArray(bytes, byteLimit - total))
-      return false;
-    total += bytes.length;
-  }
-  return true;
-}
-function isByteArray(value, limit) {
-  return (
-    Array.isArray(value) &&
-    value.length <= limit &&
-    Object.keys(value).length === value.length &&
-    value.every((byte) => Number.isSafeInteger(byte) && byte >= 0 && byte <= 255)
-  );
-}
-function readFactory(value) {
-  if (!isRecord(value) || typeof value.default !== 'function')
-    throw new RuntimeFault('M019101', 'compiled module does not export a cartridge factory', {
-      start: 0,
-      end: 0,
-    });
-  return value.default;
-}
+var HEADLESS_KEYS = ['revision', 'game', 'seed', 'frames', 'trace', 'parameter', 'saves'];
 function pcmBytes(frame) {
   const samples = frame.output.audio.left.length;
   const bytes = new Uint8Array(samples * 8);
@@ -5838,13 +6688,36 @@ function pcmBytes(frame) {
 function canonicalBytes(value) {
   return new TextEncoder().encode(JSON.stringify(canonicalValue(value)));
 }
+function stateBytes(snapshot) {
+  return canonicalBytes(
+    Object.fromEntries(
+      Object.entries(snapshot).filter(([key]) => key !== 'identity' && key !== 'debug'),
+    ),
+  );
+}
+function saveHashes(snapshot) {
+  return Object.fromEntries(
+    Object.entries(snapshot.saves).map(([id, image]) => [id, sha256(image)]),
+  );
+}
 function canonicalValue(value) {
-  if (value instanceof Uint8Array || value instanceof Float32Array) return [...value];
+  if (value instanceof Uint8Array)
+    return {
+      $bytes: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('hex'),
+    };
+  if (value instanceof Float32Array) {
+    const bytes = new Uint8Array(value.length * 4);
+    const view = new DataView(bytes.buffer);
+    value.forEach((sample, index) => {
+      view.setFloat32(index * 4, sample, true);
+    });
+    return { $float32le: Buffer.from(bytes).toString('hex') };
+  }
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (isRecord(value))
     return Object.fromEntries(
       Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, item]) => [key, canonicalValue(item)]),
     );
   return value;
@@ -5859,7 +6732,7 @@ function hasExactKeys(value, keys) {
   );
 }
 function isRecord(value) {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 //#endregion
 //#region src/headless-cli.ts

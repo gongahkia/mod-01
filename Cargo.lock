@@ -1503,6 +1503,7 @@ dependencies = [
 name = "mod01-cli"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "modl-core",
  "serde_json",

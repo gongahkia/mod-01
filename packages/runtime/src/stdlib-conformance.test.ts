@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createConsoleRuntime } from './console-runtime';
 import { runHeadless } from './headless';
+import { runtimeGameFixture } from './test-support/game';
 import { emptyInputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 
@@ -56,15 +57,18 @@ describe('compiled standard library across production hosts', () => {
         const javascript = readFileSync(output, 'utf8');
         const manifest = { id: 'stdlib', updateRate: 60, display: null, assets: {} };
         const headless = await runHeadless({
-          revision: 1,
-          javascript,
-          manifest,
-          entries: {},
-          rom: [1],
+          revision: 2,
+          game: runtimeGameFixture({
+            javascript,
+            manifest,
+            debug,
+            sourceMap: readFileSync(output.replace(/\.mjs$/, '.js.map'), 'utf8'),
+          }),
           seed: 0,
           frames: 2,
           trace: { revision: 1, frames: [] },
-          save: [],
+          parameter: '',
+          saves: {},
         });
         expect(headless.fault).toBeUndefined();
         expect(headless.summary.completedFrames).toBe(2);

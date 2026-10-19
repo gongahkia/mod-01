@@ -51,6 +51,23 @@ choices remain outstanding.
 
 ## Progress
 
+- CLI `pack`/`check`/`watch`/`info --source` and headless play now admit whole games
+  through shared Rust preparation and the production scheduler. Three new CLI
+  integrations exercise a shipping bundle larger than one ROM (each member still
+  <1 MiB), source/packed equivalence, exact per-ID save values, all 32 real MODL
+  members, failed-frame save/transition isolation and invalid unused dependencies
+  without Node. The full gate passes: 272 runtime tests, 117 core unit/integrations,
+  95 native tests, 25 CLI integrations, all format/lint/type/Clippy/build checks,
+  nine reproducible raw/PNG pairs and 120 packaged Linux frames without PATH.
+  Current headless envelopes/results
+  are revision 2, with member-tagged output, whole-game identity/state, per-ID save
+  hashes and a separately identity/mode-bound snapshot hash. State assertions
+  exclude only identity/mode so embedded tests need no self-referential source
+  hash; canonical typed bytes use tagged hex instead of huge temporary arrays.
+  The replay audit proves all original cartridge bytes, input hashes, work peaks,
+  final/checkpoint pixels, audio commands and PCM unchanged; only the three state
+  hashes are refreshed for the new whole-game representation. Native adapters,
+  bundle-aware editing/debugging/export and final cross-host QA remain open.
 - Scheduler/host-handoff checkpoint passes the complete `scripts/check.sh` gate:
   270 runtime tests, 117 core unit/integration tests, 95 native tests, 22 CLI
   integrations, formatting/lint/types, warning-free all-feature workspace Clippy,

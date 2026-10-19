@@ -8,6 +8,8 @@ export * from './errors';
 export * from './font';
 export * from './graphics';
 export * from './gif';
+export * from './game-definition';
+export * from './game-runtime';
 export * from './hardware';
 export * from './input';
 export * from './machine';

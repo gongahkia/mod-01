@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- The production whole-game scheduler is implemented with 18 tests, including
+  real release/debug MODL factories: completed-frame-only loads/reloads, deferred
+  destination boot, one global frame/input timeline, explicit parameter transfer,
+  per-ID committed saves, all-32-member cycling and checkpoint restoration.
+  Compatible data reloads preserve state/tasks, RAM, RNG, ROM/rate/display,
+  saves/menu and input history while resetting the asset bank and old voices.
+  Failed candidate restore leaves a live source continuation untouched; faults
+  cannot apply requests or persist their frame. All 262 runtime tests (41 files),
+  rebuilt production hosts, lint/types and formatting pass. Host adapters,
+  CLI/Studio authoring/debug integration and
+  cross-host acceptance verification remain open; the multi-cart row stays open.
 - A replayable input-owner barrier is implemented for scheduler integration:
   after a cartridge load, held buttons on all four ports and pointer presses stay
   blocked until release; unrelated fresh controls, hover and explicit menu events

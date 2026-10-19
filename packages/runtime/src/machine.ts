@@ -378,6 +378,17 @@ export class DeterministicMachine implements CartridgeApi {
     });
   }
 
+  /** Small read-only status; unlike a checkpoint this is safe during a source suspension. */
+  public inspectExecution(): ExecutionSnapshot {
+    return {
+      booted: this.booted,
+      updates: this.completedUpdates,
+      phase: this.phase,
+      rasterLine: this.rasterLine ?? null,
+      fault: this.lastFault === null ? null : structuredClone(this.lastFault),
+    };
+  }
+
   public restore(value: unknown): void {
     if (!isMachineSnapshot(value)) {
       throw new TypeError('invalid MOD-01 machine snapshot');

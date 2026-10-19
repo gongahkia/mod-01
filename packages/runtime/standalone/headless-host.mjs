@@ -4128,6 +4128,16 @@ var DeterministicMachine = class {
       },
     });
   }
+  /** Small read-only status; unlike a checkpoint this is safe during a source suspension. */
+  inspectExecution() {
+    return {
+      booted: this.booted,
+      updates: this.completedUpdates,
+      phase: this.phase,
+      rasterLine: this.rasterLine ?? null,
+      fault: this.lastFault === null ? null : structuredClone(this.lastFault),
+    };
+  }
   restore(value) {
     if (!isMachineSnapshot(value)) throw new TypeError('invalid MOD-01 machine snapshot');
     const snapshot = value;
@@ -5186,6 +5196,13 @@ function createConsoleRuntime(factory, configuration, services = {}) {
     },
     inspectMenu() {
       return requireMachine().inspectMenu();
+    },
+    inspectExecution() {
+      const active = requireMachine();
+      return {
+        frame: active.frame,
+        ...active.inspectExecution(),
+      };
     },
   };
   function captureSnapshot() {

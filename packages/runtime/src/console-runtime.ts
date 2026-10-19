@@ -28,6 +28,7 @@ import {
 import { isInputFrame, type InputFrame } from './input';
 import type { MenuItem } from './menu';
 import { isConsoleConfiguration } from './protocol';
+import type { ExecutionSnapshot } from './system';
 import {
   isCartridgeControlSnapshot,
   type CartridgeControl,
@@ -72,6 +73,7 @@ export interface ConsoleRuntime {
   editMemory(address: number, bytes: Uint8Array): void;
   memoryRegions(): readonly MemoryRegionDescriptor[];
   inspectMenu(): readonly MenuItem[];
+  inspectExecution(): ExecutionSnapshot & { readonly frame: number };
 }
 
 export interface ConsoleRuntimeSnapshot {
@@ -404,6 +406,10 @@ export function createConsoleRuntime(
     },
     inspectMenu() {
       return requireMachine().inspectMenu();
+    },
+    inspectExecution() {
+      const active = requireMachine();
+      return { frame: active.frame, ...active.inspectExecution() };
     },
   };
 

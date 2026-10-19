@@ -1,10 +1,11 @@
 # Local multi-cartridge games
 
 Status: source preservation and whole-game packing/admission are implemented in
-the shared Rust core. Typed request calls and their console/debug snapshot state
-are implemented too. Actual runtime switching, asset reload, state/save handling,
-CLI/Studio controls and cross-host verification are still being implemented.
-This document does not claim that those runtime workflows are available yet.
+the shared Rust core. The production game scheduler implements boundary switching,
+asset reload, per-ID saves, input ownership and whole-game checkpoints, with real
+release/debug MODL tests. CLI/Studio controls, host adapters and cross-host
+verification are still being implemented. These workflows are not yet exposed
+as a complete native/CLI feature.
 
 ## Authoring and admission
 
@@ -111,9 +112,59 @@ target consoles without executing start; restoring an existing machine does
 not run start again. These behaviours run through actual release/debug MODL
 compiler output in `cartridge-control-conformance.test.ts`.
 
-The game scheduler and host adapters are still pending. Entry-only hosts reject
-these requests explicitly; accepting the language syntax is not yet a claim
-that native/CLI multi-cart gameplay is complete.
+## Frame, input and save ownership
+
+`GameRuntime` owns one admitted catalog and one monotonically increasing display
+frame/input timeline. Results identify the cartridge alias, persistent ID and
+local frame that produced them, even when the next cartridge is already prepared.
+Requests apply only after a successful completed frame, never while stepping a
+statement, at the debug boot boundary, or after a fault. The destination is
+prepared without running start; start runs on the next execution request.
+
+A load starts fresh state, tasks, RAM, framebuffer, menu, voices and local time,
+with the game's original seed and explicit transfer parameter. Only committed
+save images carry over, keyed by the member's distinct persistent cartridge ID.
+The old cartridge's final frame/save commit still belongs to that old ID. A
+faulted frame neither applies its pending request nor updates the game's committed
+save catalog. Saves latched during start are delivered after its first successful
+frame, not implicitly persisted by taking a checkpoint.
+
+Held controls on all four ports and both pointer presses are quarantined at a
+load until release. Hover and unrelated new controls remain available. Debug
+boot stepping cannot accidentally release this barrier, and later statement-step
+messages cannot replace the first input sampled for an active logical frame.
+Explicit pause-menu activations remain explicit replayable events.
+
+## Asset-only reload
+
+A bank is compatible when it has exactly the same declared asset names/kinds
+(or matching query-only map names), and the combined configuration fits the
+ordinary runtime input limits. The active program, ROM, update rate, work budget,
+parameter and display configuration remain its own. The donor contributes only
+the declared visual/audio assets; it is not booted. RAM, state/tasks, RNG, save
+device, menu, local time, current framebuffer and input history survive. Mutable
+asset bytes return to the donor's admitted source; old voices/tracker reset.
+There is no input quarantine on a data-only reload. Reloading the active alias
+restores that cartridge's original asset bank.
+
+Reload work is `1 + ceil((1048576 + 8192*24 + 4096*32 + audioAssetCount*32)/64)`:
+the fixed visual bank, allocation table, descriptor table and donor audio
+descriptors. This synthetic copy/reset cost is charged before queuing the request,
+within the current frame's normal 50,000-unit ceiling.
+
+Whole-game checkpoints use revision 1 around the current console snapshot. They
+bind the whole packed-game identity, original seed and compiler mode, active
+alias/parameter/bank, every committed save image and input-owner barrier. Restore
+constructs a deferred candidate, validates/restores all its devices and only then
+replaces the live game. Invalid restoration leaves even a suspended source
+continuation intact. Console-only checkpoints cannot substitute for these game
+checkpoints. `game-runtime.test.ts` exercises actual compiler output in both modes,
+replay input encoding, loads/reloads, tasks, faults, save isolation, 32 members,
+counter bounds and restoration failures.
+
+The native/headless adapters are still pending. Entry-only hosts reject these
+requests explicitly; the scheduler tests are not a claim that native/CLI
+multi-cart gameplay is complete.
 
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),

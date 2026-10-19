@@ -1,0 +1,28 @@
+// Complete game scheduler conformance: fresh state/RAM/RNG, explicit transfer and own saves.
+state ticks: Int = 0
+state visits: Int = 0
+on start:
+  assert cart_parameter() == "root" or cart_parameter() == "returned", "main parameter"
+  assert mem_read(0) == 0, "fresh main RAM"
+  visits = save_get_int("visits", 0) + 1
+  save_set_int("visits", visits)
+  mem_write(0, rng_int(1, 255))
+  menu_item(1, "ARENA")
+  menu_item(2, "RESTART")
+  menu_item(3, "FAIL AFTER REQUEST")
+on menu(action: Int):
+  if action == 1:
+    load_cart("arena", "score=7")
+  elif action == 2:
+    load_cart("main", "root")
+  elif action == 3:
+    save_set_int("failed", 1)
+    load_cart("arena", "bad")
+    assert false, "failed frames cannot transfer or persist"
+on update:
+  ticks += 1
+  mem_write(1, ticks)
+on draw:
+  clear(1)
+  if ticks > 1:
+    clear(2)

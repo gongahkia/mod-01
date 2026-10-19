@@ -344,12 +344,9 @@ export class Synthesizer {
     if (snapshot.tracker !== null) {
       const tracker = snapshot.tracker;
       const music = this.assets.get(tracker.music);
-      const patternName = music?.kind === 'music' ? music.order[tracker.orderIndex] : undefined;
       if (
         music?.kind !== 'music' ||
-        patternName === undefined ||
-        music.patterns[patternName]?.rows[tracker.row] === undefined ||
-        tracker.frameInRow >= music.framesPerRow
+        !validTrackerPosition(music, tracker.orderIndex, tracker.row, tracker.frameInRow)
       )
         throw new TypeError('snapshot references an invalid tracker position');
     }
@@ -374,6 +371,15 @@ export class Synthesizer {
 
   public inspectTracker(): TrackerInspection | null {
     return this.tracker === null ? null : { ...this.tracker };
+  }
+
+  /** Start or seek the real sequencer without resetting voices or the synth clock. */
+  public playMusic(name: string, orderIndex = 0, row = 0): void {
+    const music = this.assets.get(name);
+    if (music?.kind !== 'music') throw new TypeError(`missing Music asset '${name}'`);
+    if (!validTrackerPosition(music, orderIndex, row, 0))
+      throw new RangeError('invalid tracker order or row');
+    this.tracker = { music: name, orderIndex, row, frameInRow: 0 };
   }
 
   public memoryRegions(): readonly MemoryRegion[] {
@@ -454,13 +460,7 @@ export class Synthesizer {
       row: view.getUint32(8, true),
       frameInRow: view.getUint32(12, true),
     };
-    const patternName = music.order[next.orderIndex];
-    if (
-      patternName === undefined ||
-      music.patterns[patternName]?.rows[next.row] === undefined ||
-      next.frameInRow >= music.framesPerRow
-    )
-      return undefined;
+    if (!validTrackerPosition(music, next.orderIndex, next.row, next.frameInRow)) return undefined;
     return () => {
       this.tracker = next;
     };
@@ -523,11 +523,7 @@ export class Synthesizer {
       case 'music': {
         const [handle] = expectArguments(command, 1);
         const name = readAssetName(handle, 'Music');
-        const music = this.assets.get(name);
-        if (music?.kind !== 'music') {
-          throw new TypeError(`missing Music asset '${name}'`);
-        }
-        this.tracker = { music: name, orderIndex: 0, row: 0, frameInRow: 0 };
+        this.playMusic(name);
         return;
       }
       case 'music_stop':
@@ -635,6 +631,23 @@ export class Synthesizer {
       voice.phase = (voice.phase + phaseStep) % 1;
     }
   }
+}
+
+function validTrackerPosition(
+  music: MusicAsset,
+  orderIndex: number,
+  row: number,
+  frameInRow: number,
+): boolean {
+  if (
+    !audioCounter(orderIndex) ||
+    !audioCounter(row) ||
+    !audioCounter(frameInRow) ||
+    frameInRow >= music.framesPerRow
+  )
+    return false;
+  const name = music.order[orderIndex];
+  return name !== undefined && music.patterns[name]?.rows[row] !== undefined;
 }
 
 function emptyVoice(slot: number): Voice {

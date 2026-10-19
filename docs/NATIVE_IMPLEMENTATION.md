@@ -51,6 +51,11 @@ choices remain outstanding.
 
 ## Progress
 
+- Bundle container preparation shares the existing canonical M01C archive codec
+  with explicit container bounds; logical cartridges retain the same 1 MiB packed,
+  16 MiB decoded and 4,096-entry limits. Tests cover exact bounds, corruption,
+  traversal and trailing bytes. No new hardware profile or historical format was
+  added. All existing core tests and workspace Clippy pass.
 - Multi-cartridge admission foundation: `modl-core::bundle` validates 1–32 current
   cartridges with a required `main` alias, bounded local aliases/source allocation,
   unique persistent cartridge IDs and ordinary per-member compiler/asset/packed

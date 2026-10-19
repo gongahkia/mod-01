@@ -18,6 +18,19 @@ const MAGIC: &[u8; 8] = b"MOD-01\x1a\x02";
 pub const CARTRIDGE_CAPACITY_BYTES: usize = 1024 * 1024;
 const MAX_UNPACKED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
+
+/// Resource bounds belong to the container, not a second hardware/format profile.
+#[derive(Clone, Copy)]
+pub(crate) struct ArchiveLimits {
+    pub packed: usize,
+    pub unpacked: usize,
+    pub entries: usize,
+}
+pub(crate) const CARTRIDGE_ARCHIVE_LIMITS: ArchiveLimits = ArchiveLimits {
+    packed: CARTRIDGE_CAPACITY_BYTES,
+    unpacked: MAX_UNPACKED_BYTES,
+    entries: MAX_ARCHIVE_ENTRIES,
+};
 const SHA256_INITIAL: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -977,7 +990,28 @@ fn import_path<'a>(parts: impl Iterator<Item = &'a str>) -> Result<String, Cartr
 ///
 /// Returns a stable `M014xxx` error for malformed, oversized, non-canonical, or corrupted input.
 pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError> {
-    if bytes.len() > CARTRIDGE_CAPACITY_BYTES {
+    let entries = decode_archive(bytes, CARTRIDGE_ARCHIVE_LIMITS)?;
+    let manifest_bytes = entries.get("manifest.json").ok_or_else(|| {
+        cartridge_error("M014012", "cartridge has no canonical manifest".to_owned())
+    })?;
+    let manifest: PackedManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
+        cartridge_error("M014012", format!("packed manifest is invalid: {error}"))
+    })?;
+    if serde_json::to_vec(&manifest).ok().as_deref() != Some(manifest_bytes) {
+        return Err(cartridge_error(
+            "M014012",
+            "packed manifest is not canonical JSON".to_owned(),
+        ));
+    }
+    validate_packed_manifest(&manifest, &entries)?;
+    Ok(DecodedCartridge { manifest, entries })
+}
+
+pub(crate) fn decode_archive(
+    bytes: &[u8],
+    limits: ArchiveLimits,
+) -> Result<BTreeMap<String, Vec<u8>>, CartridgeError> {
+    if bytes.len() > limits.packed {
         return Err(cartridge_error(
             "M014010",
             "cartridge exceeds the packed capacity".to_owned(),
@@ -991,7 +1025,7 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
         ));
     }
     let entry_count = usize::try_from(reader.u32()?).unwrap_or(usize::MAX);
-    if entry_count == 0 || entry_count > MAX_ARCHIVE_ENTRIES {
+    if entry_count == 0 || entry_count > limits.entries {
         return Err(cartridge_error(
             "M014010",
             "cartridge entry count is outside format limits".to_owned(),
@@ -1023,7 +1057,7 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
         unpacked_bytes = unpacked_bytes
             .checked_add(raw_length)
             .ok_or_else(|| cartridge_error("M014010", "unpacked size overflow".to_owned()))?;
-        if unpacked_bytes > MAX_UNPACKED_BYTES {
+        if unpacked_bytes > limits.unpacked {
             return Err(cartridge_error(
                 "M014010",
                 "cartridge expands beyond the decoder limit".to_owned(),
@@ -1052,20 +1086,7 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
             "cartridge contains trailing bytes".to_owned(),
         ));
     }
-    let manifest_bytes = entries.get("manifest.json").ok_or_else(|| {
-        cartridge_error("M014012", "cartridge has no canonical manifest".to_owned())
-    })?;
-    let manifest: PackedManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
-        cartridge_error("M014012", format!("packed manifest is invalid: {error}"))
-    })?;
-    if serde_json::to_vec(&manifest).ok().as_deref() != Some(manifest_bytes) {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest is not canonical JSON".to_owned(),
-        ));
-    }
-    validate_packed_manifest(&manifest, &entries)?;
-    Ok(DecodedCartridge { manifest, entries })
+    Ok(entries)
 }
 
 /// Reconstructs the Git-friendly project representation from a validated cartridge.
@@ -1358,7 +1379,14 @@ fn insert_unique(
 }
 
 fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, CartridgeError> {
-    if entries.is_empty() || entries.len() > MAX_ARCHIVE_ENTRIES {
+    encode_archive_with_limits(entries, CARTRIDGE_ARCHIVE_LIMITS)
+}
+
+pub(crate) fn encode_archive_with_limits(
+    entries: &BTreeMap<String, Vec<u8>>,
+    limits: ArchiveLimits,
+) -> Result<Vec<u8>, CartridgeError> {
+    if entries.is_empty() || entries.len() > limits.entries {
         return Err(cartridge_error(
             "M014005",
             "archive entry count is outside format limits".to_owned(),
@@ -1371,7 +1399,17 @@ fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, Cartri
             .map_err(|_| cartridge_error("M014005", "too many archive entries".to_owned()))?
             .to_le_bytes(),
     );
+    let mut unpacked = 0_usize;
     for (path, raw) in entries {
+        unpacked = unpacked.checked_add(raw.len()).ok_or_else(|| {
+            cartridge_error("M014005", "archive unpacked size overflow".to_owned())
+        })?;
+        if unpacked > limits.unpacked {
+            return Err(cartridge_error(
+                "M014005",
+                "archive exceeds its unpacked capacity".to_owned(),
+            ));
+        }
         let path = normalize_archive_path(path)?;
         let path_bytes = path.as_bytes();
         let encoded = rle_encode(raw);
@@ -1395,10 +1433,10 @@ fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, Cartri
         output.extend_from_slice(&sha256(raw));
         output.extend_from_slice(path_bytes);
         output.extend_from_slice(&encoded);
-        if output.len() > CARTRIDGE_CAPACITY_BYTES {
+        if output.len() > limits.packed {
             return Err(cartridge_error(
                 "M014005",
-                "packed cartridge exceeds the 1 MiB capacity".to_owned(),
+                "packed archive exceeds its capacity".to_owned(),
             ));
         }
     }
@@ -1656,6 +1694,61 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_archive_codec_enforces_container_bounds_without_relaxing_cartridge_limits() {
+        use super::{ArchiveLimits, decode_archive, encode_archive_with_limits};
+        let entries = std::collections::BTreeMap::from([
+            ("cartridges/main.m01c".to_owned(), vec![7; 1024]),
+            (
+                "source/workcart.m01w".to_owned(),
+                b"authored source".to_vec(),
+            ),
+        ]);
+        let limits = ArchiveLimits {
+            packed: 4096,
+            unpacked: 2048,
+            entries: 2,
+        };
+        let bytes = encode_archive_with_limits(&entries, limits).unwrap();
+        assert_eq!(decode_archive(&bytes, limits).unwrap(), entries);
+        let exact = ArchiveLimits {
+            packed: bytes.len(),
+            unpacked: 1038,
+            entries: 2,
+        };
+        assert_eq!(encode_archive_with_limits(&entries, exact).unwrap(), bytes);
+        for restrictive in [
+            ArchiveLimits {
+                packed: bytes.len() - 1,
+                ..exact
+            },
+            ArchiveLimits {
+                unpacked: 1037,
+                ..exact
+            },
+            ArchiveLimits {
+                entries: 1,
+                ..exact
+            },
+        ] {
+            assert!(encode_archive_with_limits(&entries, restrictive).is_err());
+            assert!(decode_archive(&bytes, restrictive).is_err());
+        }
+        let large = std::collections::BTreeMap::from([(
+            "large".to_owned(),
+            vec![0; super::MAX_UNPACKED_BYTES + 1],
+        )]);
+        assert!(encode_archive_with_limits(&large, super::CARTRIDGE_ARCHIVE_LIMITS).is_err());
+        let invalid = std::collections::BTreeMap::from([("../escape".to_owned(), vec![1])]);
+        assert!(encode_archive_with_limits(&invalid, limits).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_archive(&trailing, limits).is_err());
+        let mut corrupt = bytes;
+        corrupt[25] ^= 1;
+        assert!(decode_archive(&corrupt, limits).is_err());
+    }
+
     use super::{
         CARTRIDGE_CAPACITY_BYTES, compile_project, decode_cartridge, load_cartridge_program,
         pack_project, rle_decode, rle_encode, sha256_hex, unpack_cartridge_project,

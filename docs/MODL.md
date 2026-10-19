@@ -93,7 +93,7 @@ payload-free variants require no extra work units. Traversal uses the normal fra
 ## Static types
 
 `Num` is the deterministic numeric path and `Int` is validated for integer-only operations. Integer
-literals may initialize `Num`, and palette indices from 0 through 255 may initialize `Color`; other
+values widen to `Num`, and palette-index literals from 0 through 255 may initialize `Color`; other
 implicit conversions are rejected. `Bool`, `Text`, `Vec2`, `Rect`, `Controller`, and `Button` are
 distinct value types. `Unit` is the no-value function return type.
 

@@ -51,6 +51,14 @@ choices remain outstanding.
 
 ## Progress
 
+- Shared Rust host preparation is implemented in `runtime_game.rs`: every admitted
+  member is compiled in one mode with its own symbols/source map, declared data,
+  manifest and logical ROM, plus the whole-game identity. Four tests verify both
+  modes/all 32 members, exact ROM/asset transport, deterministic serialization,
+  independently mapped identical module paths, source/comment identity binding,
+  authoring-file exclusion and the existing 2 MiB compiled-source transport bound.
+  All core tests and warning-free core Clippy pass. This is the common handoff
+  for the pending native/headless adapter integration, not completion of that row.
 - The production whole-game scheduler is implemented with 18 tests, including
   real release/debug MODL factories: completed-frame-only loads/reloads, deferred
   destination boot, one global frame/input timeline, explicit parameter transfer,

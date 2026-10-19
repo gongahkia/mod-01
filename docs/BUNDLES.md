@@ -166,6 +166,18 @@ The native/headless adapters are still pending. Entry-only hosts reject these
 requests explicitly; the scheduler tests are not a claim that native/CLI
 multi-cart gameplay is complete.
 
+`runtime_game::prepare_runtime_game` provides the shared Rust-to-host handoff
+from a privately admitted `PackedGame`. It compiles **every** member in the chosen
+release/debug mode and retains each alias's own symbols, source map, manifest,
+declared asset/display bytes and canonical ≤1 MiB logical ROM. Asset bytes and
+ROM use base64 transport; authored source/artwork/auxiliary files are not module
+imports. The whole-game identity and compiler mode are attached once to this
+internal revision-1 host payload, not a new cartridge format. Both adapters will
+consume this same data structure instead of rebuilding different entry-only
+requests. Compiled JavaScript has an explicit inclusive 2 MiB-per-member transport
+bound, matching the existing native host limit; overflow is `M014072` and is
+alias-qualified. This helper does not execute JavaScript or boot any member.
+
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),
 sections 3.4 and 6.1/6.7. MOD-01 does not import PICO-8 cartridges or add online/BBS

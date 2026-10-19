@@ -36,6 +36,7 @@ mod sprite;
 #[cfg(test)]
 mod studio_asset_tests;
 mod syntax;
+mod touch_controller;
 mod tracker;
 mod ui_assets;
 mod ui_theme;
@@ -147,6 +148,7 @@ struct StudioApp {
     running: bool,
     player_mode: bool,
     player_paused: bool,
+    touch_controller: touch_controller::TouchController,
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
@@ -236,6 +238,7 @@ impl StudioApp {
             running: false,
             player_mode: false,
             player_paused: false,
+            touch_controller: touch_controller::TouchController::default(),
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
@@ -1156,6 +1159,7 @@ impl StudioApp {
     }
 
     fn run_mode(&mut self, debug: bool) {
+        self.touch_controller.clear();
         if let Err(error) = self.sync_asset() {
             self.status = error;
             return;
@@ -1218,6 +1222,7 @@ impl StudioApp {
     }
 
     fn stop(&mut self) {
+        self.touch_controller.clear();
         self.live_audio.stop();
         if self.preview_pending && !self.preview_cancelling {
             self.preview_pending = false;
@@ -1233,6 +1238,15 @@ impl StudioApp {
             audio.clear();
         }
         let _ = self.runtime.send(json!({"type":"stop"}));
+    }
+
+    fn set_player_paused(&mut self, paused: bool) {
+        self.player_paused = paused;
+        self.touch_controller.clear();
+        if let Some(audio) = &self.audio {
+            audio.clear();
+        }
+        self.last_tick = Instant::now();
     }
 
     fn process_events(&mut self, context: &egui::Context) {
@@ -1284,6 +1298,7 @@ impl StudioApp {
                     self.status = "DEBUG SNAPSHOT CAPTURED".to_owned();
                 }
                 Some("restored") => {
+                    self.touch_controller.clear();
                     self.status = "DEBUG SNAPSHOT RESTORED".to_owned();
                     if let Some(audio) = &self.audio {
                         audio.clear();
@@ -1388,8 +1403,9 @@ impl StudioApp {
                 }
             }
         }
-        if let (Some(audio), Some(left), Some(right)) =
-            (&self.audio, event["left"].as_str(), event["right"].as_str())
+        if !self.player_paused
+            && let (Some(audio), Some(left), Some(right)) =
+                (&self.audio, event["left"].as_str(), event["right"].as_str())
         {
             if let Err(error) = audio.push(left, right) {
                 self.status = format!("AUDIO: {error}");
@@ -1633,7 +1649,8 @@ impl StudioApp {
                 }
             }
         }
-        let live_input = json!({"controllers":controllers,"pointer":pointer});
+        let mut live_input = json!({"controllers":controllers,"pointer":pointer});
+        self.touch_controller.apply_to(&mut live_input);
         let input = self.replay_playback.as_ref().map_or_else(
             || live_input.clone(),
             |frames| {
@@ -1656,6 +1673,7 @@ impl StudioApp {
             self.status = error;
             self.running = false;
         } else {
+            self.touch_controller.consume();
             self.pending = true;
         }
     }
@@ -2868,6 +2886,9 @@ impl eframe::App for StudioApp {
         }
         self.live_audio.poll(&context, self.audio.as_ref());
         self.playground.poll(&context);
+        if !self.player_mode {
+            self.touch_controller.clear();
+        }
         if self.player_mode {
             self.player_ui(root);
             return;

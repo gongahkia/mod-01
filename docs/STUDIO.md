@@ -117,6 +117,24 @@ It uses the same execution/input/audio/save devices. PAUSE/Escape suspends frame
 submission; RESTART reboots; SOURCE opens the authored modules/assets in Studio.
 [native games](NATIVE_GAMES.md) documents package layout and bridge verification.
 
+TOUCH enables an optional native port-one D-pad, A/B/X/Y, L/R and Start pad in
+that game surface. It uses independent device/finger IDs (up to 32 contacts),
+including diagonal D-pad corners. Fingers must start inside their controller
+zone; moving out releases its held bits and moving back can press again. An
+ended short tap remains latched until one input submission; cancellation drops
+an undelivered tap. Releasing one finger never releases another finger's buttons.
+Mouse emulation is available for desktop QA, with touch-generated mouse aliases
+ignored. Owned controller gestures never inject game-pointer clicks.
+
+MENU pauses/resumes the native player and is not delivered as a game button.
+Pause, focus loss, hide/disable, project stop/reload, snapshot restore or layout
+change clears controller ownership; lift and touch again after interruption.
+Paused/debugger/replay playback controls cannot queue live gameplay input.
+The overlay merges into the ordinary controller frame before replay recording,
+without a separate simulation/input format. At 900×600 it retains a 2× game view.
+The renderer does not submit additional VM frames while paused; an already
+submitted frame may finish, but its PCM is discarded while paused.
+
 ## Presentation and verification
 
 BigBlue Terminal Plus and Kenney pixel cursors are embedded in the native UI;

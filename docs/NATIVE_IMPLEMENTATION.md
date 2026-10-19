@@ -28,7 +28,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [x]      |
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
-| Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [ ]      |
+| Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [x]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [ ]      |
 | Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
 | Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [ ]      |
@@ -263,3 +263,14 @@ choices remain outstanding.
   startup errors, and rapid real cartridge loads with distinct framebuffer/save
   commits. Existing preview/playground cancellation tests still pass. This is
   host isolation infrastructure, not completion of multi-cartridge gameplay.
+
+- Native touch controller: optional multi-contact port-one pad, diagonals,
+  A/B/X/Y/L/R/Start, host-only MENU, short-tap latching, independent device/finger
+  ownership and cancellation/focus/layout/session release rules. Six tests cover
+  those rules plus actual egui touch injection and real native MODL/replay
+  equality for pixels/work/stereo PCM. All 63 native tests and workspace Clippy
+  pass. Native Xvfb QA used mouse emulation for start, held movement/highlight,
+  menu pause and 900×600 2× layout (`touch-player-moving.png`,
+  `touch-player-paused.png`, `touch-player-minimum-final.png`). These are software
+  event/visual checks, not physical touchscreen or audible-speaker claims. The
+  common typed cartridge-action pause menu remains its separate open requirement.

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 const MAX_FRAMES: u64 = 36_000;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-const BUTTONS: [&str; 12] = [
+pub const BUTTONS: [&str; 12] = [
     "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "menu",
 ];
 

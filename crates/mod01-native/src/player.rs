@@ -16,10 +16,7 @@ impl StudioApp {
     pub fn player_ui(&mut self, root: &mut egui::Ui) {
         let context = root.ctx().clone();
         if context.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
-            self.player_paused = !self.player_paused;
-            if let Some(audio) = &self.audio {
-                audio.clear();
-            }
+            self.set_player_paused(!self.player_paused);
         }
         egui::Panel::top("game-controls")
             .frame(ui_theme::case_frame())
@@ -38,10 +35,7 @@ impl StudioApp {
                         })
                         .clicked()
                     {
-                        self.player_paused = !self.player_paused;
-                        if let Some(audio) = &self.audio {
-                            audio.clear();
-                        }
+                        self.set_player_paused(!self.player_paused);
                     }
                     if ui.button("RESTART").clicked() {
                         self.player_paused = false;
@@ -51,6 +45,10 @@ impl StudioApp {
                         self.stop();
                         self.player_mode = false;
                         self.view = View::Code;
+                    }
+                    let mut touch = self.touch_controller.enabled();
+                    if ui.checkbox(&mut touch, "TOUCH").changed() {
+                        self.touch_controller.set_enabled(touch);
                     }
                 });
             });
@@ -63,7 +61,18 @@ impl StudioApp {
                     &self.status
                 });
                 ui.label("ARROWS / Z X A S / Q W / ENTER / ESC MENU");
+                self.touch_controller.show(
+                    ui,
+                    self.running
+                        && self.loaded
+                        && !self.player_paused
+                        && !self.debugging
+                        && self.replay_playback.is_none(),
+                );
             });
+        if self.touch_controller.take_menu_request() {
+            self.set_player_paused(!self.player_paused);
+        }
         egui::CentralPanel::default()
             .frame(ui_theme::screen_frame())
             .show(root, |ui| {

@@ -49,14 +49,32 @@ on update:
   assert map_flag(#level, 0, 0, 0, 3), "bus tile flag alias"
 
 on draw:
+  assert mem_read(327760) == 1, "default transparency bit zero"
+  assert mem_read(327791) == 0, "default upper palette opaque"
   clear(0)
   sprite(#dot, 0, 0)
   map(#level, 1, 0)
   assert mem_read(102400) == 23, "bus sprite alias"
   assert mem_read(102401) == 11, "bus tile alias"
   assert mem_read(102402) == 9, "remaining tile pixels"
+  palt(23, true)
+  sprite(#dot, 20, 0)
+  assert mem_read(102420) == 0, "masked logical source"
+  pal(23, 7)
+  palt(23, false)
+  palt(7, true)
+  sprite(#dot, 21, 0)
+  assert mem_read(102421) == 7, "remapped target does not determine transparency"
+  palt(255, true)
+  assert mem_read(327791) == 128, "upper palette bit mask"
+  mem_write(327791, 0)
+  palt_reset()
+  pal_reset()
+  assert mem_read(327760) == 1, "explicit mask reset"
+  assert mem_read(327791) == 0, "explicit upper mask reset"
+  palt(255, true)
   print("VISUAL BUS PASS", 4, 24, 11)
-  print("135B / 128K", 4, 34, 23)
+  print("135B / 1M", 4, 34, 23)
 """
 
 [[asset]]

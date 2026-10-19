@@ -408,6 +408,8 @@ impl<'syntax> Analyzer<'syntax> {
         self.builtin("clip_reset", Vec::new(), Type::Unit);
         self.builtin("pal", vec![Type::Color, Type::Color], Type::Unit);
         self.builtin("pal_reset", Vec::new(), Type::Unit);
+        self.builtin("palt", vec![Type::Color, Type::Bool], Type::Unit);
+        self.builtin("palt_reset", Vec::new(), Type::Unit);
         self.builtin("raster_scroll", vec![Type::Int, Type::Int], Type::Unit);
         self.builtin(
             "dither",

@@ -27,7 +27,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [ ]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [ ]      |
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [ ]      |
-| Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [ ]      |
+| Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [ ]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [ ]      |
 | Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
@@ -116,3 +116,13 @@ choices remain outstanding.
   inspected for evaluation, drawing, error byte spans, history restoration,
   exact wrapped source and 900×600 layout; retained in
   `output/native-qa-8iPAwp/`. No project was written during this visual QA.
+
+- Configurable transparency: `palt`/`palt_reset` use a writable 256-bit source
+  mask, before remapping, with frame/boot defaults and transactional bus restore.
+  Graphics tests cover all 256 colours, sprites/transforms/animation/maps, solid
+  primitives, raw writes, explicit reset and raster rejection. The real MODL
+  visual conformance cartridge asserts the API/MMIO alias and replays complete
+  release/debug snapshots; its native-host pixels/work match shared-core output
+  and headless execution also passes. The focused graphics/bus/hardware suite
+  passes 41 tests. Master RGB data is now shared by native tools and the runtime
+  (`f0d0e30`), fixing native colour 25 without changing console palette values.

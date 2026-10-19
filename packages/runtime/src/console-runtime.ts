@@ -599,6 +599,8 @@ const DRAW_CALLS = new Set([
   'map',
   'pal',
   'pal_reset',
+  'palt',
+  'palt_reset',
   'raster_scroll',
   'print',
   'font_print',

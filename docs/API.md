@@ -8,8 +8,8 @@ are `Int`; drawing outside the active clip is discarded.
 
 The display is a persistent, double-buffered 240x144 array of palette indices. Drawing state resets
 at the start of each frame. `Color` is always one of the 256 immutable master-palette indices.
-Logical index 0 is transparent while blitting sprites and remains an ordinary drawable framebuffer
-colour.
+Logical index 0 is transparent by default while blitting assets and remains an
+ordinary drawable framebuffer colour.
 
 | MODL call                                 | Behavior                                                                   |
 | ----------------------------------------- | -------------------------------------------------------------------------- |
@@ -28,12 +28,24 @@ colour.
 | `clip_reset()`                            | Restore the full-screen clip.                                              |
 | `pal(from, to)`                           | Remap a logical colour for later draws, or display scanout in `on raster`. |
 | `pal_reset()`                             | Restore the identity drawing remap.                                        |
+| `palt(color, transparent)`                | Set the blit-transparency bit of any source colour (0–255).                |
+| `palt_reset()`                            | Restore the blit mask: only source colour zero is transparent.             |
 | `dither(x, y, first, second, level)`      | Select a colour from a fixed 4x4 Bayer pattern; level is clamped to 0-16.  |
 
 `sprite(asset, x, y)` draws a named 1-128-pixel indexed sprite. `animation(asset, frame, x, y)`
 selects a wrapped animation frame. `sprite_xform(asset, x, y, scale, quarter_turns, flip_x, flip_y)`
 uses deterministic nearest-neighbour integer scaling from 1x through 16x and rotation in exact
 quarter turns. Transformed output is charged more heavily than an ordinary blit.
+
+The `palt` mask affects sprites, transformed sprites, animation and map tiles.
+It tests the original indexed source colour **before** the drawing palette remap.
+For example, remapping opaque colour 2 to transparent colour 0 still draws it;
+masking colour 2 skips it regardless of its remapped target. Solid primitives,
+text, clear and direct framebuffer writes ignore this blit mask. `pal_reset`
+does not change transparency. Every boot/frame resets the mask to only colour
+zero transparent. Both transparency calls cost one device work unit and consume
+one draw command; they are not legal in `on raster`. See the hardware reference
+for the writable 256-bit mask and snapshot behaviour.
 
 `map(asset, x, y)` draws every layer of a named tile map in order using 8x8 tiles. A cartridge can
 read bounded map data with `map_cell(asset, layer, x, y)`, which returns `-1` outside the map, and

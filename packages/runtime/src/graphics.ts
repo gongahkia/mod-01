@@ -109,7 +109,7 @@ export class IndexedGraphics {
   private readonly assets: VisualAssetStore;
   private readonly display: DisplayConfiguration;
   private readonly drawRegisters = new Uint8Array(80);
-  private readonly transparency = Uint8Array.of(HARDWARE.transparentColor);
+  private readonly transparency = new Uint8Array(HARDWARE.paletteSize / 8);
   private readonly state = new MemoryDrawState(this.drawRegisters);
   private readonly rasterBytes = new Uint8Array(HARDWARE.height * MEMORY.rasterStride);
   private readonly rasterView = new DataView(this.rasterBytes.buffer);
@@ -132,6 +132,7 @@ export class IndexedGraphics {
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.displayRemap.set(identityRemap());
+    this.resetTransparency();
   }
 
   public executeFrame(commands: readonly ConsoleCommand[]): GraphicsFrame {
@@ -145,6 +146,7 @@ export class IndexedGraphics {
   public beginFrame(): void {
     this.back.set(this.front);
     this.drawRegisters.fill(0);
+    this.resetTransparency();
     this.state.clipWidth = HARDWARE.width;
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
@@ -265,10 +267,10 @@ export class IndexedGraphics {
         },
       },
       {
-        name: 'transparency index',
+        name: 'blit transparency mask',
         address: MEMORY.transparency,
         bytes: this.transparency,
-        writable: false,
+        writable: true,
       },
       {
         name: 'raster callback state',
@@ -375,6 +377,21 @@ export class IndexedGraphics {
       case 'pal_reset':
         expectIntegers(command, 0);
         state.remap.set(identityRemap());
+        return;
+      case 'palt': {
+        if (command.arguments.length !== 2) throw new TypeError('palt expects two arguments');
+        const color = expectColor(expectInteger(command.arguments[0]));
+        const transparent = expectBoolean(command.arguments[1]);
+        const byte = color >>> 3;
+        const bit = 1 << (color & 7);
+        this.transparency[byte] = transparent
+          ? (this.transparency[byte] ?? 0) | bit
+          : (this.transparency[byte] ?? 0) & ~bit;
+        return;
+      }
+      case 'palt_reset':
+        expectIntegers(command, 0);
+        this.resetTransparency();
         return;
       case 'sprite': {
         const [handle, x, y] = command.arguments;
@@ -657,7 +674,7 @@ export class IndexedGraphics {
           sourceY = sprite.height - 1 - sourceY;
         }
         const color = sprite.pixels[sourceY * sprite.width + sourceX] ?? HARDWARE.transparentColor;
-        if (color !== this.transparency[0]) {
+        if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0) {
           this.plot(x + outputX, y + outputY, color, state);
         }
       }
@@ -763,6 +780,11 @@ export class IndexedGraphics {
       }
       cursorX += font.advanceX;
     }
+  }
+
+  private resetTransparency(): void {
+    this.transparency.fill(0);
+    this.transparency[HARDWARE.transparentColor >>> 3] = 1 << (HARDWARE.transparentColor & 7);
   }
 }
 

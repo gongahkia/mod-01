@@ -58,7 +58,7 @@ reads zero; writing one faults. Offsets below are hexadecimal; lengths and count
 | `19000`  |    34,560 | RW     | Back indexed framebuffer; zero before `on start`.                                                                   |
 | `22000`  |    34,560 | R      | Resolved indexed scanout; zero before `on start`.                                                                   |
 | `50000`  |        80 | RW     | Draw camera/clip and logical palette remap; layout below.                                                           |
-| `50050`  |         1 | R      | Actual sprite transparency index, fixed at zero.                                                                    |
+| `50050`  |        32 | RW     | Blit transparency bitset for all 256 source colours, bit zero set on boot/frame reset.                              |
 | `50100`  |        48 | R      | Four controller ports and pointer, encoded from the machine's current/previous input frames. Reset zero.            |
 | `50200`  |        64 | R      | Scheduler, deterministic time, RNG, work and fault registers, encoded from their actual owners; layout below.       |
 | `50300`  |        24 | R      | Visual allocation status; six little-endian unsigned 32-bit fields, below.                                          |
@@ -94,7 +94,17 @@ accumulator reset to the cartridge display defaults. Drawing and bus writes then
 order. Scanout reads back through the raster table after all 144 callbacks, publishes resolved pixels,
 and copies back to front without changing either buffer's address. A front-only write during a frame
 does not also change back and is overwritten at frame completion. Back writes affect that frame.
-RAM persists until a cartridge restart or snapshot restore. Palette RGB/transparency are immutable.
+RAM persists until a cartridge restart or snapshot restore. Palette RGB values
+are immutable; the blit transparency mask is configurable draw state.
+
+Transparency bytes at `50050`–`5006f` use little-bit order: source colour `c`
+is skipped if byte `c / 8` has bit `c % 8` set. `palt` and raw writes affect
+these exact bytes. All bit patterns are valid. The mask is tested before palette
+remapping by every asset blit, not by solid/text/raw framebuffer drawing. Only
+bit zero is set on cartridge load and at each boot/display-frame draw-state
+reset; `palt_reset` restores that default explicitly. Bus snapshots retain the
+complete mask, and restore is transactional with the other devices. As with
+other non-raster state, writes from `on raster` are rejected.
 
 Draw-state offsets from `50000`:
 

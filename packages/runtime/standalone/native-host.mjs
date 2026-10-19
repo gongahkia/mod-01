@@ -1235,7 +1235,7 @@ var IndexedGraphics = class {
   assets;
   display;
   drawRegisters = /* @__PURE__ */ new Uint8Array(80);
-  transparency = Uint8Array.of(HARDWARE.transparentColor);
+  transparency = new Uint8Array(HARDWARE.paletteSize / 8);
   state = new MemoryDrawState(this.drawRegisters);
   rasterBytes = new Uint8Array(HARDWARE.height * MEMORY.rasterStride);
   rasterView = new DataView(this.rasterBytes.buffer);
@@ -1257,6 +1257,7 @@ var IndexedGraphics = class {
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.displayRemap.set(identityRemap());
+    this.resetTransparency();
   }
   executeFrame(commands) {
     if (commands.length > HARDWARE.drawCommandsPerFrame)
@@ -1268,6 +1269,7 @@ var IndexedGraphics = class {
   beginFrame() {
     this.back.set(this.front);
     this.drawRegisters.fill(0);
+    this.resetTransparency();
     this.state.clipWidth = HARDWARE.width;
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
@@ -1396,10 +1398,10 @@ var IndexedGraphics = class {
         },
       },
       {
-        name: 'transparency index',
+        name: 'blit transparency mask',
         address: MEMORY.transparency,
         bytes: this.transparency,
-        writable: false,
+        writable: true,
       },
       {
         name: 'raster callback state',
@@ -1502,6 +1504,21 @@ var IndexedGraphics = class {
       case 'pal_reset':
         expectIntegers(command, 0);
         state.remap.set(identityRemap());
+        return;
+      case 'palt': {
+        if (command.arguments.length !== 2) throw new TypeError('palt expects two arguments');
+        const color = expectColor(expectInteger$1(command.arguments[0]));
+        const transparent = expectBoolean(command.arguments[1]);
+        const byte = color >>> 3;
+        const bit = 1 << (color & 7);
+        this.transparency[byte] = transparent
+          ? (this.transparency[byte] ?? 0) | bit
+          : (this.transparency[byte] ?? 0) & ~bit;
+        return;
+      }
+      case 'palt_reset':
+        expectIntegers(command, 0);
+        this.resetTransparency();
         return;
       case 'sprite': {
         const [handle, x, y] = command.arguments;
@@ -1705,7 +1722,8 @@ var IndexedGraphics = class {
         if (flipX) sourceX = sprite.width - 1 - sourceX;
         if (flipY) sourceY = sprite.height - 1 - sourceY;
         const color = sprite.pixels[sourceY * sprite.width + sourceX] ?? HARDWARE.transparentColor;
-        if (color !== this.transparency[0]) this.plot(x + outputX, y + outputY, color, state);
+        if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
+          this.plot(x + outputX, y + outputY, color, state);
       }
   }
   drawMap(name, x, y, state) {
@@ -1788,6 +1806,10 @@ var IndexedGraphics = class {
       }
       cursorX += font.advanceX;
     }
+  }
+  resetTransparency() {
+    this.transparency.fill(0);
+    this.transparency[HARDWARE.transparentColor >>> 3] = 1 << (HARDWARE.transparentColor & 7);
   }
 };
 /** Deterministic four-by-four Bayer choice between two palette indices. */
@@ -5008,6 +5030,8 @@ var DRAW_CALLS = /* @__PURE__ */ new Set([
   'map',
   'pal',
   'pal_reset',
+  'palt',
+  'palt_reset',
   'raster_scroll',
   'print',
   'font_print',

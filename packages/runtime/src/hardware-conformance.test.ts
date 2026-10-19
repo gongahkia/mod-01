@@ -11,6 +11,7 @@ import { BUTTONS, emptyInputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import type { ProjectAssetDeclaration } from './asset-codec';
 import { decodeSaveValues } from './save';
+import { runHeadless } from './headless';
 
 function completeDebugBoot(runtime: ConsoleRuntime, debug: boolean): void {
   if (!debug) return;
@@ -375,6 +376,64 @@ describe('public MODL hardware conformance', () => {
       runtime.restore(boot);
       deepStrictEqual(runtime.runFrame(emptyInputFrame()), first);
       deepStrictEqual(runtime.snapshot(), after);
+      const javascript = readFileSync(output, 'utf8');
+      const hostManifest = {
+        id: 'visual-conformance',
+        updateRate: 60,
+        display: null,
+        assets: manifest.assets,
+      };
+      const headless = await runHeadless({
+        revision: 1,
+        javascript,
+        manifest: hostManifest,
+        entries: source.files,
+        rom: [1],
+        seed: 1,
+        frames: 2,
+        trace: { revision: 1, frames: [] },
+        save: [],
+      });
+      expect(headless.fault).toBeUndefined();
+      expect(headless.summary.completedFrames).toBe(2);
+      const host = join(root, 'packages/runtime/standalone/native-host.mjs');
+      const replies = execFileSync(
+        process.execPath,
+        ['--permission', `--allow-fs-read=${host}`, host],
+        {
+          input:
+            [
+              {
+                type: 'load',
+                javascript,
+                manifest: hostManifest,
+                files: Object.fromEntries(
+                  Object.entries(source.files).map(([path, bytes]) => [
+                    path,
+                    Buffer.from(bytes).toString('base64'),
+                  ]),
+                ),
+                rom: 'AQ==',
+                save: '',
+                debug: mode === 'debug',
+                seed: 1,
+              },
+              { type: 'frame', input: emptyInputFrame() },
+              { type: 'stop' },
+            ]
+              .map((value) => JSON.stringify(value))
+              .join('\n') + '\n',
+        },
+      )
+        .toString()
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(replies.map((reply) => reply.type)).toEqual(['loaded', 'frame', 'stopped']);
+      expect(Buffer.from(replies[1]?.pixels as string, 'base64')).toEqual(
+        Buffer.from(first.output.indexedPixels),
+      );
+      expect(replies[1]?.workUnits).toBe(first.workUnits);
     });
 
     it(`compiles and runs memory conformance in ${mode} with full replay`, async () => {

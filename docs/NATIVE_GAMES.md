@@ -37,6 +37,13 @@ is needed on the recipient's machine. Native system libraries and OS trust/signi
 rules still apply; build on the oldest supported OS baseline. Linux CI builds on
 Ubuntu 24.04. These are unsigned publisher artifacts, not notarized installers.
 
+The player executable is named `cart-ID` (`cart-ID.exe` on Windows), separate
+from reserved package files such as `node`, `game.m01c` and `mod01-game.json`.
+This namespace also keeps the executable out of Windows's
+[reserved device basenames](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+which remain reserved even with extensions. The cartridge's actual ID, save
+identity and title do not change with its executable filename.
+
 Source workcarts, raw `.m01c` and cartridge PNG inputs all preserve the **complete
 game**, including every embedded dependency and its exact authored source. Core
 revalidates/recompiles every member before creating the output directory. Shipping
@@ -60,7 +67,8 @@ and their PCM, routing timeline and save commits must match the original player,
 and packed bytes must equal the normal CLI pack. It checks the requested ordinary
 cartridge and a generated >1 MiB two-cartridge game that transfers every frame,
 mixes 60/30 Hz updates, passes parameters, plays actual sound and asserts separate
-save ownership. The latter must produce 60 frames from each member; shipped source
+save ownership. Its main cartridge deliberately uses ID `node` to catch accidental
+player/runtime overwrites. It must produce 60 frames from each member; shipped source
 must remain inspectable from outside the checkout. The macOS/Windows/Linux
 packaging matrix runs this same verification on each OS; cross-target file-layout
 tests alone do not demonstrate execution on another OS.

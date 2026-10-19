@@ -110,7 +110,7 @@ recipe = []
 test = []
 [cartridge]
 language = "MODL/1"
-id = "mod01-package-${alias}"
+id = ${JSON.stringify(alias === 'main' ? 'node' : `mod01-package-${alias}`)}
 title = "PACKAGE ${alias}"
 author = "@mod01"
 version = "1.0.0"

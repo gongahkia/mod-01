@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Native player executables now use a separate `cart-ID[.exe]` file namespace.
+  A regression first reproduced a valid `node` ID overwriting the exported
+  player with bundled Node. The test checks distinct player/Node bytes, canonical
+  game/host/metadata/notices and unchanged persistent IDs across 14 collision/
+  device-like IDs and all three package layouts. The real Linux package verifier
+  now uses `node` as its two-member game's main ID, so that collision is exercised
+  with actual binaries rather than matching fake tool headers. All five core
+  export tests, warning-free all-feature workspace Clippy, native/CLI builds and
+  both real 120-frame Linux package verifications pass. Default export
+  folder/asset/save basename portability and final cross-host audit remain open.
 - CLI `info` now admits complete source/raw/PNG games and uses one revision-2
   report for every representation: shipping archive storage, each alias's own
   logical ROM/class/save ID, exact shared visual-bank/allocation usage, source

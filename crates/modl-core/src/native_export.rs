@@ -180,11 +180,16 @@ pub fn export_native_game(
     }
     fs::create_dir(output).map_err(export_error)?;
     let id = &cart.manifest.id;
-    let executable_name = if tools.platform == NativePlatform::Windows {
-        format!("{id}.exe")
-    } else {
-        id.clone()
-    };
+    // Keep authored IDs out of the package's reserved file namespace (node,
+    // game.m01c, metadata, notices) and Windows device basenames such as CON.
+    let executable_name = format!(
+        "cart-{id}{}",
+        if tools.platform == NativePlatform::Windows {
+            ".exe"
+        } else {
+            ""
+        }
+    );
     let binaries = if tools.platform == NativePlatform::Macos {
         output.join(format!("{id}.app/Contents/MacOS"))
     } else {
@@ -499,6 +504,88 @@ mod tests {
             "M014015"
         );
         assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cartridge_ids_cannot_overwrite_packaged_tools_data_metadata_or_licenses() {
+        let root =
+            std::env::temp_dir().join(format!("mod01-native-namespaces-{}", std::process::id()));
+        let mut project =
+            crate::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        for platform in [
+            NativePlatform::Linux,
+            NativePlatform::Windows,
+            NativePlatform::Macos,
+        ] {
+            let directory = root.join(format!("{platform:?}"));
+            let mut tools = fixture_tools(&directory, platform);
+            let player = fs::read(&tools.player).unwrap();
+            let mut node = player.clone();
+            node[127] = 78;
+            tools.node = directory.join("node-tool");
+            fs::write(&tools.node, &node).unwrap();
+            for (index, id) in [
+                "node",
+                "native-host.mjs",
+                "game.m01c",
+                "mod01-game.json",
+                "license",
+                "licenses",
+                "readme.txt",
+                "con",
+                "con.foo",
+                "aux",
+                "nul",
+                "com1",
+                "lpt1",
+                "trailing.",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                id.clone_into(&mut project.manifest.id);
+                let source =
+                    crate::encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+                let game = crate::game::pack_game_workcart(&source).unwrap();
+                let output = directory.join(format!("case-{index}"));
+                let executable = export_native_game(&output, game.bytes(), &tools).unwrap();
+                assert_eq!(
+                    fs::read(&executable).unwrap(),
+                    player,
+                    "{platform:?} / {id}: player was overwritten"
+                );
+                let binaries = executable.parent().unwrap();
+                let node_name = if platform == NativePlatform::Windows {
+                    "node.exe"
+                } else {
+                    "node"
+                };
+                assert_eq!(fs::read(binaries.join(node_name)).unwrap(), node);
+                assert_eq!(fs::read(binaries.join("game.m01c")).unwrap(), game.bytes());
+                assert_eq!(
+                    fs::read(binaries.join("native-host.mjs")).unwrap(),
+                    fs::read(&tools.host).unwrap()
+                );
+                let metadata: serde_json::Value =
+                    serde_json::from_slice(&fs::read(output.join("mod01-game.json")).unwrap())
+                        .unwrap();
+                assert_eq!(
+                    metadata["cartridgeId"], id,
+                    "filesystem naming never changes save identity"
+                );
+                let expected = format!(
+                    "cart-{id}{}",
+                    if platform == NativePlatform::Windows {
+                        ".exe"
+                    } else {
+                        ""
+                    }
+                );
+                assert_eq!(executable.file_name().unwrap().to_str().unwrap(), expected);
+                assert!(output.join("licenses/Node.txt").is_file());
+            }
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

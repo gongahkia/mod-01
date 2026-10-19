@@ -51,6 +51,24 @@ choices remain outstanding.
 
 ## Progress
 
+- Native device callbacks now coalesce bounded first notices instead of repeatedly
+  logging ALSA errors. Current CPAL classifications keep xrun/reroute/realtime
+  warnings nonfatal; unusable streams are muted/cleared and released by the UI
+  owner. `AUD`/`SILENT` indicators retain device detail separately from VM status.
+  Game and live-synth timelines continue with no output device, and output is
+  re-opened by restarting the application rather than an uncontrolled retry loop.
+  Two callback-policy regressions cover all current error classes, repeated/
+  concurrent notices and bounded messages; a real two-member native integration
+  proves losing output cannot stop, rewind or re-identify gameplay/replay.
+  Targeted audio/live-preview/game tests and workspace Clippy pass. The player
+  keeps audio/status on one truncated line and moves long titles above controls
+  at narrow widths. Its real-font egui regression covers long titles/statuses at
+  480×320 and 960×650; the inspected 480×320 capture in
+  `output/native-audio-qa-wiSy8a/player-minimum-final.png` shows the complete
+  framebuffer between controls and status. All 120 native tests pass, and a fresh
+  active-game GUI session exits with status zero on WM_DELETE_WINDOW without
+  audio callback logging. Physical audio quality, remaining editor hardening and
+  final audit remain open.
 - Native saves/schema/export defaults now use the checked shared portable stem,
   without changing persistent IDs or the current save-container bytes. Recovery
   has separate per-ID directories instead of ambiguous `ID-` prefix matching:

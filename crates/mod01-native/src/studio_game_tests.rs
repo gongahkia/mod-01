@@ -130,6 +130,36 @@ fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
 }
 
 #[test]
+fn losing_audio_output_does_not_stop_or_rewind_the_real_game_or_its_replay_timeline() {
+    let (mut app, context, _) = fixture(false);
+    for _ in 0..3 {
+        app.send_input(&context, "frame");
+        pump(&mut app, &context);
+    }
+    assert_eq!(app.input_frame, 3);
+    assert_eq!(app.active_alias, "arena");
+    let identity = app.running_members["main"].id.clone();
+    app.disable_audio_output("device disconnected during play".to_owned());
+    assert!(app.audio.is_none());
+    assert_eq!(
+        app.audio_notice.as_deref(),
+        Some("device disconnected during play")
+    );
+    assert!(app.loaded && app.running);
+    assert_eq!(app.input_frame, 3);
+    for _ in 3..7 {
+        app.send_input(&context, "frame");
+        pump(&mut app, &context);
+    }
+    assert_eq!(app.input_frame, 7);
+    assert_eq!(app.replay_frames.len(), 7);
+    assert_eq!(app.active_alias, "main");
+    assert_eq!(app.last_pixels[0], 1);
+    assert_eq!(app.running_members["main"].id, identity);
+    app.stop();
+}
+
+#[test]
 fn complete_game_crosses_native_release_and_source_step_boundaries_on_one_input_timeline() {
     for debug in [false, true] {
         let (mut app, context, inputs) = fixture(debug);

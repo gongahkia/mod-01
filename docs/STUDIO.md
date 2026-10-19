@@ -93,6 +93,17 @@ project or running the cartridge stops and discards queued preview audio.
 Without an audio device the same preview runs silently. EXPORT WAV is a separate
 offline render and never starts playback.
 
+The `AUD`/`SILENT` status indicator reports native device availability; hover it
+for the latest device notice. The current
+[CPAL error classifications](https://docs.rs/cpal/0.18.2/cpal/enum.ErrorKind.html)
+keep underruns, automatically rerouted devices and realtime-scheduling notices
+nonfatal. These notices are coalesced rather than logged from the audio callback.
+An unusable stream is released on the UI thread and playback/preview continues
+silently without stopping the VM, changing saves or rewinding replay. Restore the
+device and restart Studio/player to re-open output; there is no automatic retry
+loop. Native synth telemetry and offline WAV export remain available without a
+working output device. This does not replace physical-device/audio-quality QA.
+
 Saving keeps bounded local recovery revisions. The save manager exports/imports
 checksummed cartridge-bound save containers and retains recovery before
 replacement. Local saves are keyed by validated cartridge identity.

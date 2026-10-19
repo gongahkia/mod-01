@@ -19,8 +19,16 @@ impl StudioApp {
         egui::Panel::top("game-controls")
             .frame(ui_theme::case_frame())
             .show(root, |ui| {
+                let narrow = ui.available_width() < 640.0;
+                if narrow {
+                    let title = self.runtime_title();
+                    ui.add(egui::Label::new(egui::RichText::new(&title).heading()).truncate())
+                        .on_hover_text(title);
+                }
                 ui.horizontal_wrapped(|ui| {
-                    ui.heading(self.runtime_title());
+                    if !narrow {
+                        ui.heading(self.runtime_title());
+                    }
                     if ui
                         .add_enabled(
                             self.running,
@@ -49,11 +57,18 @@ impl StudioApp {
         egui::Panel::bottom("game-status")
             .frame(ui_theme::case_frame())
             .show(root, |ui| {
-                ui.label(if self.player_paused {
+                let status = if self.player_paused {
                     "PAUSED / ESC TO RESUME"
                 } else {
                     &self.status
-                });
+                };
+                let audio = if self.audio.is_some() {
+                    "AUD"
+                } else {
+                    "SILENT"
+                };
+                ui.add(egui::Label::new(format!("{audio} / {status}")).truncate())
+                    .on_hover_text(format!("{status}\n{}", self.audio_message()));
                 ui.label("ARROWS / Z X A S / Q W / ENTER / ESC MENU");
                 self.touch_controller.show(
                     ui,
@@ -205,4 +220,68 @@ fn fingerprint(hash: &mut u64, bytes: &[u8]) {
     *hash = bytes.iter().fold(*hash, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_status_and_long_titles_leave_the_entire_framebuffer_visible_at_minimum_player_size() {
+        for size in [egui::vec2(480.0, 320.0), egui::vec2(960.0, 650.0)] {
+            let context = egui::Context::default();
+            crate::ui_assets::install_font(&context);
+            ui_theme::install(&context);
+            let mut app = StudioApp::new_with_devices(None, &context, false);
+            let mut project = NativeProject::from_source(
+                include_str!("../../../templates/blank/cart.m01w").to_owned(),
+                None,
+            )
+            .unwrap();
+            project.manifest.title = "LONG CARTRIDGE TITLE ".repeat(3);
+            app.project = Some(project);
+            app.status = "Runtime status with an intentionally long member identifier and output-device detail".to_owned();
+            app.texture = Some(context.load_texture(
+                "minimum-player",
+                egui::ColorImage::filled([240, 144], egui::Color32::WHITE),
+                egui::TextureOptions::NEAREST,
+            ));
+            let mut last = None;
+            for _ in 0..6 {
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| app.player_ui(ui),
+                );
+                last = Some(output.shapes.clone());
+                output.drop_without_applying_deltas();
+            }
+            let screen = app.screen_rect.unwrap();
+            assert!(screen.width() >= 240.0 && screen.height() >= 144.0);
+            let mut controls_bottom = 0.0_f32;
+            let mut status_top = size.y;
+            for shape in last.unwrap() {
+                if let egui::Shape::Text(text) = shape.shape {
+                    let label = text.galley.job.text.as_str();
+                    if ["PAUSE", "RESTART", "SOURCE", "TOUCH"].contains(&label) {
+                        controls_bottom = controls_bottom.max(text.pos.y + text.galley.size().y);
+                    }
+                    if label.starts_with("SILENT /") {
+                        status_top = status_top.min(text.pos.y);
+                    }
+                }
+            }
+            assert!(controls_bottom > 0.0 && status_top < size.y);
+            assert!(
+                screen.top() >= controls_bottom,
+                "{size:?}: screen covers controls"
+            );
+            assert!(
+                screen.bottom() <= status_top,
+                "{size:?}: screen is clipped by status"
+            );
+        }
+    }
 }

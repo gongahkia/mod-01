@@ -179,6 +179,7 @@ struct StudioApp {
     playground: playground::Playground,
     show_playground: bool,
     audio: Option<AudioOutput>,
+    audio_notice: Option<String>,
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
     sprite: Option<SpriteEditor>,
@@ -275,6 +276,14 @@ impl StudioApp {
 
     fn new_with_devices(start: Option<PathBuf>, context: &egui::Context, devices: bool) -> Self {
         let host_path = native_host_path();
+        let (audio, audio_notice) = if devices {
+            match AudioOutput::new() {
+                Ok(audio) => (Some(audio), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
             cursors: PixelCursors::new(context),
             library: library::Library::new(
@@ -297,7 +306,8 @@ impl StudioApp {
             live_audio: live_audio::AudioPreview::new(),
             playground: playground::Playground::new(),
             show_playground: false,
-            audio: devices.then(|| AudioOutput::new().ok()).flatten(),
+            audio,
+            audio_notice,
             gamepads: devices.then(|| Gilrs::new().ok()).flatten(),
             texture: None,
             sprite: None,
@@ -436,6 +446,49 @@ impl StudioApp {
             }
             Err(error) => self.status = error,
         }
+    }
+
+    fn poll_audio_output(&mut self) {
+        let failure = self.audio.as_ref().and_then(AudioOutput::failure);
+        if let Some(error) = failure {
+            self.disable_audio_output(error);
+        } else if let Some(warning) = self.audio.as_ref().and_then(AudioOutput::take_warning) {
+            self.audio_notice = Some(warning);
+        }
+    }
+
+    fn disable_audio_output(&mut self, error: String) {
+        if let Some(audio) = self.audio.take() {
+            audio.clear();
+        }
+        self.audio_notice = Some(error);
+        self.status = "AUDIO OUTPUT FAILED / SILENT".to_owned();
+    }
+
+    fn audio_indicator(&self, ui: &mut egui::Ui) {
+        ui.scope(|ui| {
+            ui_theme::led(
+                ui,
+                self.audio.is_some(),
+                if self.audio.is_some() {
+                    "AUD"
+                } else {
+                    "SILENT"
+                },
+            )
+        })
+        .response
+        .on_hover_text(self.audio_message());
+    }
+
+    fn audio_message(&self) -> &str {
+        self.audio_notice
+            .as_deref()
+            .unwrap_or(if self.audio.is_some() {
+                "Native audio output available."
+            } else {
+                "No audio output device. Synth, playback and replay continue silently."
+            })
     }
 
     fn apply_manifest(&mut self) {
@@ -3339,6 +3392,7 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
+        self.poll_audio_output();
         self.capture_keyboard(&context);
         self.handle_system_menu_toggle(&context);
         self.process_events(&context);
@@ -3364,6 +3418,7 @@ impl eframe::App for StudioApp {
                 ui.horizontal(|ui| {
                     ui_theme::led(ui, true, "PWR");
                     ui_theme::led(ui, self.running && self.loaded, "EXEC");
+                    self.audio_indicator(ui);
                     ui.separator();
                     let status_color =
                         if self.status.contains("ERROR") || self.status.contains("FAILED") {

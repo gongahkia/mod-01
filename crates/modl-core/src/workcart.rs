@@ -332,7 +332,7 @@ pub fn rewrite_workcart(
 
 /// Deletes an unreferenced asset from an `M01W/2` work-cart.
 ///
-/// References from authored MODL modules, stored MODL tests, and generation recipes prevent the
+/// References from authored MODL modules, stored MODL tests, asset payloads and generation recipes prevent the
 /// deletion. The returned work-cart is canonical and removes the asset payload when it is not
 /// also needed as presentation data.
 ///
@@ -411,6 +411,41 @@ fn workcart_asset_references(project: &WorkcartProject, name: &str) -> Vec<Strin
         let file_id = u32::try_from(index).unwrap_or(u32::MAX);
         if source_references_asset(FileId(file_id), &test.path, &test.payload, name) {
             references.push(format!("test '{}'", test.name));
+        }
+    }
+    for (owner, declaration) in &project.manifest.assets {
+        if owner == name || !matches!(declaration.kind, AssetKind::Map | AssetKind::Music) {
+            continue;
+        }
+        let Some(payload) = project.files.get(&declaration.path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
+            continue;
+        };
+        let is_dependency = match declaration.kind {
+            AssetKind::Map => value["layers"].as_array().is_some_and(|layers| {
+                layers
+                    .iter()
+                    .any(|layer| layer["tileSet"].as_str() == Some(name))
+            }),
+            AssetKind::Music => value["patterns"].as_object().is_some_and(|patterns| {
+                patterns.values().any(|pattern| {
+                    pattern["rows"].as_array().is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row.as_array().is_some_and(|cells| {
+                                cells
+                                    .iter()
+                                    .any(|cell| cell["sound"].as_str() == Some(name))
+                            })
+                        })
+                    })
+                })
+            }),
+            _ => false,
+        };
+        if is_dependency {
+            references.push(format!("asset '{owner}' ({})", declaration.path));
         }
     }
     for recipe in &project.recipes {
@@ -928,6 +963,40 @@ payload = "on start:\n  assert true\n"
     }
 
     #[test]
+    fn asset_deletion_protects_map_tiles_and_notes_in_every_music_pattern() {
+        let mut project =
+            parse_workcart(include_str!("../../../examples/api-tour/cart.m01w")).unwrap();
+        project.files.insert(
+            project.manifest.entry.clone(),
+            b"on draw:\n  clear(0)\n".to_vec(),
+        );
+        project.recipes.clear();
+        project.tests.clear();
+        let source = encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+        for (target, owner) in [("tiles", "room"), ("beep", "loop")] {
+            let error = delete_workcart_asset(&source, target).unwrap_err();
+            assert_eq!(error.code, "M014028");
+            assert!(
+                error.message.contains(&format!("asset '{owner}'")),
+                "{error}"
+            );
+        }
+        let without_music = delete_workcart_asset(&source, "loop").unwrap();
+        let without_sound = delete_workcart_asset(&without_music, "beep").unwrap();
+        let after = parse_workcart(&without_sound).unwrap();
+        assert!(!after.manifest.assets.contains_key("loop"));
+        assert!(!after.manifest.assets.contains_key("beep"));
+        assert_eq!(
+            after.files["assets/tiles.m01g"],
+            project.files["assets/tiles.m01g"]
+        );
+        assert_eq!(
+            after.files["src/motion.modl"],
+            project.files["src/motion.modl"]
+        );
+    }
+
+    #[test]
     fn asset_deletion_removes_an_unreferenced_payload() {
         const UNUSED: &str = r#"format = 2
 
@@ -948,7 +1017,7 @@ source = "on draw:\n  clear(25)\n"
 name = "unused"
 kind = "sprite"
 path = "assets/unused.m01g"
-payload = '''{"revision":1,"kind":"sprite","frames":[[0,0,0,0,0,0,0,0]]}'''
+payload = '''{"revision":2,"kind":"sprite","width":8,"height":1,"frames":[[0,0,0,0,0,0,0,0]]}'''
 "#;
         let deleted = delete_workcart_asset(UNUSED, "unused").expect("asset deletes");
         let project = parse_workcart(&deleted).expect("rewritten work-cart parses");

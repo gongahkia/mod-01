@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 import { nativeWindowFixture } from './native-window-fixture.mjs';
 
 const template = readFileSync(

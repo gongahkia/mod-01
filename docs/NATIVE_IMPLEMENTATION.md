@@ -62,6 +62,11 @@ choices remain outstanding.
   are rejected too. Console ROM remains a single ≤1 MiB member.
   `docs/BUNDLES.md` distinguishes this completed core from pending runtime,
   CLI/Studio, replay/debugger and native integration; the acceptance row stays open.
+  After this slice, the full gate passes: 230 runtime tests, 112 core unit/
+  integration tests, 95 native tests, 22 CLI integrations, lint/types/format and
+  warning-free all-feature workspace builds. All nine raw/PNG hashes are unchanged,
+  existing replay goldens pass without refresh, and Linux's bundled player verifies
+  120 frames with no PATH dependency.
 - Current workcarts now retain optional flat `[[bundle]]` members as exact UTF-8
   workcart strings. Rewrites, asset deletion, recipe generation and CLI formatting
   preserve member source, including CRLF/comments; aliases are bounded/unique and

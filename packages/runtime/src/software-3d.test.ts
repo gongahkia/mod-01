@@ -41,9 +41,20 @@ describe('source-visible software 3D game', () => {
         manifest: { assets: Record<string, ProjectAssetDeclaration> };
         files: Record<string, number[]>;
       };
-      const model = JSON.parse(execFileSync(cli, ['graph', project], { encoding: 'utf8' })) as {
-        symbols: { id: number; name: string; kind: string }[];
+      const graph = JSON.parse(execFileSync(cli, ['graph', project], { encoding: 'utf8' })) as {
+        revision: number;
+        members: {
+          main: {
+            cartridgeId: string;
+            model: {
+              symbols: { id: number; name: string; kind: string }[];
+            };
+          };
+        };
       };
+      expect(graph.revision).toBe(1);
+      expect(graph.members.main.cartridgeId).toBe('prism-corridor');
+      const model = graph.members.main.model;
       const symbols = Object.fromEntries(
         model.symbols
           .filter((symbol) => symbol.kind === 'state')

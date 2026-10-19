@@ -116,6 +116,202 @@ fn game_trace(
     serde_json::from_slice(&result.stdout).unwrap()
 }
 
+fn info_json(path: &Path, static_only: bool, without_node: bool) -> Value {
+    let mut command = binary();
+    command.arg("info").arg(path);
+    if static_only {
+        command.arg("--static");
+    }
+    if without_node {
+        command.env("PATH", "");
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "successful analysis carries profile failures in JSON"
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn static_info_has_identical_shipping_and_per_rom_capacity_reports_for_large_source_raw_and_png_games()
+ {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-info-large-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let mut main = modl_core::parse_workcart(&game_fixture(2, true)).unwrap();
+    main.manifest.assets.insert(
+        "probe".to_owned(),
+        modl_core::ProjectAsset {
+            kind: modl_core::AssetKind::Sprite,
+            path: "assets/probe.json".to_owned(),
+        },
+    );
+    main.files.insert(
+        "assets/probe.json".to_owned(),
+        serde_json::to_vec(&json!({
+            "revision":2,"kind":"sprite","width":2,"height":1,"frames":[[0,255],[254,1]]
+        }))
+        .unwrap(),
+    );
+    let source = modl_core::workcart::encode_workcart_with_bundle(
+        &main.manifest,
+        &main.files,
+        &[],
+        &[],
+        &main.bundle,
+    )
+    .unwrap();
+    let game = modl_core::game::pack_game_workcart(&source).unwrap();
+    assert!(game.bytes().len() > 1024 * 1024);
+    let path = directory.join("cart.m01w");
+    let raw = directory.join("game.m01c");
+    let png = directory.join("game.m01c.png");
+    fs::write(&path, &source).unwrap();
+    fs::write(&raw, game.bytes()).unwrap();
+    fs::write(
+        &png,
+        modl_core::cartridge_png::encode_game_png(&game).unwrap(),
+    )
+    .unwrap();
+    let expected = info_json(&path, true, true);
+    assert_eq!(expected, info_json(&raw, true, true));
+    assert_eq!(expected, info_json(&png, true, true));
+    let analysis = &expected["analysis"];
+    assert_eq!(analysis["revision"], 2);
+    assert_eq!(analysis["gameIdentity"], game.identity());
+    assert_eq!(analysis["shipping"]["canonicalBytes"], game.bytes().len());
+    assert!(
+        analysis.get("sizeClass").is_none(),
+        "shipping container is not one ROM"
+    );
+    assert_eq!(analysis["runtime60Frames"]["status"], "not_requested");
+    assert_eq!(analysis["members"].as_object().unwrap().len(), 2);
+    for (alias, member) in game.catalog().cartridges() {
+        let report = &analysis["members"][alias];
+        assert_eq!(report["romBytes"], member.bytes.len());
+        assert_eq!(report["limits"]["romBytes"], 1024 * 1024);
+        assert_eq!(report["manifest"]["id"], member.manifest.id);
+        let project = modl_core::unpack_cartridge_project(&member.bytes).unwrap();
+        let manifest = modl_core::parse_project_manifest(&project.manifest).unwrap();
+        let usage = modl_core::assets::analyze_project_assets(&manifest, &project.files);
+        assert_eq!(
+            report["assetUsage"],
+            serde_json::to_value(usage.usage).unwrap()
+        );
+    }
+    let root = &analysis["members"]["main"];
+    assert!(root["assetUsage"]["visualBytes"].as_u64().unwrap() > 0);
+    assert_ne!(
+        root["assetUsage"]["visualBytes"],
+        root["sections"]["visualAssetSourceBytes"]
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn info_profiles_one_real_whole_game_and_reports_unexecuted_members_without_booting_them_independently()
+ {
+    let path = std::env::temp_dir().join(format!(
+        "mod01-info-runtime-{}-{}.m01w",
+        std::process::id(),
+        line!()
+    ));
+    let source = game_fixture(3, false);
+    fs::write(&path, &source).unwrap();
+    let report = info_json(&path, false, false);
+    let profile = &report["analysis"]["runtime60Frames"];
+    let reference = game_trace(&path, 60, "", None, None);
+    assert_eq!(profile["status"], "completed");
+    assert_eq!(profile["configuration"], reference["configuration"]);
+    assert_eq!(profile["summary"], reference["summary"]);
+    assert_eq!(
+        profile["memberFrames"],
+        json!({"main":20,"level1":20,"level2":20})
+    );
+    assert_eq!(profile["notProfiledMembers"], json!([]));
+    let mut main = modl_core::parse_workcart(&source).unwrap();
+    main.files.insert(
+        main.manifest.entry.clone(),
+        b"on draw:\n  clear(1)\n".to_vec(),
+    );
+    let mut unused = modl_core::parse_workcart(&main.bundle[0].source).unwrap();
+    unused.files.insert(
+        unused.manifest.entry.clone(),
+        b"on start:\n  assert false, \"unused member must not boot\"\non draw:\n  clear(7)\n"
+            .to_vec(),
+    );
+    main.bundle[0].source =
+        modl_core::encode_workcart(&unused.manifest, &unused.files, &[], &[]).unwrap();
+    let source = modl_core::workcart::encode_workcart_with_bundle(
+        &main.manifest,
+        &main.files,
+        &[],
+        &[],
+        &main.bundle,
+    )
+    .unwrap();
+    fs::write(&path, &source).unwrap();
+    let report = info_json(&path, false, false);
+    let profile = &report["analysis"]["runtime60Frames"];
+    assert_eq!(profile["status"], "completed");
+    assert_eq!(profile["memberFrames"], json!({"main":60}));
+    assert_eq!(profile["notProfiledMembers"], json!(["level1", "level2"]));
+    assert_eq!(report["analysis"]["members"].as_object().unwrap().len(), 3);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn info_keeps_static_evidence_when_node_or_initial_runtime_parameters_are_unavailable() {
+    let path = std::env::temp_dir().join(format!(
+        "mod01-info-unavailable-{}-{}.m01w",
+        std::process::id(),
+        line!()
+    ));
+    let source = game_fixture(2, false);
+    fs::write(&path, &source).unwrap();
+    let report = info_json(&path, false, true);
+    assert_eq!(
+        report["analysis"]["runtime60Frames"]["status"],
+        "unavailable"
+    );
+    assert!(
+        report["analysis"]["runtime60Frames"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("could not start")
+    );
+    let report = info_json(&path, false, false);
+    assert_eq!(
+        report["analysis"]["runtime60Frames"]["status"],
+        "unavailable"
+    );
+    assert!(
+        report["analysis"]["runtime60Frames"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("main parameter")
+    );
+    assert_eq!(report["analysis"]["members"].as_object().unwrap().len(), 2);
+    assert!(
+        !report["analysis"]["warnings"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+    fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn whole_games_larger_than_one_rom_pack_check_inspect_and_run_identically_from_source_or_bytes() {
     let directory = std::env::temp_dir().join(format!(
@@ -499,7 +695,7 @@ fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_
         .unwrap(),
     )
     .unwrap();
-    for command in ["check", "pack", "run", "export"] {
+    for command in ["check", "pack", "run", "export", "info"] {
         let mut call = binary();
         call.arg(command);
         if command == "export" {
@@ -508,6 +704,9 @@ fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_
         call.arg(&path).env("PATH", "");
         if command == "run" {
             call.arg("--headless");
+        }
+        if command == "info" {
+            call.arg("--static");
         }
         let result = call.output().unwrap();
         assert!(!result.status.success());
@@ -1797,7 +1996,12 @@ fn assert_project_info(path: &Path) {
     let report: serde_json::Value =
         serde_json::from_slice(&info.stdout).expect("info is structured JSON");
     assert_eq!(report["title"], "CLI TEST");
-    assert_eq!(report["analysis"]["sections"]["saveAllocationBytes"], 8192);
+    assert_eq!(report["analysis"]["revision"], 2);
+    assert_eq!(
+        report["analysis"]["members"]["main"]["limits"]["saveBytes"],
+        8192
+    );
+    assert_eq!(report["analysis"]["runtime60Frames"]["status"], "faulted");
     assert_eq!(
         report["analysis"]["runtime60Frames"]["summary"]["completedFrames"],
         52
@@ -1807,7 +2011,7 @@ fn assert_project_info(path: &Path) {
         "M019002"
     );
     assert!(
-        report["analysis"]["largestEntries"]
+        report["analysis"]["members"]["main"]["archive"]["largestEntries"]
             .as_array()
             .is_some_and(|entries| !entries.is_empty())
     );

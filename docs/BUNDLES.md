@@ -20,8 +20,10 @@ members. Removal requires confirmation, drops that member's editor history and
 breakpoints, and never deletes imported files or player saves. Unsaved asset or
 manifest drafts must be applied before composition changes. PNG and native desktop
 exports retain the complete game with main's presentation identity. Bundle-wide
-CLI analysis and final cross-host verification are still being implemented; the
-complete multi-cartridge acceptance row is not yet closed.
+CLI analysis now distinguishes shipping storage from each member's ROM/asset
+capacity, and compiler graphs keep separate member namespaces. Final cross-host
+verification is still in progress; the complete multi-cartridge acceptance row
+is not yet closed.
 
 ## Authoring and admission
 
@@ -193,9 +195,11 @@ Whole-game PNG export/import is available in Studio and CLI, including shipping
 games larger than a single ROM. Source/raw/PNG headless replay results match through
 actual transitions and native PNG launches use the same whole-game scheduler.
 Native desktop export packages these same complete game bytes and records main's
-identity plus every member's logical ROM size and persistent ID. Bundle-wide CLI
-analysis integration remains open; its entry-only path rejects dependencies
-instead of discarding them.
+identity plus every member's logical ROM size and persistent ID. CLI `info` now
+admits/analyzes every member, then optionally profiles the actual whole-game
+timeline instead of independently booting children with invalid parameters.
+`--static` inspects without Node. The graph command uses member-scoped compiler
+models; valid source/raw/PNG games produce identical graphs and analysis reports.
 
 `runtime_game::prepare_runtime_game` provides the shared Rust-to-host handoff
 from a privately admitted `PackedGame`. It compiles **every** member in the chosen

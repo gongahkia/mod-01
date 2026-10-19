@@ -13,6 +13,7 @@ mod01 run my-cart
 mod01 run my-cart --headless --frames 120 --input replay.json
 mod01 pack my-cart --output dist/my-cart.m01c
 mod01 info dist/my-cart.m01c
+mod01 info dist/my-cart.m01c --static
 mod01 graph my-cart
 mod01 export png my-cart --output dist/my-cart.m01c.png
 mod01 export native my-cart --output dist/my-cart-game
@@ -36,10 +37,25 @@ Generated output and neighbouring files are not watched, including a custom
 output inside the project directory. The default output remains in `dist/`.
 
 `export png` contains the complete canonical cartridge in a validated PNG chunk.
-`info` accepts raw/PNG cartridges and reports metadata, exact packed size,
-section sizes, largest entries and a deterministic 60-frame production-core
-profile. The profile uses empty input/save and a fixed seed; use explicit
-`run --headless` input for gameplay verification.
+`info` accepts source/raw/PNG games and emits the entry's packed metadata plus
+the current revision-2 `analysis` JSON. `shipping` measures the complete canonical
+game archive; `members`, keyed by alias, reports each logical ROM's own size
+class, manifest/save ID, section sizes, largest entries/linked routines and fixed
+limits. `assetUsage` comes from the shared core's actual visual-bank byte and
+allocation accounting, not the length of asset JSON. A shipping container larger
+than 1 MiB is not an oversized logical cartridge.
+
+`info GAME --static` never requires Node or runs cartridge code. Ordinary `info`
+adds one deterministic 60-frame **whole-game** production profile, using the
+ordinary default seed, empty input/saves and an empty initial parameter. It reports
+`completed`, `faulted` or `unavailable` explicitly, plus per-member observed frame
+counts and `notProfiledMembers`; static mode reports `not_requested`. An unused
+dependency is admitted/analyzed but is not independently booted with an invented
+parameter. Runtime startup failures (including parameter assertions) or missing
+Node remain visible in the JSON alongside valid static evidence; they are never
+reported as successful gameplay verification. Use `run --headless` with explicit
+inputs/parameters for gameplay verification. All input representations produce
+the same report. Inspection never changes authored files or player saves.
 
 `export native` accepts source/raw/PNG games and bundles the native player, complete
 canonical game (all logical cartridges and their source), shared runtime, Node

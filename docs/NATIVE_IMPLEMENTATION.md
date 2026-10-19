@@ -51,6 +51,24 @@ choices remain outstanding.
 
 ## Progress
 
+- CLI `info` now admits complete source/raw/PNG games and uses one revision-2
+  report for every representation: shipping archive storage, each alias's own
+  logical ROM/class/save ID, exact shared visual-bank/allocation usage, source
+  section sizes and largest linked routines. The old entry-only CLI adapter is
+  removed. `--static` needs no Node; default inspection profiles the real whole
+  game once with the ordinary default seed and reports completed/faulted/
+  unavailable evidence, observed member counts and unprofiled members. Startup
+  parameter errors or missing Node remain explicit alongside static metadata,
+  never a fabricated completed profile. Tests compare large source/raw/PNG
+  reports, core-vs-CLI visual usage, real transition profiles against headless
+  traces, unexecuted children, fault/unavailable cases and invalid unused-member
+  rejection. The full gate passes 275 runtime, 125 core, 112 native, 32 CLI
+  integration and one CLI report-unit test, formatting/lint/types/all-feature
+  Clippy/builds, nine unchanged raw/PNG pairs and both packaged Linux verifications
+  without PATH. The 3D conformance consumer now explicitly selects the current
+  graph's main model and retains its real release/debug gameplay assertions.
+  Graph and normal analysis adapters are connected; final cross-host
+  and product audit remain open.
 - CLI `graph` now emits a shared core compiler model for every game member, with
   explicit alias/save-ID scope instead of treating overlapping file/symbol/node
   IDs as global. Source drafts keep invalid child diagnostics and exact original

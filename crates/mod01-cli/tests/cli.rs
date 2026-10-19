@@ -519,6 +519,123 @@ fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_
 }
 
 #[test]
+fn game_graphs_are_identical_from_source_raw_and_png_and_keep_member_qualified_draft_errors() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-cli-game-graph-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let source = game_fixture(2, false);
+    let game = modl_core::game::pack_game_workcart(&source).unwrap();
+    let source_path = directory.join("cart.m01w");
+    let raw_path = directory.join("game.m01c");
+    let png_path = directory.join("game.m01c.png");
+    fs::write(&source_path, &source).unwrap();
+    fs::write(&raw_path, game.bytes()).unwrap();
+    fs::write(
+        &png_path,
+        modl_core::cartridge_png::encode_game_png(&game).unwrap(),
+    )
+    .unwrap();
+    let mut expected = None;
+    for path in [&source_path, &raw_path, &png_path] {
+        let output = binary()
+            .arg("graph")
+            .arg(path)
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            graph["members"]["arena"]["cartridgeId"],
+            "cli-game-member-1"
+        );
+        assert_eq!(graph["members"].as_object().unwrap().len(), 2);
+        assert!(
+            graph["members"]["arena"]["model"]["sources"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("arena parameter")
+        );
+        if let Some(expected) = &expected {
+            assert_eq!(&graph, expected);
+        } else {
+            expected = Some(graph);
+        }
+    }
+    let mut main = modl_core::parse_workcart(&source).unwrap();
+    let mut child = modl_core::parse_workcart(&main.bundle[0].source).unwrap();
+    child.files.insert(
+        child.manifest.entry.clone(),
+        b"on draw:\n  missing_function()\n".to_vec(),
+    );
+    main.bundle[0].source =
+        modl_core::encode_workcart(&child.manifest, &child.files, &[], &[]).unwrap();
+    let invalid = modl_core::workcart::encode_workcart_with_bundle(
+        &main.manifest,
+        &main.files,
+        &[],
+        &[],
+        &main.bundle,
+    )
+    .unwrap();
+    fs::write(&source_path, &invalid).unwrap();
+    let output = binary()
+        .arg("graph")
+        .arg(&source_path)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let graph: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        graph["members"]["main"]["model"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !graph["members"]["arena"]["model"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read_to_string(&source_path).unwrap(), invalid);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn graph_covers_all_32_members_without_node() {
+    let path = std::env::temp_dir().join(format!(
+        "mod01-graph-32-{}-{}.m01w",
+        std::process::id(),
+        line!()
+    ));
+    fs::write(&path, game_fixture(32, false)).unwrap();
+    let output = binary()
+        .arg("graph")
+        .arg(&path)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["members"]
+            .as_object()
+            .unwrap()
+            .len(),
+        32
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn graph_is_static_original_source_compiler_data_and_does_not_need_a_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = binary()
@@ -532,7 +649,10 @@ fn graph_is_static_original_source_compiler_data_and_does_not_need_a_runtime() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let model: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let graph: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(graph["revision"], 1);
+    assert_eq!(graph["entry"], "main");
+    let model = &graph["members"]["main"]["model"];
     assert_eq!(model["sources"].as_array().unwrap().len(), 2);
     assert!(!model["edges"].as_array().unwrap().is_empty());
     assert!(

@@ -62,11 +62,15 @@ API completion/hover/signatures are derived from the compiler's complete builtin
 registrations, including memory, math, text and bit helpers. Standard API names
 are reserved consistently at module scope; there is no lazy historical-name path.
 
-`graph WORKCART` emits read-only compiler JSON: original module text/IDs, typed
-definitions, source-mapped diagnostics/references, callbacks, globals, routines,
-and resolved call/start/read/write/asset edges. It never runs the cartridge or
-requires Node. Invalid source returns diagnostics, a nonzero status and no
-executable graph. It is not a scene format or an additional game engine.
+`graph GAME` accepts source workcarts, raw cartridges and cartridge PNGs. Its
+current revision-1 JSON has `entry: "main"` and `members`, keyed by local alias.
+Each member carries `cartridgeId` and its compiler `model`: original module
+text/IDs, typed definitions, source-mapped diagnostics/references, callbacks,
+globals, routines and resolved call/start/read/write/asset edges. Source, node and
+symbol IDs belong to that member, not a merged global namespace. It never runs
+the cartridge or requires Node. Invalid source drafts return member-scoped
+diagnostics and a nonzero status; packed/PNG games must first pass whole-game
+admission. It is not a scene format or an additional game engine.
 
 See [Studio](STUDIO.md), [standard library](STANDARD_LIBRARY.md), and the
 [native implementation acceptance ledger](NATIVE_IMPLEMENTATION.md).

@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- CLI `graph` now emits a shared core compiler model for every game member, with
+  explicit alias/save-ID scope instead of treating overlapping file/symbol/node
+  IDs as global. Source drafts keep invalid child diagnostics and exact original
+  CRLF offsets without packing or executing code. Raw/PNG inputs first pass
+  authoritative whole-game admission and produce the same model. New core/CLI
+  regressions cover two-member scope, invalid child source, duplicate IDs,
+  identical source/raw/PNG results and all 32 members without Node. All four core
+  tooling tests, three CLI graph integrations and all-feature workspace Clippy
+  pass. Bundle-wide
+  normal `info` analysis and final cross-host audit remain open.
 - Native package export now admits the complete source/raw/PNG game before any
   output is created, preserves exact shipped bytes and selects main's package
   identity even from a child editor. Metadata records whole-game SHA-256 and every

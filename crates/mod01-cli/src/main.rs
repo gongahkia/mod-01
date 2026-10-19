@@ -160,7 +160,7 @@ enum Command {
         #[arg(long)]
         source: bool,
     },
-    /// Emit compiler-derived definitions, diagnostics and call/state/asset relationships as JSON.
+    /// Emit member-scoped compiler definitions, diagnostics and call/state/asset relationships as JSON.
     Graph {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -370,16 +370,26 @@ fn main() -> ExitCode {
 }
 
 fn graph_project(path: &Path) -> ExitCode {
-    let Ok(project) = load_project(path) else {
+    let source = if path.is_dir() || is_workcart_path(path) {
+        load_project(path).map(|project| project.source)
+    } else {
+        load_game(path).map(|game| game.source().to_owned())
+    };
+    let Ok(source) = source else {
         return ExitCode::FAILURE;
     };
-    match modl_core::analyze_project_model(&project.manifest_source, &project.files) {
+    match modl_core::tooling::analyze_game_model(&source) {
         Ok(model) => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&model).expect("compiler model serializes")
             );
-            status(!model.diagnostics.is_empty())
+            status(
+                model
+                    .members
+                    .values()
+                    .any(|member| !member.model.diagnostics.is_empty()),
+            )
         }
         Err(error) => {
             eprintln!("{}: {error}", path.display());

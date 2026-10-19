@@ -22,8 +22,9 @@ manifest drafts must be applied before composition changes. PNG and native deskt
 exports retain the complete game with main's presentation identity. Bundle-wide
 CLI analysis now distinguishes shipping storage from each member's ROM/asset
 capacity, and compiler graphs keep separate member namespaces. Final cross-host
-verification is still in progress; the complete multi-cartridge acceptance row
-is not yet closed.
+game/replay/debugger conformance is verified by the acceptance evidence below.
+Desktop platform/hardware qualification and the whole-product final audit are
+separate, still-open requirements.
 
 ## Authoring and admission
 
@@ -102,7 +103,7 @@ package. Rebinding aliases, changing embedded source without rebuilding members,
 forging compiled code, recomputing inventories, adding unknown fields/files,
 nested compositions and historical headers all fail. Single-cartridge bytes are
 unchanged. Core tests exercise a complete 32-member round trip and these rejection
-paths; gameplay/replay/debugger parity remains an open acceptance requirement.
+paths; the acceptance checks below cover gameplay/replay/debugger integration.
 
 ## Deferred request API
 
@@ -226,10 +227,28 @@ Metadata is retained separately per alias, so identical source paths/symbol IDs 
 different cartridges cannot silently share one debugger map. Tests exercise real
 release/debug compiler output, unused invalid dependencies, deferred boot,
 prototype-named paths, metadata copying and malformed/bounded transport. This
-loader is connected to headless execution; native command-handler integration is
-still open. CLI integration tests pack/run a shipping game larger than one ROM,
+loader is connected to both headless execution and the native command handler.
+CLI integration tests pack/run a shipping game larger than one ROM,
 cycle all 32 real MODL members, inspect whole source without Node, verify exact
 per-ID save values, and reject invalid unused members before starting Node.
+
+## Acceptance evidence
+
+The multi-cartridge feature is implemented and verified, not only exposed by APIs:
+
+| Contract                                                                         | Reproducible evidence                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Complete local dependencies, source retention, limits and invalid unused members | [Rust game admission](../crates/modl-core/src/game.rs), [bundle tests](../crates/modl-core/src/bundle.rs) and [CLI integration](../crates/mod01-cli/tests/cli.rs) cover exact source/raw/PNG round trips, 32 members, each ROM's capacity and whole-catalog rejection before execution.                                                                                                    |
+| Frame-boundary transitions, explicit parameters and asset-only reload            | [Real MODL request conformance](../packages/runtime/src/cartridge-control-conformance.test.ts) and [game scheduler tests](../packages/runtime/src/game-runtime.test.ts) exercise release/debug code, held-input quarantine, deferred boot, compatible banks, retained RAM/tasks/RNG/time/menu, donor non-execution and reset voices.                                                       |
+| Separate save identities, producer ownership, faults and restore                 | The same scheduler tests plus [Studio game tests](../crates/mod01-native/src/studio_game_tests.rs) cover all 32 save identities, failed-frame non-persistence, preloaded disk saves, disposable replay/debug commits and transactional checkpoint rejection.                                                                                                                               |
+| Native member authoring and debugger routing                                     | Studio tests cover member-scoped drafts/history, safe import/removal, main-only entry selection, frozen source maps, overlapping source/symbol IDs, watches, breakpoints and active-member source inspection.                                                                                                                                                                              |
+| End-to-end representations and packaged execution                                | [Relay Station verification](../scripts/verify-relay-station.mjs) compares all 110 frames' pixels, PCM, commands, work and producer cursors, then final canonical state/checkpoint and separate saves across CLI/native source/raw/PNG and the actual standalone executable with empty PATH. This has passed on Linux; CI also defines Windows/macOS runs, which are not locally verified. |
+| Actual Studio replay and source stepping                                         | `relay_station_studio_source_steps_and_night_bank_checkpoint_replay_match_release_frames` runs the maintained game through all 110 release/debug frames, restores the live night-bank checkpoint at frame 23, and reaches the same canonical final checkpoint without persisting saves or changing source.                                                                                 |
+
+These checks are in the full quality gate. Linux GUI inspection additionally
+covered actual day/night sprite changes, full minimum player/touch layouts and
+SOURCE reopening the active vault member at Studio's minimum size. This does not
+claim physical touchscreen/controller/audio or other-OS execution qualification.
 
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),

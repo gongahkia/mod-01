@@ -30,7 +30,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [x]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [x]      |
-| Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
+| Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested; [acceptance evidence](BUNDLES.md#acceptance-evidence).           | [x]      |
 | Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [x]      |
 | Examples and games            | Documented, playable and tested 2D and software-rendered 3D games demonstrate the added APIs using public facilities.                                                                                       | [x]      |
 | Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [ ]      |
@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Requirement-specific bundle audit is complete against the reviewed local
+  dependency/transition/reload/state/save/validation contract. The bundle guide
+  now links admission, scheduler, native editor/debugger and cross-host/package
+  evidence, including the maintained game and night-bank rewind. Removed stale
+  claims that the native handler or replay integration is unimplemented. This
+  closes the multi-cartridge row only; desktop platform/hardware qualification,
+  identified general tooling hardening and the full product audit remain open.
 - Release artifact smoke checks now inspect the JSON result, not only CLI exit
   status. Each of ten maintained packed games must report the current result
   revision, expected identity, five requested/completed frames, five ordered

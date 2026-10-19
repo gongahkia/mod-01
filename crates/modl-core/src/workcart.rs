@@ -540,12 +540,19 @@ fn check_member_removal_references(
             let TokenKind::Identifier(name) = &token.kind else {
                 continue;
             };
-            if !matches!(name.as_str(), "load_cart" | "reload_assets")
-                || !tokens
-                    .get(index + 1)
-                    .is_some_and(|token| token.kind == TokenKind::LeftParen)
-            {
+            if !matches!(name.as_str(), "load_cart" | "reload_assets") {
                 continue;
+            }
+            if !tokens
+                .get(index + 1)
+                .is_some_and(|token| token.kind == TokenKind::LeftParen)
+            {
+                return Err(workcart_error(
+                    "M014075",
+                    format!(
+                        "cannot remove '{removed}': {owner}/{path} contains an indirect {name} reference; edit the request first"
+                    ),
+                ));
             }
             let target = match (tokens.get(index + 2), tokens.get(index + 3)) {
                 (Some(target), Some(end))
@@ -1157,6 +1164,13 @@ mod tests {
                 }));
             }
         }
+        let indirect = fixture("on update:\n  let request = load_cart\n", false);
+        assert_eq!(
+            super::remove_workcart_member(&indirect, "level")
+                .unwrap_err()
+                .code,
+            "M014075"
+        );
         let harmless = fixture(
             "// load_cart(\"level\", \"\")\non update:\n  load_cart(\"main\", \"level\")\non draw:\n  print(\"reload_assets(level)\", 0, 0, 1)\n",
             false,

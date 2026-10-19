@@ -12,6 +12,15 @@ const MAX_BYTES: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 1024;
 static TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
+struct MetadataLock(File);
+impl Drop for MetadataLock {
+    fn drop(&mut self) {
+        // Closing alone releases flock only after the last inherited/duplicated file
+        // description closes. Runtime process startup may briefly inherit one before exec.
+        let _ = self.0.unlock();
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
@@ -186,6 +195,7 @@ impl LibraryStore {
             .map_err(|error| error.to_string())?;
         lock.try_lock()
             .map_err(|error| format!("library is busy in another Studio: {error}"))?;
+        let _lock = MetadataLock(lock);
         if read_metadata(&self.path)? != self.expected {
             return Err(
                 "library changed outside this Studio; reload before editing preferences".to_owned(),
@@ -506,9 +516,20 @@ mod tests {
                 .contains("busy")
         );
         assert_eq!(fs::read(&path).unwrap(), bytes);
-        drop(lock); // The OS lock disappears with its handle; no stale PID-file recovery is needed.
+        lock.unlock().unwrap();
+        drop(lock); // No stale PID-file recovery is needed.
         stale.preferences(&cart, false, &[]).unwrap();
         assert!(!stale.collection.entries[0].favourite);
+        let handle = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path.with_extension("lock"))
+            .unwrap();
+        handle.try_lock().unwrap();
+        let inherited = handle.try_clone().unwrap();
+        drop(MetadataLock(handle));
+        stale.preferences(&cart, true, &[]).unwrap();
+        drop(inherited); // Explicit guard unlock succeeds even while another description survives.
         let previous = stale.collection.clone();
         fs::write(&path, b"broken outside Studio").unwrap();
         assert!(stale.reload().is_err());

@@ -51,6 +51,11 @@ choices remain outstanding.
 
 ## Progress
 
+- Full parallel verification exposed a library-lock lifetime race: closing a
+  handle alone need not release a lock while a runtime child briefly inherits
+  its file description before exec. The transaction guard now explicitly unlocks
+  on every exit. Tests retain a duplicated handle while committing the next
+  transaction, and all 95 native tests pass. The full gate is being rerun.
 - Offline-library storage foundation: five native tests prove atomic preference
   updates, favourites/labels/recents persistence, stale-instance conflict checks,
   bounded metadata and read-only corruption handling. Forgetting a bookmark never

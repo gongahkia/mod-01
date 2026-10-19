@@ -56,6 +56,12 @@ choices remain outstanding.
 
 ## Progress
 
+- The Windows capture shows the real player correctly running the blank game;
+  its missing save was a QA-fixture bug, not a runtime failure. CRLF checkout
+  text prevented the multiline initializer replacement. The extracted generator
+  now normalizes only its temporary copy and rejects missing template markers.
+  Regressions first reproduce the CRLF/missing-marker failures, then require
+  identical LF/CRLF fixtures containing the real save and colour-200 program.
 - With the Linux dependency repaired, Linux and macOS pass actual-window CI.
   Windows' Mesa setup succeeds and window detection passes, but its first saved
   frame has not yet been qualified. The probe now targets the owning PID and

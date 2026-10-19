@@ -18,6 +18,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { stageWindowsGraphicsDriver } from './native-window-driver.mjs';
+import { nativeWindowFixture } from './native-window-fixture.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const platform = process.platform;
@@ -94,12 +95,10 @@ try {
       closeX11,
     ]);
   }
-  const source = readFileSync(join(root, 'templates/blank/cart.m01w'), 'utf8')
-    .replace('id = "blank-cart"', `id = "${id}"`)
-    .replace(
-      'on draw:\n  clear(1)',
-      'on start:\n  save_set_int("gui_ready", 73)\n  save_commit()\non draw:\n  clear(200)\n  rect_fill(8, 8, 32, 32, 7)',
-    );
+  const source = nativeWindowFixture(
+    readFileSync(join(root, 'templates/blank/cart.m01w'), 'utf8'),
+    id,
+  );
   const workcart = join(temporary, 'cart.m01w');
   const output = join(temporary, 'game');
   writeFileSync(workcart, source);

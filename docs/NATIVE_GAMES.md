@@ -181,3 +181,6 @@ CI preserves window captures, the player's log and a small diagnostic report in
 the separate `mod01-gui-qa-*` artifacts, including on failure. Cold llvmpipe
 startup has a bounded 30-second first-frame allowance; the real save assertion
 and normal-exit checks are unchanged.
+The fixture generator normalizes LF/CRLF in its temporary template copy and
+rejects missing initializer markers. It never changes the repository template
+or silently falls back to testing a blank game without the required save call.

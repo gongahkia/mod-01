@@ -207,3 +207,14 @@ choices remain outstanding.
   `asset-history-undo.png`). First-use Display also now safely inserts its
   manifest key. The master palette has 256 colours; the display/drawing remap
   remains the documented 32 logical entries (with targets 0–255).
+
+- Shared Rust asset admission now checks every current schema, unused music/map
+  references, tile bounds, exact visual bytes and 8,192 allocation slots before
+  pack and packed import. `mod01 assets` exposes its structured report without
+  Node; `check` reports independent failures and pack writes nothing on rejection.
+  Seven core tests cover maintained projects, precise fields, all oscillator kinds,
+  boundaries and no source mutation. Thirty-nine cross-language cases agree with
+  the actual production runtime on acceptance, byte counts and allocation slots;
+  CLI regression checks prove reference diagnostics without PATH/Node and retain
+  a separate valid-schema packed-capacity test. Native live-meter integration is
+  the next slice, not claimed by these backend tests.

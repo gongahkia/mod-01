@@ -5,6 +5,22 @@ handles such as `#hero` and `#theme`. Sprite/tile-set/display JSON use current
 revision 2; map/font/sound/music each use their own current revision 1 schema.
 These are independent asset schemas, not compatibility profiles.
 
+`mod01 assets PATH` prints the shared Rust validation/capacity report as JSON
+without needing Node or a display. Its exit status is nonzero for an invalid
+bank. `mod01 check PATH` prints independent asset failures alongside source
+diagnostics, and packing/loading a packed cartridge enforces the same validation.
+The editable workcart remains openable for repair. Reports identify the asset,
+file and JSON field: `M014060` schema, `M014061` reference, `M014062` capacity and
+`M014063` missing file. At most 128 diagnostics are retained; the JSON report's
+`diagnosticsTruncated` flag states whether more were suppressed.
+
+Usage counts schema-valid payloads only: any diagnostic means the bank is not
+loadable, even if its partial byte count is below capacity. Visual bytes and
+allocation slots are independent limits. `sourceBytes` is unique authored asset
+JSON bytes, not console RAM or packed cartridge size. Runtime admission validates
+untrusted data again; cross-language conformance tests compare both boundaries
+and exact layout costs, including display storage.
+
 Indexed colours are 0–255; sprite colour 0 defaults to transparent. The fixed
 master RGB palette cannot be replaced. The 32 logical drawing/raster remaps
 can each target any colour; direct indices 32–255 bypass this remap.

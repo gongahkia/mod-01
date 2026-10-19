@@ -79,6 +79,11 @@ enum Command {
     },
     /// Check MODL/1 source modules without producing output.
     Check { paths: Vec<PathBuf> },
+    /// Inspect shared asset validation, references and exact visual capacity as JSON.
+    Assets {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Format MODL/1 source modules in place.
     Fmt {
         /// Report files that differ without writing them.
@@ -257,6 +262,7 @@ fn main() -> ExitCode {
             output,
         } => build_file(&path, output.as_deref(), debug),
         Command::Check { paths } => check_files(&paths),
+        Command::Assets { path } => asset_report(&path),
         Command::Fmt { check, paths } => format_files(&paths, check),
         Command::Pack { path, output } => pack_directory(&path, output.as_deref()),
         Command::Test { path } => test_directory(&path),
@@ -1473,6 +1479,21 @@ fn write_program(generated: &GeneratedProgram, output: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn asset_report(path: &Path) -> ExitCode {
+    let Ok(project) = load_project(path) else {
+        return ExitCode::FAILURE;
+    };
+    let report = modl_core::assets::analyze_project_assets(&project.manifest, &project.files);
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    status(!report.is_valid())
+}
+
 fn check_files(paths: &[PathBuf]) -> ExitCode {
     let defaults = [PathBuf::from(".")];
     let paths = if paths.is_empty() {
@@ -1487,18 +1508,35 @@ fn check_files(paths: &[PathBuf]) -> ExitCode {
                 failed = true;
                 continue;
             };
+            let assets =
+                modl_core::assets::analyze_project_assets(&project.manifest, &project.files);
+            for diagnostic in &assets.diagnostics {
+                eprintln!(
+                    "{}: error[{}]: {diagnostic}",
+                    path.display(),
+                    diagnostic.code
+                );
+            }
+            if assets.diagnostics_truncated {
+                eprintln!(
+                    "{}: further asset diagnostics suppressed (limit 128)",
+                    path.display()
+                );
+            }
+            failed |= !assets.is_valid();
             match compile_project(
                 &project.manifest_source,
                 &project.files,
                 CompileMode::Release,
             ) {
-                Ok(output) if output.analysis.diagnostics.is_empty() => match project.pack() {
-                    Ok(_) => {}
-                    Err(error) => {
+                Ok(output) if output.analysis.diagnostics.is_empty() => {
+                    if assets.is_valid()
+                        && let Err(error) = project.pack()
+                    {
                         eprintln!("{}: {error}", path.display());
                         failed = true;
                     }
-                },
+                }
                 Ok(output) => {
                     emit_project_diagnostics(path, &output.analysis.diagnostics);
                     failed = true;

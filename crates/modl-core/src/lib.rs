@@ -1,5 +1,6 @@
 //! Shared compiler, analysis, and cartridge-format implementation for MODL/1.
 
+pub mod assets;
 pub mod ast;
 pub mod cartridge;
 pub mod cartridge_png;

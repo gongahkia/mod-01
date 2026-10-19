@@ -249,6 +249,7 @@ fn pack_materialized_project(
     project_files: &BTreeMap<String, Vec<u8>>,
     source: &[u8],
 ) -> Result<PackedCartridge, CartridgeError> {
+    crate::assets::analyze_project_assets(manifest, project_files).require_valid()?;
     let normalized_entry = normalize_project_path(&manifest.entry)?;
     let mut asset_catalog = AssetCatalog::default();
     for (name, asset) in &manifest.assets {
@@ -1277,6 +1278,7 @@ fn validate_packed_manifest(
         std::str::from_utf8(source).map_err(|_| invalid("workcart source is not UTF-8"))?;
     let project = crate::parse_workcart(source)?;
     let metadata = &project.manifest;
+    crate::assets::analyze_project_assets(metadata, &project.files).require_valid()?;
     let assets = metadata
         .assets
         .iter()

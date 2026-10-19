@@ -815,13 +815,13 @@ source = "on draw:\n  clear(25)\n"
 name = "tiles"
 kind = "tile_set"
 path = "assets/tiles.m01g"
-payload = '''{"revision":1,"kind":"tile_set","tiles":[[0,0,0,0,0,0,0,0]],"flags":[0]}'''
+payload = '''{"revision":2,"kind":"tile_set","tiles":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],"flags":[0]}'''
 
 [[asset]]
 name = "world"
 kind = "map"
 path = "assets/world.m01m"
-payload = '''{"revision":1,"kind":"map","layers":[]}'''
+payload = '''{"revision":1,"kind":"map","layers":[{"width":1,"height":1,"cells":[0],"tileSet":"tiles"}]}'''
 
 [[file]]
 path = "presentation/label.svg"

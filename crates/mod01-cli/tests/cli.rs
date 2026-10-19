@@ -93,6 +93,83 @@ fn check_accepts_the_positive_language_fixture() {
 }
 
 #[test]
+fn assets_check_and_pack_share_precise_reference_diagnostics_without_needing_node() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut project = modl_core::parse_workcart(
+        &fs::read_to_string(root.join("examples/api-tour/cart.m01w")).unwrap(),
+    )
+    .unwrap();
+    let mut map: Value = serde_json::from_slice(&project.files["assets/room.m01m"]).unwrap();
+    map["layers"][0]["tileSet"] = json!("beep");
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&map).unwrap(),
+    );
+    let mut music: Value = serde_json::from_slice(&project.files["assets/loop.m01t"]).unwrap();
+    music["patterns"]["unused"] =
+        json!({"rows":[[{"note":60,"sound":"missing_patch"},null,null,null,null,null,null,null]]});
+    project.files.insert(
+        "assets/loop.m01t".to_owned(),
+        serde_json::to_vec(&music).unwrap(),
+    );
+    let source = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    let temporary = std::env::temp_dir().join(format!(
+        "mod01-asset-report-{}-{}.m01w",
+        std::process::id(),
+        line!()
+    ));
+    fs::write(&temporary, &source).unwrap();
+    let report = binary()
+        .arg("assets")
+        .arg(&temporary)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(report.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&report.stdout).unwrap();
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 2);
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["code"] == "M014061")
+    );
+    let check = binary()
+        .arg("check")
+        .arg(&temporary)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(check.status.code(), Some(1));
+    let diagnostics = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        diagnostics.contains("assets/room.m01m:$.layers[0].tileSet"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("missing_patch"), "{diagnostics}");
+    let packed = temporary.with_extension("m01c");
+    let pack = binary()
+        .arg("pack")
+        .arg(&temporary)
+        .arg("--output")
+        .arg(&packed)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(pack.status.code(), Some(1));
+    assert!(!packed.exists());
+    assert_eq!(fs::read_to_string(&temporary).unwrap(), source);
+    fs::remove_file(&temporary).unwrap();
+}
+
+#[test]
 fn formatter_check_distinguishes_valid_unformatted_source() {
     let path =
         std::env::temp_dir().join(format!("mod01-cli-{}-{}.modl", std::process::id(), line!()));
@@ -361,7 +438,7 @@ source = "on draw:\n  clear(0)\n"
 name = "oversized"
 kind = "sprite"
 path = "assets/oversized.m01g"
-payload = '''{{"padding":"{padding}"}}'''
+payload = '''{{"revision":2,"kind":"sprite","width":1,"height":1,"frames":[[1]],"padding":"{padding}"}}'''
 "#
         ),
     )

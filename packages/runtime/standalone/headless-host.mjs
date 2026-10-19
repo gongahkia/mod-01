@@ -6487,7 +6487,10 @@ function exact(value, keys) {
   );
 }
 new TextEncoder();
-new TextDecoder('utf-8', { fatal: true });
+new TextDecoder('utf-8', {
+  fatal: true,
+  ignoreBOM: true,
+});
 var REPLAY_MAX_FRAMES = 36e3;
 function replayInputFrames(trace) {
   if (!isReplayTrace(trace, 36e3)) throw new TypeError('replay schema is invalid');
@@ -6539,7 +6542,15 @@ function replayFrameInput(frame) {
   }
   return {
     ...input,
-    ...(frame.pointer === void 0 ? {} : { pointer: frame.pointer }),
+    ...(frame.pointer === void 0
+      ? {}
+      : {
+          pointer: {
+            ...frame.pointer,
+            x: frame.pointer.x === 0 ? 0 : frame.pointer.x,
+            y: frame.pointer.y === 0 ? 0 : frame.pointer.y,
+          },
+        }),
     ...(frame.menuAction === void 0 ? {} : { menuAction: frame.menuAction }),
   };
 }

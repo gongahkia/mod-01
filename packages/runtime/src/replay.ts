@@ -10,7 +10,8 @@ import {
 } from './input';
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder('utf-8', { fatal: true });
+// Preserve a BOM so JSON.parse rejects it, matching Rust's strict JSON reader.
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 export const REPLAY_MAX_FRAMES = 36_000;
 export const REPLAY_MAX_BYTES = 8 * 1024 * 1024;
@@ -77,7 +78,7 @@ export function encodeReplayTrace(
 
 /** Strictly decodes a bounded trace before it can influence a cartridge frame. */
 export function decodeReplayTrace(bytes: Uint8Array): ReplayTrace {
-  if (bytes.length < 27 || bytes.length > REPLAY_MAX_BYTES)
+  if (bytes.length === 0 || bytes.length > REPLAY_MAX_BYTES)
     throw new RangeError('replay byte length is invalid');
   let value: unknown;
   try {
@@ -146,7 +147,15 @@ function replayFrameInput(frame: ReplayTraceFrame): InputFrame {
   }
   return {
     ...input,
-    ...(frame.pointer === undefined ? {} : { pointer: frame.pointer }),
+    ...(frame.pointer === undefined
+      ? {}
+      : {
+          pointer: {
+            ...frame.pointer,
+            x: frame.pointer.x === 0 ? 0 : frame.pointer.x,
+            y: frame.pointer.y === 0 ? 0 : frame.pointer.y,
+          },
+        }),
     ...(frame.menuAction === undefined ? {} : { menuAction: frame.menuAction }),
   };
 }

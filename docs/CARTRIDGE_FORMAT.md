@@ -146,6 +146,16 @@ are rejected; absence means no activation. Navigation and pause duration are
 host state, not extra machine frames. The current `.m01rec` envelope also uses revision 1;
 other replay schemas are rejected.
 
+Replay admission is shared by a Rust/TypeScript conformance corpus. JSON numbers
+use their bounded integral value under [JSON's number grammar](https://www.rfc-editor.org/rfc/rfc8259.html#section-6),
+not their spelling: `1`, `1.0` and `1e0` are
+equivalent; fractional/out-of-range values and booleans are not integers. Expanded
+pointer coordinates normalize negative zero to zero. Compact empty traces need
+no trailing newline. Optional pointer/action/duration fields may be omitted, but
+explicit null is invalid. Unknown fields, duplicate ports/buttons, overlapping
+ranges, byte-order marks and malformed UTF-8 are rejected. The schema stays
+revision 1; this does not add a legacy decoder or migration path.
+
 The current headless request/result schema is revision 2; the input replay schema
 above remains revision 1. There is no older-request fallback. Every source/raw/PNG
 run uses shared whole-game Rust admission and the production game scheduler,

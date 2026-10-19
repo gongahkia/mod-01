@@ -65,7 +65,9 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
         return Err("replay size is invalid".to_owned());
     }
     let value: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-    if value["revision"] != 1 || value.as_object().is_none_or(|object| object.len() != 2) {
+    if bounded_integer(&value["revision"], 1) != Some(1)
+        || value.as_object().is_none_or(|object| object.len() != 2)
+    {
         return Err("replay revision or fields are invalid".to_owned());
     }
     let frames = value["frames"]
@@ -81,11 +83,10 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
         {
             return Err("replay frame has unknown fields".to_owned());
         }
-        let start = frame["frame"].as_u64().ok_or("invalid frame number")?;
+        let start =
+            bounded_integer(&frame["frame"], MAX_FRAMES - 1).ok_or("invalid frame number")?;
         let duration = if object.contains_key("duration") {
-            frame["duration"]
-                .as_u64()
-                .ok_or("invalid replay duration")?
+            bounded_integer(&frame["duration"], MAX_FRAMES).ok_or("invalid replay duration")?
         } else {
             1
         };
@@ -110,7 +111,7 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
             }) {
                 return Err("replay controller fields are invalid".to_owned());
             }
-            let port = controller["port"].as_u64().ok_or("invalid replay port")?;
+            let port = bounded_integer(&controller["port"], 4).ok_or("invalid replay port")?;
             if !(1..=4).contains(&port) || !ports.insert(port) {
                 return Err("duplicate or invalid replay port".to_owned());
             }
@@ -126,27 +127,24 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
                 input["controllers"][(port - 1) as usize]["buttons"][name] = json!(true);
             }
         }
-        if !frame["pointer"].is_null() {
+        if object.contains_key("pointer") {
             let pointer = &frame["pointer"];
             if pointer.as_object().is_none_or(|object| object.len() != 5)
-                || pointer["x"].as_u64().is_none_or(|x| x >= 240)
-                || pointer["y"].as_u64().is_none_or(|y| y >= 144)
                 || ["primary", "secondary", "inside"]
                     .iter()
                     .any(|key| !pointer[key].is_boolean())
             {
                 return Err("invalid replay pointer".to_owned());
             }
-            input["pointer"] = pointer.clone();
+            let x = bounded_integer(&pointer["x"], 239).ok_or("invalid replay pointer x")?;
+            let y = bounded_integer(&pointer["y"], 143).ok_or("invalid replay pointer y")?;
+            input["pointer"] = json!({"x":x,"y":y,"primary":pointer["primary"],"secondary":pointer["secondary"],"inside":pointer["inside"]});
         }
         if object.contains_key("menuAction") {
-            if frame["menuAction"]
-                .as_u64()
-                .is_none_or(|slot| !(1..=5).contains(&slot))
-            {
-                return Err("invalid replay menu action".to_owned());
-            }
-            input["menuAction"] = frame["menuAction"].clone();
+            let slot = bounded_integer(&frame["menuAction"], 5)
+                .filter(|slot| *slot >= 1)
+                .ok_or("invalid replay menu action")?;
+            input["menuAction"] = json!(slot);
         }
         for offset in 0..duration {
             output.insert((start + offset) as u32, input.clone());
@@ -154,6 +152,20 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
         previous_end = start + duration;
     }
     Ok(output)
+}
+
+// JSON has one numeric grammar. Match JS safe-integer semantics within these
+// small public limits, rather than rejecting the equivalent spellings 1.0/1e0.
+fn bounded_integer(value: &Value, maximum: u64) -> Option<u64> {
+    value
+        .as_f64()
+        .filter(|number| {
+            number.is_finite()
+                && number.fract() == 0.0
+                && *number >= 0.0
+                && *number <= maximum as f64
+        })
+        .map(|number| number as u64)
 }
 
 fn trace_frame(frame: u64, input: &Value) -> Result<Value, String> {
@@ -205,6 +217,47 @@ pub fn empty_input() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{decode, empty_input, encode, read};
+
+    #[test]
+    fn shared_rust_cli_corpus_has_identical_admission_and_expanded_inputs() {
+        let corpus: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/conformance/replays.json")).unwrap();
+        for item in corpus.as_array().unwrap() {
+            let name = item["name"].as_str().unwrap();
+            let actual = decode(item["json"].as_str().unwrap().as_bytes());
+            let Some(frames) = item["expanded"].as_array() else {
+                assert!(actual.is_err(), "{name} must be rejected");
+                continue;
+            };
+            let expected = frames
+                .iter()
+                .map(|frame| {
+                    let mut input = empty_input();
+                    if let Some(ports) = frame["ports"].as_object() {
+                        for (port, buttons) in ports {
+                            for button in buttons.as_array().unwrap() {
+                                input["controllers"][port.parse::<usize>().unwrap() - 1]["buttons"]
+                                    [button.as_str().unwrap()] = true.into();
+                            }
+                        }
+                    }
+                    for key in ["pointer", "menuAction"] {
+                        if let Some(value) = frame.get(key) {
+                            input[key] = value.clone();
+                        }
+                    }
+                    (frame["frame"].as_u64().unwrap() as u32, input)
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(
+                actual.unwrap_or_else(|error| panic!("{name}: {error}")),
+                expected,
+                "{name}"
+            );
+            let encoded = encode(&expected.clone().into_iter().collect::<Vec<_>>()).unwrap();
+            assert_eq!(decode(&encoded).unwrap(), expected, "{name} round trip");
+        }
+    }
 
     #[test]
     fn replay_file_reads_are_bounded_and_accept_current_compact_empty_traces() {

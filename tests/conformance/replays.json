@@ -1,0 +1,173 @@
+[
+  {
+    "name": "compact empty without newline",
+    "json": "{\"revision\":1,\"frames\":[]}",
+    "expanded": []
+  },
+  {
+    "name": "integral revision exponent",
+    "json": "{\"revision\":1e0,\"frames\":[]}",
+    "expanded": []
+  },
+  {
+    "name": "neutral frame",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[]}]}",
+    "expanded": [{ "frame": 0 }]
+  },
+  {
+    "name": "integral fraction and exponent fields",
+    "json": "{\"revision\":1.0,\"frames\":[{\"frame\":2.0,\"duration\":2e0,\"controllers\":[{\"port\":4.0,\"buttons\":[\"b\"]}],\"pointer\":{\"x\":239e0,\"y\":143.0,\"primary\":true,\"secondary\":false,\"inside\":true},\"menuAction\":5.0}]}",
+    "expanded": [
+      {
+        "frame": 2,
+        "ports": { "4": ["b"] },
+        "pointer": { "x": 239, "y": 143, "primary": true, "secondary": false, "inside": true },
+        "menuAction": 5
+      },
+      {
+        "frame": 3,
+        "ports": { "4": ["b"] },
+        "pointer": { "x": 239, "y": 143, "primary": true, "secondary": false, "inside": true },
+        "menuAction": 5
+      }
+    ]
+  },
+  {
+    "name": "negative zero has ordinary zero meaning",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":-0.0,\"controllers\":[],\"pointer\":{\"x\":-0.0,\"y\":-0,\"primary\":false,\"secondary\":false,\"inside\":false}}]}",
+    "expanded": [{ "frame": 0 }]
+  },
+  {
+    "name": "last admitted frame and pointer boundary",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":35999,\"duration\":1,\"controllers\":[],\"pointer\":{\"x\":239,\"y\":143,\"primary\":false,\"secondary\":true,\"inside\":true}}]}",
+    "expanded": [
+      {
+        "frame": 35999,
+        "pointer": { "x": 239, "y": 143, "primary": false, "secondary": true, "inside": true }
+      }
+    ]
+  },
+  {
+    "name": "gaps remain unspecified and durations expand",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"duration\":2,\"controllers\":[]},{\"frame\":5,\"controllers\":[],\"menuAction\":2}]}",
+    "expanded": [{ "frame": 0 }, { "frame": 1 }, { "frame": 5, "menuAction": 2 }]
+  },
+  {
+    "name": "controller order is not port identity",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":4,\"buttons\":[\"b\",\"menu\"]},{\"port\":1,\"buttons\":[\"a\",\"start\"]}]}]}",
+    "expanded": [{ "frame": 0, "ports": { "1": ["a", "start"], "4": ["b", "menu"] } }]
+  },
+  {
+    "name": "byte order mark is not JSON whitespace",
+    "json": "\ufeff{\"revision\":1,\"frames\":[]}"
+  },
+  { "name": "unversioned", "json": "{\"frames\":[]}" },
+  { "name": "obsolete revision", "json": "{\"revision\":0,\"frames\":[]}" },
+  { "name": "unknown root field", "json": "{\"revision\":1,\"frames\":[],\"extra\":0}" },
+  { "name": "frames is not an array", "json": "{\"revision\":1,\"frames\":{}}" },
+  { "name": "missing controllers", "json": "{\"revision\":1,\"frames\":[{\"frame\":0}]}" },
+  {
+    "name": "unknown frame field",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"extra\":0}]}"
+  },
+  {
+    "name": "boolean is not a frame number",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":false,\"controllers\":[]}]}"
+  },
+  {
+    "name": "fractional frame",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0.5,\"controllers\":[]}]}"
+  },
+  {
+    "name": "negative frame",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":-1,\"controllers\":[]}]}"
+  },
+  {
+    "name": "frame past limit",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":36000,\"controllers\":[]}]}"
+  },
+  {
+    "name": "zero duration",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"duration\":0,\"controllers\":[]}]}"
+  },
+  {
+    "name": "null duration is not omission",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"duration\":null,\"controllers\":[]}]}"
+  },
+  {
+    "name": "fractional duration",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"duration\":1.5,\"controllers\":[]}]}"
+  },
+  {
+    "name": "duration past limit",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":35999,\"duration\":2,\"controllers\":[]}]}"
+  },
+  {
+    "name": "overlapping ranges",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"duration\":2,\"controllers\":[]},{\"frame\":1,\"controllers\":[]}]}"
+  },
+  {
+    "name": "duplicate ports",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":1,\"buttons\":[]},{\"port\":1,\"buttons\":[]}]}]}"
+  },
+  {
+    "name": "port zero",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":0,\"buttons\":[]}]}]}"
+  },
+  {
+    "name": "fractional port",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":1.5,\"buttons\":[]}]}]}"
+  },
+  {
+    "name": "unknown controller field",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":1,\"buttons\":[],\"extra\":0}]}]}"
+  },
+  {
+    "name": "unknown button",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":1,\"buttons\":[\"escape\"]}]}]}"
+  },
+  {
+    "name": "duplicate button",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[{\"port\":1,\"buttons\":[\"a\",\"a\"]}]}]}"
+  },
+  {
+    "name": "null pointer is not omission",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"pointer\":null}]}"
+  },
+  {
+    "name": "unknown pointer field",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"pointer\":{\"x\":0,\"y\":0,\"primary\":false,\"secondary\":false,\"inside\":false,\"extra\":0}}]}"
+  },
+  {
+    "name": "missing pointer boolean",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"pointer\":{\"x\":0,\"y\":0,\"primary\":false,\"secondary\":false}}]}"
+  },
+  {
+    "name": "fractional pointer",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"pointer\":{\"x\":0.5,\"y\":0,\"primary\":false,\"secondary\":false,\"inside\":true}}]}"
+  },
+  {
+    "name": "pointer outside display",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"pointer\":{\"x\":240,\"y\":0,\"primary\":false,\"secondary\":false,\"inside\":false}}]}"
+  },
+  {
+    "name": "null menu action",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"menuAction\":null}]}"
+  },
+  {
+    "name": "fractional menu action",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"menuAction\":1.5}]}"
+  },
+  {
+    "name": "menu action outside slots",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":0,\"controllers\":[],\"menuAction\":6}]}"
+  },
+  {
+    "name": "string numeric field",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":\"0\",\"controllers\":[]}]}"
+  },
+  {
+    "name": "nonfinite numeric magnitude",
+    "json": "{\"revision\":1,\"frames\":[{\"frame\":1e400,\"controllers\":[]}]}"
+  }
+]

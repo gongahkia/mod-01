@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- A shared 40-case source-readable Rust/TypeScript replay corpus first reproduced
+  compact-empty, integral-number and negative-zero differences. Both decoders now
+  agree on accepted schemas and exact expanded inputs/round trips, including
+  integral fraction/exponent spellings, bounded ranges, port identity, pointer
+  coordinates and menu actions. Explicit null pointer is rejected like other
+  invalid optional fields; strict JSON/UTF-8 admission rejects a BOM consistently.
+  Numeric values are canonicalized without changing the current revision or
+  adding compatibility branches. The corpus follows JSON's single numeric grammar,
+  not serde_json's storage distinction between integer/floating number variants.
+  The full gate passes 318 runtime, 132 core, 137 native, 34 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, ten
+  unchanged deterministic raw/PNG pairs, both 120-frame Linux package checks and
+  the 110-frame CLI/native/source/raw/PNG/standalone comparison.
 - Actual Studio runs the maintained Relay Station programs/assets in release and
   statement-step debug modes through all 110 replay frames. Per-frame pixels,
   work, active routing and recorded input match; selected donor source cannot

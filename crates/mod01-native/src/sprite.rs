@@ -527,19 +527,7 @@ impl SpriteEditor {
 }
 
 pub fn palette() -> [[u8; 3]; 256] {
-    let mut result = [[0; 3]; 256];
-    result[..32].copy_from_slice(&super::PALETTE);
-    for index in 0..216 {
-        let red = index / 36;
-        let green = (index / 6) % 6;
-        let blue = index % 6;
-        result[32 + index] = [(red * 51) as u8, (green * 51) as u8, (blue * 51) as u8];
-    }
-    for index in 0..8 {
-        let shade = (index * 29 + 26) as u8;
-        result[248 + index] = [shade; 3];
-    }
-    result
+    *modl_core::hardware::master_palette()
 }
 
 fn nearest(rgb: [u8; 3], palette: &[[u8; 3]; 256]) -> u8 {

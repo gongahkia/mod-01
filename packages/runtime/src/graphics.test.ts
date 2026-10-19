@@ -59,10 +59,14 @@ describe('indexed graphics hardware', () => {
     deepStrictEqual(graphics.snapshot(), snapshot);
   });
 
-  it('uses one immutable, unique 32-colour master palette', () => {
+  it('uses one immutable, unique 256-colour master palette', () => {
     expect(MASTER_PALETTE).toHaveLength(HARDWARE.paletteSize);
     expect(new Set(MASTER_PALETTE)).toHaveLength(HARDWARE.paletteSize);
     expect(Object.isFrozen(MASTER_PALETTE)).toBe(true);
+    expect(MASTER_PALETTE[25]).toBe('#345581');
+    expect(MASTER_PALETTE[32]).toBe('#000000');
+    expect(MASTER_PALETTE[247]).toBe('#ffffff');
+    expect(MASTER_PALETTE[255]).toBe('#e5e5e5');
   });
 
   it('rasterizes primitives with camera, clipping, and logical palette remapping', () => {

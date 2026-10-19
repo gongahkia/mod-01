@@ -46,6 +46,18 @@ editable suggestions, not unique IDs: inspect the destination before replacing
 an existing file. Asset IDs, declared source paths and exported contents do not
 change.
 
+Sound controls use integer MIDI/frame inputs, with duration 1–3600 and envelope/
+vibrato periods 0–3600. Click to type or drag to adjust; fractional integer input
+is rejected. Floating fields retain full precision when focused without an edit.
+Opening a patch never clamps/rebuilds its source, including integral JSON floats
+and malformed fields; invalid fields remain available in raw JSON. Pitch values
+use the shared core's frequency validation rather than narrower editor-only
+limits. Choosing pulse explicitly supplies a default duty only if needed;
+choosing wavetable explicitly supplies a four-sample table only if needed.
+Existing valid tables survive waveform switches. Wavetable samples and bounded
+4–32 sample add/remove controls participate in ordinary per-asset undo/redo;
+unrelated source annotations survive edits.
+
 The music workbench shows all eight channels together, with MIDI note, patch and
 optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
 chromatic notes from the selected octave; comma/L/period/semicolon/slash extend

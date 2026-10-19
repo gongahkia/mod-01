@@ -51,6 +51,20 @@ choices remain outstanding.
 
 ## Progress
 
+- Native sound controls no longer write fractional MIDI/frame values or clamp
+  valid long envelopes on opening. Integer fields cover the full current schema,
+  float fields preserve full precision on focus/Enter, and malformed source is
+  left recoverable rather than repaired by repaint. Explicit waveform changes
+  supply only required missing duty/table defaults; authored tables survive
+  switches and expose bounded 4–32 sample editing with document undo/redo.
+  A regression first demonstrated opening-source mutation. Real-font pointer/
+  keyboard tests cover integer rejection/edits, unchanged opening, metadata,
+  waveform selection, sample bounds and undo. Edited patches pass shared core
+  validation/packing and reach the production native synth without disk writes.
+  All nine asset-tool tests and all-feature workspace Clippy pass. Inspected
+  `output/native-sound-qa-Djb4eW` captures show all five waveform choices and
+  scrollable four-sample editing with a valid bank at 900×600. GUI edits remained
+  disposable; the session closed normally with status zero.
 - Asset source, sprite/tile-atlas PNG and WAV export dialogs now share portable
   `asset-NAME.EXT` suggestions, including reserved device-like IDs. Labels are
   bounded/sanitized, source extensions are checked, and explicit user-selected

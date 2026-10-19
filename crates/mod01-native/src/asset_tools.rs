@@ -785,38 +785,154 @@ impl AssetWorkbench {
     }
 
     fn sound_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.document.is_object() {
+            ui.label("INVALID SOUND OBJECT / EDIT SOURCE");
+            return;
+        }
         let mut wave = self.document["waveform"]
             .as_str()
-            .unwrap_or("pulse")
+            .unwrap_or("INVALID / SELECT WAVEFORM")
             .to_owned();
+        let previous_wave = wave.clone();
         egui::ComboBox::from_id_salt("waveform")
+            .height(5.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y) + 12.0)
             .selected_text(&wave)
             .show_ui(ui, |ui| {
                 for choice in ["pulse", "triangle", "saw", "noise", "wavetable"] {
                     ui.selectable_value(&mut wave, choice.to_owned(), choice);
                 }
             });
-        self.document["waveform"] = json!(wave);
+        if wave != previous_wave {
+            self.document["waveform"] = json!(wave);
+            if wave == "pulse"
+                && !self.document["duty"]
+                    .as_f64()
+                    .is_some_and(|duty| duty > 0.0 && duty < 1.0)
+            {
+                self.document["duty"] = json!(0.5);
+            }
+            if wave == "wavetable" && !valid_wavetable(&self.document["wavetable"]) {
+                self.document["wavetable"] = json!([0.0, 1.0, 0.0, -1.0]);
+            }
+        }
         for (label, path, low, high) in [
-            ("NOTE", "note", 0.0, 127.0),
-            ("FRAMES", "durationFrames", 1.0, 3600.0),
+            ("NOTE", "note", 0_u32, 127_u32),
+            ("FRAMES", "durationFrames", 1, 3600),
+            ("ATTACK", "envelope.attackFrames", 0, 3600),
+            ("DECAY", "envelope.decayFrames", 0, 3600),
+            ("RELEASE", "envelope.releaseFrames", 0, 3600),
+            ("VIBRATO PERIOD", "pitch.vibratoPeriodFrames", 0, 3600),
+        ] {
+            let Some(number) = number_path(&self.document, path).filter(|number| {
+                number.fract() == 0.0 && *number >= 0.0 && *number <= f64::from(u32::MAX)
+            }) else {
+                ui.label(format!("{label} INVALID / EDIT SOURCE"));
+                continue;
+            };
+            // Integer backing values cannot write fractional MIDI/frame counts.
+            // Valid integral JSON floats remain untouched until explicitly edited.
+            let mut value = number as u32;
+            ui.push_id(path, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut value)
+                                .speed(1)
+                                .custom_parser(|text| text.parse::<u32>().ok().map(f64::from))
+                                .range(low..=high)
+                                .clamp_existing_to_range(false),
+                        )
+                        .changed()
+                    {
+                        set_value_path(&mut self.document, path, json!(value));
+                    }
+                });
+            });
+        }
+        for (label, path, low, high) in [
             ("VOLUME", "volume", 0.0, 1.0),
             ("PAN", "pan", -1.0, 1.0),
-            ("DUTY", "duty", 0.0, 1.0),
-            ("ATTACK", "envelope.attackFrames", 0.0, 120.0),
-            ("DECAY", "envelope.decayFrames", 0.0, 120.0),
+            ("DUTY", "duty", f64::from_bits(1), 1.0_f64.next_down()),
             ("SUSTAIN", "envelope.sustainLevel", 0.0, 1.0),
-            ("RELEASE", "envelope.releaseFrames", 0.0, 120.0),
-            ("SLIDE", "pitch.slideSemitonesPerFrame", -8.0, 8.0),
-            ("VIBRATO DEPTH", "pitch.vibratoDepthSemitones", 0.0, 12.0),
-            ("VIBRATO PERIOD", "pitch.vibratoPeriodFrames", 0.0, 120.0),
+            ("SLIDE", "pitch.slideSemitonesPerFrame", -f64::MAX, f64::MAX),
+            (
+                "VIBRATO DEPTH",
+                "pitch.vibratoDepthSemitones",
+                -f64::MAX,
+                f64::MAX,
+            ),
         ] {
-            let mut value = number_path(&self.document, path);
-            ui.horizontal(|ui| {
-                ui.label(label);
-                if ui.add(egui::Slider::new(&mut value, low..=high)).changed() {
-                    set_number_path(&mut self.document, path, value);
-                }
+            if path == "duty" && wave != "pulse" {
+                continue;
+            }
+            let Some(mut value) = number_path(&self.document, path) else {
+                ui.label(format!("{label} INVALID / EDIT SOURCE"));
+                continue;
+            };
+            ui.push_id(path, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut value)
+                                .speed(0.01)
+                                .custom_formatter(|value, _| value.to_string())
+                                .range(low..=high)
+                                .clamp_existing_to_range(false),
+                        )
+                        .changed()
+                        && value.is_finite()
+                    {
+                        set_value_path(&mut self.document, path, json!(value));
+                    }
+                });
+            });
+        }
+        if wave == "wavetable" {
+            self.wavetable_ui(ui);
+        }
+        ui.label("CLICK VALUE TO TYPE / DRAG TO ADJUST / PITCH VALIDATED BY CORE");
+    }
+
+    fn wavetable_ui(&mut self, ui: &mut egui::Ui) {
+        if !valid_wavetable(&self.document["wavetable"]) {
+            ui.label("INVALID WAVETABLE / EDIT SOURCE (4–32 SAMPLES IN -1..1)");
+            return;
+        }
+        let table = self.document["wavetable"].as_array_mut().unwrap();
+        ui.horizontal(|ui| {
+            ui.label(format!("WAVETABLE / {} SAMPLES", table.len()));
+            if ui
+                .add_enabled(table.len() < 32, egui::Button::new("ADD SAMPLE"))
+                .clicked()
+            {
+                table.push(json!(0.0));
+            }
+            if ui
+                .add_enabled(table.len() > 4, egui::Button::new("REMOVE SAMPLE"))
+                .clicked()
+            {
+                table.pop();
+            }
+        });
+        for (index, sample) in table.iter_mut().enumerate() {
+            ui.push_id(("wavetable", index), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("SAMPLE {index:02}"));
+                    let mut value = sample.as_f64().unwrap();
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut value)
+                                .speed(0.01)
+                                .custom_formatter(|value, _| value.to_string())
+                                .range(-1.0..=1.0),
+                        )
+                        .changed()
+                    {
+                        *sample = json!(value);
+                    }
+                });
             });
         }
     }
@@ -826,21 +942,32 @@ fn integer(value: &Value) -> usize {
     value.as_u64().unwrap_or(0) as usize
 }
 
-fn number_path(value: &Value, path: &str) -> f64 {
+fn number_path(value: &Value, path: &str) -> Option<f64> {
     path.split('.')
         .fold(value, |current, key| &current[key])
         .as_f64()
-        .unwrap_or(0.0)
+        .filter(|number| number.is_finite())
 }
 
-fn set_number_path(value: &mut Value, path: &str, number: f64) {
+fn set_value_path(value: &mut Value, path: &str, number: Value) {
     let mut parts = path.split('.');
     let first = parts.next().unwrap_or("");
     if let Some(second) = parts.next() {
-        value[first][second] = json!(number);
+        value[first][second] = number;
     } else {
-        value[first] = json!(number);
+        value[first] = number;
     }
+}
+
+fn valid_wavetable(value: &Value) -> bool {
+    value.as_array().is_some_and(|table| {
+        (4..=32).contains(&table.len())
+            && table.iter().all(|sample| {
+                sample
+                    .as_f64()
+                    .is_some_and(|number| (-1.0..=1.0).contains(&number))
+            })
+    })
 }
 
 fn rgb_for_tile(tile: &Value, palette: &[[u8; 3]; 256]) -> [u8; 3] {
@@ -1154,6 +1281,323 @@ mod tests {
         let workbench =
             AssetWorkbench::new(AssetKind::Sound, r#"{"kind":"sound","note":60}"#).unwrap();
         assert!(workbench.source().unwrap().contains("\"note\":60"));
+    }
+
+    fn sound() -> serde_json::Value {
+        json!({"revision":1,"kind":"sound","waveform":"pulse","note":60.0,
+            "durationFrames":3600.0,"volume":0.6,"pan":0,"duty":0.000_001,
+            "envelope":{"attackFrames":3600.0,"decayFrames":240.0,"sustainLevel":0.65,"releaseFrames":180.0,"memo":"keep envelope"},
+            "pitch":{"slideSemitonesPerFrame":0.0,"vibratoDepthSemitones":24.0,"vibratoPeriodFrames":3600.0},
+            "wavetable":[0.0,0.5,0.0,-0.5],"memo":"keep patch"})
+    }
+
+    #[test]
+    fn opening_sound_controls_never_clamps_valid_values_or_repairs_invalid_source() {
+        use eframe::egui;
+        let mut documents = Vec::new();
+        for waveform in ["pulse", "triangle", "saw", "noise", "wavetable"] {
+            let mut document = sound();
+            document["waveform"] = json!(waveform);
+            documents.push(document);
+        }
+        let mut missing = sound();
+        missing.as_object_mut().unwrap().remove("waveform");
+        documents.push(missing);
+        let mut malformed = sound();
+        malformed["envelope"] = json!("invalid but recoverable");
+        malformed["note"] = json!(60.5);
+        malformed["pan"] = json!(2.0);
+        malformed["pitch"] = json!(false);
+        documents.extend([malformed, json!([]), json!(null)]);
+        for original in documents {
+            let context = egui::Context::default();
+            crate::ui_assets::install_font(&context);
+            crate::ui_theme::install(&context);
+            let mut editor = AssetWorkbench::new(AssetKind::Sound, &original.to_string()).unwrap();
+            for _ in 0..4 {
+                context
+                    .run_ui(egui::RawInput::default(), |ui| {
+                        assert!(!editor.ui(ui, &crate::sprite::palette(), &[], &[], None));
+                    })
+                    .drop_without_applying_deltas();
+            }
+            assert_eq!(editor.document, original);
+            assert!(!editor.dirty);
+            assert!(editor.history.is_empty() && editor.future.is_empty());
+        }
+    }
+
+    fn sound_frame(
+        editor: &mut AssetWorkbench,
+        context: &eframe::egui::Context,
+        events: Vec<eframe::egui::Event>,
+    ) -> Vec<(String, eframe::egui::Rect)> {
+        use eframe::egui;
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 1600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                editor.ui(ui, &crate::sprite::palette(), &[], &[], None);
+            },
+        );
+        let labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && shape
+                        .clip_rect
+                        .contains(text.pos + text.galley.size() * 0.5)
+                {
+                    Some((
+                        text.galley.job.text.clone(),
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        labels
+    }
+
+    fn sound_click(
+        editor: &mut AssetWorkbench,
+        context: &eframe::egui::Context,
+        position: eframe::egui::Pos2,
+    ) {
+        use eframe::egui;
+        sound_frame(editor, context, vec![egui::Event::PointerMoved(position)]);
+        for pressed in [true, false] {
+            sound_frame(
+                editor,
+                context,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        sound_frame(editor, context, Vec::new());
+    }
+
+    fn sound_type(
+        editor: &mut AssetWorkbench,
+        context: &eframe::egui::Context,
+        label: &str,
+        number: &str,
+    ) {
+        use eframe::egui;
+        let labels = sound_frame(editor, context, Vec::new());
+        let row = labels.iter().find(|(text, _)| text == label).unwrap().1;
+        let value = labels
+            .iter()
+            .filter(|(_, rect)| (rect.top() - row.top()).abs() < 3.0 && rect.left() > row.right())
+            .min_by(|(_, left), (_, right)| left.left().total_cmp(&right.left()))
+            .unwrap()
+            .1;
+        sound_click(editor, context, value.center());
+        sound_frame(
+            editor,
+            context,
+            vec![
+                egui::Event::Text(number.to_owned()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        sound_frame(editor, context, Vec::new());
+    }
+
+    #[test]
+    fn real_sound_controls_write_integers_and_preserve_metadata_with_per_edit_undo() {
+        use eframe::egui;
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut editor = AssetWorkbench::new(AssetKind::Sound, &sound().to_string()).unwrap();
+        for _ in 0..3 {
+            sound_frame(&mut editor, &context, Vec::new());
+        }
+        let original = editor.document.clone();
+        sound_type(&mut editor, &context, "DUTY", "");
+        assert_eq!(
+            editor.document, original,
+            "focus/Enter must preserve full float precision"
+        );
+        sound_type(&mut editor, &context, "NOTE", "61.75");
+        assert_eq!(
+            editor.document, original,
+            "fractional MIDI input must not be admitted"
+        );
+        assert!(editor.history.is_empty());
+        for (label, path, number) in [
+            ("NOTE", "note", 62),
+            ("FRAMES", "durationFrames", 3599),
+            ("ATTACK", "envelope.attackFrames", 240),
+            ("DECAY", "envelope.decayFrames", 3600),
+            ("RELEASE", "envelope.releaseFrames", 3600),
+            ("VIBRATO PERIOD", "pitch.vibratoPeriodFrames", 240),
+        ] {
+            let before = editor.document.clone();
+            sound_type(&mut editor, &context, label, &number.to_string());
+            let edited = editor.document.clone();
+            assert_eq!(
+                path.split('.')
+                    .fold(&edited, |value, key| &value[key])
+                    .as_u64(),
+                Some(number)
+            );
+            assert_ne!(edited, before);
+            assert_eq!(edited["memo"], "keep patch");
+            assert_eq!(edited["envelope"]["memo"], "keep envelope");
+            editor.undo();
+            assert_eq!(editor.document, before);
+            editor.redo();
+            assert_eq!(editor.document, edited);
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/api-tour/cart.m01w");
+        let mut project = crate::project::NativeProject::open(&path).unwrap();
+        let original_disk = std::fs::read(&path).unwrap();
+        project.files.insert(
+            "assets/beep.m01s".to_owned(),
+            editor.source().unwrap().into_bytes(),
+        );
+        let report = modl_core::assets::analyze_project_assets(&project.manifest, &project.files);
+        assert!(report.is_valid(), "{:?}", report.diagnostics);
+        project.pack().unwrap();
+        let bank =
+            crate::live_audio::project_bank(&project, "beep", &editor.document, None).unwrap();
+        let mut preview = crate::live_audio::AudioPreview::new();
+        preview.audition(bank, "beep", 62.0, 1.0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(7);
+        while preview.packet.is_null() {
+            preview.poll(&context, None);
+            assert!(std::time::Instant::now() < deadline, "{}", preview.status);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(preview.packet["activeVoices"], 1);
+        assert_eq!(preview.packet["voices"][0]["note"], 62);
+        preview.stop();
+        assert_eq!(std::fs::read(path).unwrap(), original_disk);
+    }
+
+    fn choose_sound_wave(editor: &mut AssetWorkbench, context: &eframe::egui::Context, wave: &str) {
+        let current = editor.document["waveform"].as_str().unwrap().to_owned();
+        let labels = sound_frame(editor, context, Vec::new());
+        let selector = labels.iter().find(|(text, _)| text == &current).unwrap().1;
+        sound_click(editor, context, selector.center());
+        let choices = sound_frame(editor, context, Vec::new());
+        let choice = choices.iter().find(|(text, _)| text == wave).unwrap().1;
+        sound_click(editor, context, choice.center());
+        assert_eq!(editor.document["waveform"], wave, "choices: {choices:?}");
+    }
+
+    #[test]
+    fn waveform_and_wavetable_controls_are_explicit_valid_and_undoable() {
+        use eframe::egui;
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut document = sound();
+        document["waveform"] = json!("triangle");
+        document.as_object_mut().unwrap().remove("wavetable");
+        document.as_object_mut().unwrap().remove("duty");
+        let mut editor = AssetWorkbench::new(AssetKind::Sound, &document.to_string()).unwrap();
+        for _ in 0..3 {
+            sound_frame(&mut editor, &context, Vec::new());
+        }
+        choose_sound_wave(&mut editor, &context, "wavetable");
+        assert!(super::valid_wavetable(&editor.document["wavetable"]));
+        assert_eq!(editor.document["wavetable"].as_array().unwrap().len(), 4);
+        assert_eq!(editor.document["memo"], document["memo"]);
+        let with_table = editor.document.clone();
+        let labels = sound_frame(&mut editor, &context, Vec::new());
+        let remove = labels
+            .iter()
+            .find(|(label, _)| label == "REMOVE SAMPLE")
+            .unwrap()
+            .1;
+        sound_click(&mut editor, &context, remove.center());
+        assert_eq!(
+            editor.document, with_table,
+            "four samples is the current minimum"
+        );
+        editor.undo();
+        assert_eq!(editor.document, document);
+        editor.redo();
+        assert_eq!(editor.document, with_table);
+        sound_type(&mut editor, &context, "SAMPLE 00", "0.25");
+        assert_eq!(editor.document["wavetable"][0], 0.25);
+        let edited_table = editor.document["wavetable"].clone();
+        let labels = sound_frame(&mut editor, &context, Vec::new());
+        let add = labels
+            .iter()
+            .find(|(label, _)| label == "ADD SAMPLE")
+            .unwrap()
+            .1;
+        sound_click(&mut editor, &context, add.center());
+        assert_eq!(editor.document["wavetable"].as_array().unwrap().len(), 5);
+        editor.undo();
+        assert_eq!(editor.document["wavetable"], edited_table);
+        choose_sound_wave(&mut editor, &context, "pulse");
+        assert_eq!(editor.document["duty"], 0.5);
+        assert_eq!(editor.document["wavetable"], edited_table);
+        choose_sound_wave(&mut editor, &context, "wavetable");
+        assert_eq!(editor.document["wavetable"], edited_table);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/api-tour/cart.m01w");
+        let mut project = crate::project::NativeProject::open(&path).unwrap();
+        project.files.insert(
+            "assets/beep.m01s".to_owned(),
+            editor.source().unwrap().into_bytes(),
+        );
+        project.pack().unwrap();
+        editor.document["wavetable"] = json!(vec![0.5; 32]);
+        let full = editor.document.clone();
+        let labels = sound_frame(&mut editor, &context, Vec::new());
+        let add = labels
+            .iter()
+            .find(|(label, _)| label == "ADD SAMPLE")
+            .unwrap()
+            .1;
+        sound_click(&mut editor, &context, add.center());
+        assert_eq!(editor.document, full, "32 samples is the current maximum");
+        let labels = sound_frame(&mut editor, &context, Vec::new());
+        let remove = labels
+            .iter()
+            .find(|(label, _)| label == "REMOVE SAMPLE")
+            .unwrap()
+            .1;
+        sound_click(&mut editor, &context, remove.center());
+        assert_eq!(editor.document["wavetable"].as_array().unwrap().len(), 31);
+        editor.undo();
+        assert_eq!(editor.document, full);
     }
 
     #[test]

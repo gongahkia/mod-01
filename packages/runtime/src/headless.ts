@@ -76,7 +76,7 @@ export interface HeadlessResult {
   };
 }
 
-/** Runs validated compiler output through the same production core used by the browser Worker. */
+/** Runs validated compiler output through the same production core used by native Studio/games. */
 export async function runHeadless(value: unknown): Promise<HeadlessResult> {
   if (!isHeadlessRequest(value)) throw new TypeError('invalid MOD-01 headless request');
   const request = value;

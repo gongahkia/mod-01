@@ -10,7 +10,7 @@ export interface MapQueryAsset {
   readonly layers: readonly MapQueryLayer[];
 }
 
-/** Worker-safe, read-only map view exposed to cartridge query calls. */
+/** Read-only map view exposed to cartridge query calls. */
 export class MapQueryStore {
   private readonly maps = new Map<string, MapQueryAsset>();
 

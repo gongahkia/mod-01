@@ -26,7 +26,7 @@ export interface RuntimeAssetSource {
   readonly displayPath?: string | null;
 }
 
-/** Bounded, data-only source bank sent to the restricted Worker for authoritative decoding. */
+/** Bounded, data-only source bank sent to the console core for authoritative decoding. */
 export function isRuntimeAssetSource(value: unknown): value is RuntimeAssetSource {
   if (
     !isRecord(value) ||
@@ -138,7 +138,7 @@ export interface FontAssetFile {
   }[];
 }
 
-/** Decodes documented JSON asset files into validated hardware stores and worker map views. */
+/** Decodes documented JSON asset files into validated hardware stores and query views. */
 export function decodeRuntimeAssets(
   declarations: Readonly<Record<string, ProjectAssetDeclaration>>,
   files: Readonly<Record<string, Uint8Array>>,

@@ -784,42 +784,44 @@ impl StudioApp {
         }
     }
 
-    fn export_player(&mut self, zip: bool) {
+    fn export_native_player(&mut self) {
         if let Err(error) = self.sync_asset() {
             self.status = error;
             return;
         }
-        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
-            if let Err(error) = self.save_sprite() {
-                self.status = error;
-                return;
-            }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
         }
+        let Some(parent) = rfd::FileDialog::new()
+            .set_title("Choose a parent directory for a NEW native game folder")
+            .pick_folder()
+        else {
+            return;
+        };
         let Some(project) = self.project.as_mut() else {
             return;
         };
         project.sync_editor();
-        let output = if zip {
-            modl_core::export_itch_zip(&project.manifest_source, &project.files)
-        } else {
-            modl_core::export_standalone_html(&project.manifest_source, &project.files)
-                .map(String::into_bytes)
+        let result = (|| -> Result<PathBuf, String> {
+            let player = std::env::current_exe().map_err(|error| error.to_string())?;
+            let tools = modl_core::NativeToolchain::discover(
+                Some(&player),
+                None,
+                Some(&native_host_path()),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+            let output = parent.join(format!("{}-native", project.manifest.id));
+            modl_core::export_native_game(&output, &project.pack()?, &tools)
+                .map_err(|error| error.to_string())
+        })();
+        self.status = match result {
+            Ok(path) => format!("EXPORTED {}", path.display()),
+            Err(error) => error,
         };
-        match output {
-            Ok(bytes) => {
-                let extension = if zip { "zip" } else { "html" };
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(format!("{}.{}", project.manifest.id, extension))
-                    .save_file()
-                {
-                    self.status = match fs::write(path, &bytes) {
-                        Ok(()) => format!("EXPORTED {} BYTES", bytes.len()),
-                        Err(error) => error.to_string(),
-                    };
-                }
-            }
-            Err(error) => self.status = error.to_string(),
-        }
     }
 
     fn export_cartridge_png(&mut self) {
@@ -1707,12 +1709,8 @@ impl StudioApp {
                     }
                 });
                 ui.menu_button("EXPORT", |ui| {
-                    if ui.button("STANDALONE HTML").clicked() {
-                        self.export_player(false);
-                        ui.close();
-                    }
-                    if ui.button("ITCH.IO ZIP").clicked() {
-                        self.export_player(true);
+                    if ui.button("NATIVE GAME").clicked() {
+                        self.export_native_player();
                         ui.close();
                     }
                     if ui.button("CARTRIDGE PNG").clicked() {

@@ -423,7 +423,7 @@ var MemoryBus = class {
     for (let index = 0; index < length; index += 1) bytes[index] = this.byte(source + index);
     this.store(destination, bytes, span, raster);
   }
-  /** Bounded debugger read at an idle Worker message boundary; does not charge cartridge work. */
+  /** Bounded debugger read at an idle host message boundary; does not charge cartridge work. */
   inspect(address, length) {
     this.range(address, length, {
       start: 0,
@@ -433,7 +433,7 @@ var MemoryBus = class {
     for (let index = 0; index < length; index += 1) bytes[index] = this.byte(address + index);
     return bytes;
   }
-  /** Transactional debugger edit at an idle Worker message boundary; does not charge work. */
+  /** Transactional debugger edit at an idle host message boundary; does not charge work. */
   edit(address, bytes) {
     const span = {
       start: 0,
@@ -3528,7 +3528,7 @@ function readAssetName(value, kind) {
 }
 //#endregion
 //#region src/asset-codec.ts
-/** Bounded, data-only source bank sent to the restricted Worker for authoritative decoding. */
+/** Bounded, data-only source bank sent to the console core for authoritative decoding. */
 function isRuntimeAssetSource(value) {
   if (
     !isRecord$4(value) ||
@@ -3577,7 +3577,7 @@ function canonicalAssetPath(value) {
       .every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..')
   );
 }
-/** Decodes documented JSON asset files into validated hardware stores and worker map views. */
+/** Decodes documented JSON asset files into validated hardware stores and query views. */
 function decodeRuntimeAssets(declarations, files, displayPath) {
   const visual = [];
   const audio = [];
@@ -3860,7 +3860,7 @@ function isRecord$4(value) {
 }
 //#endregion
 //#region src/map-query.ts
-/** Worker-safe, read-only map view exposed to cartridge query calls. */
+/** Read-only map view exposed to cartridge query calls. */
 var MapQueryStore = class {
   maps = /* @__PURE__ */ new Map();
   constructor(assets = []) {

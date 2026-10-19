@@ -758,9 +758,8 @@ fn utf8_payload(bytes: &[u8], path: &str, role: &str) -> Result<String, Cartridg
 #[cfg(test)]
 mod tests {
     use crate::{
-        decode_cartridge, delete_workcart_asset, encode_workcart, export_standalone_workcart,
-        pack_workcart, rewrite_workcart, unpack_cartridge_project, unpack_workcart,
-        workcart_project_view,
+        decode_cartridge, delete_workcart_asset, encode_workcart, pack_workcart, rewrite_workcart,
+        unpack_cartridge_project, unpack_workcart, workcart_project_view,
     };
 
     use super::{WORKCART_FORMAT_REVISION, WorkcartRecipe, parse_workcart};
@@ -863,13 +862,6 @@ payload = "on start:\n  assert true\n"
         let project = unpack_cartridge_project(&packed.bytes).expect("project view unpacks");
         assert!(project.manifest.contains("format = 1"));
         assert_eq!(project.files["src/main.modl"], b"on draw:\n  clear(25)\n");
-    }
-
-    #[test]
-    fn standalone_workcart_export_reports_the_packed_revision() {
-        let html = export_standalone_workcart(CART).expect("work-cart standalone exports");
-        assert!(html.contains("name=\"mod01-format\" content=\"2\""));
-        assert!(html.contains("CARTRIDGE FORMAT/2"));
     }
 
     #[test]

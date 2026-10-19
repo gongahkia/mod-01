@@ -61,3 +61,11 @@ choices remain outstanding.
   numeric type tests, and `stdlib-conformance.test.ts` demonstrate release/debug,
   native/headless execution, independent accuracy vectors, bounded costs and
   snapshot replay. The final workspace gate remains mandatory.
+- Native launcher/process verification: `c33ce00`; native directory/`.app`
+  packaging: `bbfa777`. Local Linux package QA completed 120 frames with an empty
+  PATH and matched both canonical cartridge bytes and the original native player.
+- Web player/export/loopback runner removal is implemented. Runtime, compiler,
+  CLI and native tests pass. The current replay goldens were updated only after
+  proving unchanged input hashes, work peaks, framebuffer checkpoints, audio
+  commands and PCM; new builtins/generated code change packed/snapshot identity.
+  Full visual QA, format consolidation and remaining acceptance rows are open.

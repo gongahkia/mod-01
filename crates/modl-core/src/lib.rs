@@ -5,7 +5,6 @@ pub mod cartridge;
 pub mod cartridge_png;
 pub mod codegen;
 pub mod diagnostic;
-pub mod exporter;
 pub mod formatter;
 pub mod generator;
 pub mod ir;
@@ -28,9 +27,6 @@ pub use cartridge_png::{
 };
 pub use codegen::{CompilationOutput, CompileMode, GeneratedProgram, compile};
 pub use diagnostic::{Diagnostic, Severity};
-pub use exporter::{
-    export_itch_workcart, export_itch_zip, export_standalone_html, export_standalone_workcart,
-};
 pub use formatter::{FormatError, format_source};
 pub use generator::materialize_workcart_recipe;
 pub use lexer::lex;

@@ -1,4 +1,4 @@
-//! Browser-compatible `.m01save` export and import.
+//! Local `.m01save` export and import.
 
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
@@ -82,7 +82,7 @@ mod tests {
     use super::{checksum, export, import};
 
     #[test]
-    fn browser_save_container_round_trips_and_checks_identity_and_checksum() {
+    fn local_save_container_round_trips_and_checks_identity_and_checksum() {
         assert_eq!(checksum(b"123456789"), "cbf43926");
         let encoded = export("example-cart", 7, &[0, 16, 255]).unwrap();
         assert_eq!(

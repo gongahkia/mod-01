@@ -39,7 +39,7 @@ cartridges=(
   modl-tutorial
 )
 
-printf 'cartridge\tm01c-bytes\tm01c-sha256\tm01c.png-sha256\thtml-sha256\tzip-sha256\n'
+printf 'cartridge\tm01c-bytes\tm01c-sha256\tm01c.png-sha256\n'
 for cartridge in "${cartridges[@]}"; do
   project="cartridges/${cartridge}"
   first="${artifact_dir}/${cartridge}-a"
@@ -49,23 +49,17 @@ for cartridge in "${cartridges[@]}"; do
   "${cli}" pack "${project}" --output "${second}.m01c" >/dev/null
   "${cli}" export png "${project}" --output "${first}.m01c.png" >/dev/null
   "${cli}" export png "${project}" --output "${second}.m01c.png" >/dev/null
-  "${cli}" export html "${project}" --output "${first}.html" >/dev/null
-  "${cli}" export html "${project}" --output "${second}.html" >/dev/null
-  "${cli}" export zip "${project}" --output "${first}.zip" >/dev/null
-  "${cli}" export zip "${project}" --output "${second}.zip" >/dev/null
 
   cmp "${first}.m01c" "${second}.m01c"
   cmp "${first}.m01c.png" "${second}.m01c.png"
-  cmp "${first}.html" "${second}.html"
-  cmp "${first}.zip" "${second}.zip"
   "${cli}" info "${first}.m01c.png" >/dev/null
   "${cli}" run "${first}.m01c" --headless --frames 5 >/dev/null
 
   m01c_bytes=$(wc -c < "${first}.m01c" | tr -d ' ')
   m01c_hash=$(sha256 "${first}.m01c")
   png_hash=$(sha256 "${first}.m01c.png")
-  html_hash=$(sha256 "${first}.html")
-  zip_hash=$(sha256 "${first}.zip")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${cartridge}" "${m01c_bytes}" "${m01c_hash}" "${png_hash}" "${html_hash}" "${zip_hash}"
+  printf '%s\t%s\t%s\t%s\n' \
+    "${cartridge}" "${m01c_bytes}" "${m01c_hash}" "${png_hash}"
 done
+
+node scripts/verify-native-game.mjs

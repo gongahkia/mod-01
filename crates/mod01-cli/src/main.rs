@@ -2,8 +2,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
     hash::{DefaultHasher, Hash, Hasher},
-    io::{Read as _, Write as _},
-    net::{TcpListener, TcpStream},
+    io::Write as _,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
     thread,
@@ -15,8 +14,7 @@ use modl_core::{
     AssetCatalog, AssetKind, CartridgePngMetadata, CompileMode, DecodedCartridge, Diagnostic,
     FileId, GeneratedProgram, ProjectManifest, SourceFile, WorkcartTest, WorkcartTestKind,
     analyze_module, compile, compile_project, decode_cartridge, decode_cartridge_png,
-    encode_cartridge_png, encode_workcart, export_itch_workcart, export_itch_zip,
-    export_standalone_html, export_standalone_workcart, format_source, load_cartridge_program,
+    encode_cartridge_png, encode_workcart, format_source, load_cartridge_program,
     materialize_workcart_recipe, pack_project, pack_workcart, parse_project_manifest,
     parse_workcart, unpack_cartridge_project, unpack_workcart,
 };
@@ -59,20 +57,6 @@ impl LoadedProject {
         match &self.input {
             ProjectInput::Directory => pack_project(&self.manifest_source, &self.files),
             ProjectInput::Workcart(source) => pack_workcart(source),
-        }
-    }
-
-    fn standalone_html(&self) -> Result<String, modl_core::CartridgeError> {
-        match &self.input {
-            ProjectInput::Directory => export_standalone_html(&self.manifest_source, &self.files),
-            ProjectInput::Workcart(source) => export_standalone_workcart(source),
-        }
-    }
-
-    fn itch_zip(&self) -> Result<Vec<u8>, modl_core::CartridgeError> {
-        match &self.input {
-            ProjectInput::Directory => export_itch_zip(&self.manifest_source, &self.files),
-            ProjectInput::Workcart(source) => export_itch_workcart(source),
         }
     }
 }
@@ -134,16 +118,13 @@ enum Command {
         #[command(subcommand)]
         command: ExportCommand,
     },
-    /// Export and open a project in the system browser.
+    /// Launch the native game player, or execute the shared core headlessly.
     Run {
         #[arg(default_value = ".")]
         path: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
-        /// Write and validate the player without opening a browser.
-        #[arg(long)]
-        no_open: bool,
-        /// Execute deterministically without a browser and emit a revisioned JSON trace.
+        /// Execute deterministically without a window and emit a revisioned JSON trace.
         #[arg(long)]
         headless: bool,
         /// Number of display frames for a headless run.
@@ -168,9 +149,6 @@ enum Command {
         /// Build once and exit; useful for editor and CI integration checks.
         #[arg(long)]
         once: bool,
-        /// Serve the refreshing player without opening the system browser.
-        #[arg(long)]
-        no_open: bool,
     },
     /// Print toolchain revisions, a project manifest, or packed-cartridge metadata.
     Info { path: Option<PathBuf> },
@@ -182,22 +160,8 @@ enum Command {
 enum ExportCommand {
     /// Bundle a game with the native player, Node runtime and all source-visible assets.
     Native(NativeExportArguments),
-    /// Export one offline, source-inspectable standalone HTML player.
-    Html {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
     /// Export a MOD-01 cartridge-object PNG containing the complete canonical `.m01c`.
     Png {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-    /// Export an itch.io-ready ZIP containing the offline player as `index.html`.
-    Zip {
         #[arg(default_value = ".")]
         path: PathBuf,
         #[arg(short, long)]
@@ -307,21 +271,12 @@ fn main() -> ExitCode {
             command: ExportCommand::Native(arguments),
         } => export_native_directory(&arguments),
         Command::Export {
-            command: ExportCommand::Html { path, output },
-        } => export_html_directory(&path, output.as_deref())
-            .map_or(ExitCode::FAILURE, |_| ExitCode::SUCCESS),
-        Command::Export {
             command: ExportCommand::Png { path, output },
         } => export_png_directory(&path, output.as_deref())
-            .map_or(ExitCode::FAILURE, |_| ExitCode::SUCCESS),
-        Command::Export {
-            command: ExportCommand::Zip { path, output },
-        } => export_zip_directory(&path, output.as_deref())
             .map_or(ExitCode::FAILURE, |_| ExitCode::SUCCESS),
         Command::Run {
             path,
             output,
-            no_open,
             headless,
             frames,
             seed,
@@ -338,39 +293,17 @@ fn main() -> ExitCode {
                     save.as_deref(),
                 )
             } else {
-                run_directory(&path, output.as_deref(), no_open)
+                if output.is_some() || input.is_some() || save.is_some() {
+                    eprintln!("--output, --input and --save require --headless");
+                    return ExitCode::FAILURE;
+                }
+                run_directory(&path)
             }
         }
-        Command::Watch {
-            path,
-            output,
-            once,
-            no_open,
-        } => watch_directory(&path, output.as_deref(), once, no_open),
+        Command::Watch { path, output, once } => watch_directory(&path, output.as_deref(), once),
         Command::Info { path } => info(path.as_deref()),
         Command::Lsp => lsp::run(),
     }
-}
-
-fn export_html_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, ()> {
-    let project = load_project(path)?;
-    let html = project.standalone_html().map_err(|error| {
-        eprintln!("{}: {error}", path.display());
-    })?;
-    let output = output.map_or_else(
-        || project_output_directory(path).join(format!("{}.html", project.manifest.id)),
-        Path::to_path_buf,
-    );
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            eprintln!("{}: {error}", parent.display());
-        })?;
-    }
-    fs::write(&output, html.as_bytes()).map_err(|error| {
-        eprintln!("{}: {error}", output.display());
-    })?;
-    println!("exported {} ({} bytes)", output.display(), html.len());
-    Ok(output)
 }
 
 fn export_png_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, ()> {
@@ -425,40 +358,32 @@ fn export_png_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, (
     Ok(output)
 }
 
-fn export_zip_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, ()> {
-    let project = load_project(path)?;
-    let zip = project.itch_zip().map_err(|error| {
-        eprintln!("{}: {error}", path.display());
-    })?;
-    let output = output.map_or_else(
-        || project_output_directory(path).join(format!("{}-itch.zip", project.manifest.id)),
-        Path::to_path_buf,
-    );
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| eprintln!("{}: {error}", parent.display()))?;
-    }
-    fs::write(&output, &zip).map_err(|error| eprintln!("{}: {error}", output.display()))?;
-    println!("exported {} ({} bytes)", output.display(), zip.len());
-    Ok(output)
-}
-
-fn run_directory(path: &Path, output: Option<&Path>, no_open: bool) -> ExitCode {
-    let Ok(output) = export_html_directory(path, output) else {
+fn run_directory(path: &Path) -> ExitCode {
+    let player = std::env::var_os("MOD01_PLAYER")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|executable| {
+                executable.parent().map(|directory| {
+                    directory.join(if cfg!(windows) {
+                        "mod01-studio.exe"
+                    } else {
+                        "mod01-studio"
+                    })
+                })
+            })
+        });
+    let Some(player) = player.filter(|path| path.is_file()) else {
+        eprintln!("native player not found; build mod01-native or set MOD01_PLAYER");
         return ExitCode::FAILURE;
     };
-    if no_open {
-        return ExitCode::SUCCESS;
-    }
-    match browser_command(&output.display().to_string()).spawn() {
-        Ok(_) => {
-            println!("opened {}", output.display());
-            ExitCode::SUCCESS
+    match ProcessCommand::new(player).arg("--play").arg(path).status() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => {
+            eprintln!("native player exited with {status}");
+            ExitCode::FAILURE
         }
         Err(error) => {
-            eprintln!(
-                "{}: could not open system browser: {error}",
-                output.display()
-            );
+            eprintln!("cannot launch native player: {error}");
             ExitCode::FAILURE
         }
     }
@@ -1194,110 +1119,36 @@ fn pack_directory(path: &Path, output: Option<&Path>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn watch_directory(path: &Path, output: Option<&Path>, once: bool, no_open: bool) -> ExitCode {
+fn watch_directory(path: &Path, output: Option<&Path>, once: bool) -> ExitCode {
     if once {
         return pack_directory(path, output);
     }
     let output = output.map_or_else(
-        || project_output_directory(path).join("watch.html"),
+        || project_output_directory(path).join("watch.m01c"),
         Path::to_path_buf,
     );
-    if export_watch_html(path, &output).is_err() {
-        return ExitCode::FAILURE;
-    }
-    let listener = match TcpListener::bind("127.0.0.1:0") {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("mod01 watch: could not bind local player: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if let Err(error) = listener.set_nonblocking(true) {
-        eprintln!("mod01 watch: could not configure local player: {error}");
-        return ExitCode::FAILURE;
-    }
-    let address = listener
-        .local_addr()
-        .expect("bound listener has an address");
-    let url = format!("http://{address}/");
-    println!("watching {} at {url}", path.display());
-    if !no_open && let Err(error) = browser_command(&url).spawn() {
-        eprintln!("mod01 watch: could not open system browser: {error}");
-    }
     let mut fingerprint = directory_fingerprint(path).ok();
-    let mut revision = 1_u64;
+    if pack_directory(path, Some(&output)) != ExitCode::SUCCESS {
+        return ExitCode::FAILURE;
+    }
+    println!("watching {} -> {}", path.display(), output.display());
     loop {
-        match listener.accept() {
-            Ok((stream, _)) => serve_watch_request(stream, &output, revision),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => eprintln!("mod01 watch: local player request failed: {error}"),
-        }
         let current = directory_fingerprint(path).ok();
         if current != fingerprint {
             fingerprint = current;
-            if export_watch_html(path, &output).is_ok() {
-                revision = revision.wrapping_add(1);
-                println!("rebuilt revision {revision}");
-            }
+            let _ = pack_directory(path, Some(&output));
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(100));
     }
-}
-
-fn browser_command(target: &str) -> ProcessCommand {
-    let mut command = if cfg!(target_os = "macos") {
-        ProcessCommand::new("open")
-    } else {
-        ProcessCommand::new("xdg-open")
-    };
-    command.arg(target);
-    command
-}
-
-fn export_watch_html(path: &Path, output: &Path) -> Result<(), ()> {
-    let project = load_project(path)?;
-    let html = project.standalone_html().map_err(|error| {
-        eprintln!("{}: {error}", path.display());
-    })?;
-    let reload = r"<script>(()=>{let revision;setInterval(async()=>{try{const next=await fetch('/revision',{cache:'no-store'}).then(response=>response.text());if(revision!==undefined&&next!==revision)location.reload();revision=next}catch{}},250)})()</script>";
-    let html = html.replace("</body>", &format!("{reload}</body>"));
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            eprintln!("{}: {error}", parent.display());
-        })?;
-    }
-    fs::write(output, html).map_err(|error| {
-        eprintln!("{}: {error}", output.display());
-    })
-}
-
-fn serve_watch_request(mut stream: TcpStream, output: &Path, revision: u64) {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-    let mut request = [0_u8; 4096];
-    let length = stream.read(&mut request).unwrap_or_default();
-    let revision_request = request[..length].starts_with(b"GET /revision ");
-    let (content_type, body) = if revision_request {
-        (
-            "text/plain; charset=utf-8",
-            revision.to_string().into_bytes(),
-        )
-    } else {
-        (
-            "text/html; charset=utf-8",
-            fs::read(output).unwrap_or_else(|_| b"MOD-01 WATCH BUILD UNAVAILABLE".to_vec()),
-        )
-    };
-    let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(header.as_bytes());
-    let _ = stream.write_all(&body);
 }
 
 fn directory_fingerprint(path: &Path) -> Result<u64, std::io::Error> {
     let mut files = Vec::new();
-    collect_fingerprint_files(path, path, &mut files)?;
+    if path.is_file() {
+        files.push(path.to_path_buf());
+    } else {
+        collect_fingerprint_files(path, path, &mut files)?;
+    }
     files.sort();
     let mut hasher = DefaultHasher::new();
     for file in files {

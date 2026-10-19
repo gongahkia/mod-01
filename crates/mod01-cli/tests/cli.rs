@@ -1,7 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
-    net::TcpStream,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -91,89 +90,14 @@ fn build_emits_javascript_and_source_map() {
 }
 
 #[test]
-fn export_html_and_headless_run_write_the_same_offline_player() {
-    let project =
-        std::env::temp_dir().join(format!("mod01-export-{}-{}", std::process::id(), line!()));
-    let create = binary()
-        .args([
-            "new",
-            project.to_str().expect("UTF-8 project path"),
-            "--title",
-            "EXPORT TEST",
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(create.status.success());
-    let first = project.with_extension("first.html");
-    let second = project.with_extension("second.html");
-    let zip = project.with_extension("zip");
-    let export = binary()
-        .args([
-            "export",
-            "html",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            first.to_str().expect("UTF-8 HTML path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        export.status.success(),
-        "{}",
-        String::from_utf8_lossy(&export.stderr)
-    );
-    let run = binary()
-        .args([
-            "run",
-            project.to_str().expect("UTF-8 project path"),
-            "--no-open",
-            "--output",
-            second.to_str().expect("UTF-8 HTML path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    let first_html = fs::read_to_string(&first).expect("first HTML reads");
-    assert_eq!(
-        first_html,
-        fs::read_to_string(&second).expect("second HTML reads")
-    );
-    assert!(first_html.contains("MOD-01 standalone cartridge player"));
-    assert!(first_html.contains("id=\"source-view\""));
-    assert!(first_html.contains("id=\"pause\""));
-    assert!(first_html.contains("id=\"reset\""));
-    assert!(first_html.contains("id=\"fullscreen\""));
-    assert!(!first_html.contains("https://"));
-    let zip_export = binary()
-        .args([
-            "export",
-            "zip",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            zip.to_str().expect("UTF-8 ZIP path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        zip_export.status.success(),
-        "{}",
-        String::from_utf8_lossy(&zip_export.stderr)
-    );
-    let zip_bytes = fs::read(&zip).expect("ZIP reads");
-    assert_eq!(&zip_bytes[..4], &[0x50, 0x4b, 0x03, 0x04]);
-    assert!(
-        zip_bytes
-            .windows(first_html.len())
-            .any(|window| window == first_html.as_bytes())
-    );
-    for path in [first, second, zip] {
-        fs::remove_file(path).expect("temporary HTML removes");
+fn browser_exports_are_not_product_commands() {
+    for format in ["html", "zip"] {
+        let result = binary()
+            .args(["export", format])
+            .output()
+            .expect("CLI starts");
+        assert_eq!(result.status.code(), Some(2));
     }
-    fs::remove_dir_all(project).expect("temporary project removes");
 }
 
 #[test]
@@ -206,7 +130,7 @@ on draw:
     )
     .expect("work-cart writes");
     let packed = cart.with_extension("m01c");
-    let html = cart.with_extension("html");
+    let png = cart.with_extension("png");
     let trace = cart.with_extension("trace.json");
     for arguments in [
         vec!["check".to_owned(), cart.display().to_string()],
@@ -218,10 +142,10 @@ on draw:
         ],
         vec![
             "export".to_owned(),
-            "html".to_owned(),
+            "png".to_owned(),
             cart.display().to_string(),
             "--output".to_owned(),
-            html.display().to_string(),
+            png.display().to_string(),
         ],
         vec![
             "run".to_owned(),
@@ -240,17 +164,18 @@ on draw:
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    assert!(
-        fs::read_to_string(&html)
-            .expect("work-cart HTML reads")
-            .contains("CARTRIDGE FORMAT/2")
+    let image =
+        modl_core::decode_cartridge_png(&fs::read(&png).expect("PNG reads")).expect("PNG decodes");
+    assert_eq!(
+        image.cartridge,
+        fs::read(&packed).expect("canonical cartridge reads")
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&fs::read(&trace).expect("trace reads"))
             .expect("trace is JSON")["summary"]["completedFrames"],
         2
     );
-    for path in [cart, packed, html, trace] {
+    for path in [cart, packed, png, trace] {
         fs::remove_file(path).expect("temporary work-cart artifact removes");
     }
 }
@@ -629,72 +554,53 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
 }
 
 #[test]
-fn watch_serves_and_refreshes_a_loopback_player() {
+fn watch_repacks_native_cartridges_without_a_server() {
     let project =
         std::env::temp_dir().join(format!("mod01-watch-{}-{}", std::process::id(), line!()));
-    let create = binary()
-        .args(["new", project.to_str().expect("UTF-8 project path")])
-        .output()
-        .expect("CLI starts");
-    assert!(create.status.success());
+    assert!(
+        binary()
+            .args(["new", project.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let packed = project.with_extension("watch.m01c");
     let mut child = binary()
         .args([
             "watch",
-            project.to_str().expect("UTF-8 project path"),
-            "--no-open",
+            project.to_str().unwrap(),
+            "--output",
+            packed.to_str().unwrap(),
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("watch starts");
-    let mut output = BufReader::new(child.stdout.take().expect("watch stdout"));
+    let mut output = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
-    output.read_line(&mut line).expect("watch announces URL");
-    let url = line
-        .split_whitespace()
-        .find(|part| part.starts_with("http://"))
-        .expect("watch URL")
-        .trim_end_matches('/');
-    let address = url.strip_prefix("http://").expect("loopback URL");
-    let html = http_get(address, "/");
-    assert!(html.contains("MOD-01 standalone cartridge player"));
-    assert!(html.contains("fetch('/revision'"));
-    assert!(http_get(address, "/revision").ends_with('1'));
-
-    fs::write(project.join("src/main.modl"), "on draw:\n  clear(1)\n")
-        .expect("watched source changes");
+    output.read_line(&mut line).unwrap();
+    assert!(line.starts_with("packed "), "{line}");
+    let before = fs::read(&packed).unwrap();
+    fs::write(project.join("src/main.modl"), "on draw:\n  clear(1)\n").unwrap();
     let mut refreshed = false;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(50));
-        if http_get(address, "/revision").ends_with('2') {
+        if fs::read(&packed)
+            .is_ok_and(|bytes| bytes != before && modl_core::decode_cartridge(&bytes).is_ok())
+        {
             refreshed = true;
             break;
         }
     }
-    child.kill().expect("watch stops");
+    child.kill().unwrap();
     let _ = child.wait();
-    assert!(refreshed, "watch did not publish rebuilt revision");
-    fs::remove_dir_all(project).expect("temporary project removes");
-}
-
-fn http_get(address: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(address).expect("watch server accepts request");
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("request writes");
-    let mut response = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(length) => response.extend_from_slice(&chunk[..length]),
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
-            Err(error) => panic!("response reads: {error}"),
-        }
-    }
-    String::from_utf8(response).expect("response is UTF-8")
+    assert!(
+        refreshed,
+        "watch did not publish the rebuilt native cartridge"
+    );
+    fs::remove_dir_all(project).unwrap();
+    fs::remove_file(packed).unwrap();
 }
 
 #[test]

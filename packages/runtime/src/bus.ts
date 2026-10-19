@@ -198,7 +198,7 @@ export class MemoryBus {
     this.store(destination, bytes, span, raster);
   }
 
-  /** Bounded debugger read at an idle Worker message boundary; does not charge cartridge work. */
+  /** Bounded debugger read at an idle host message boundary; does not charge cartridge work. */
   public inspect(address: number, length: number): Uint8Array {
     const span = { start: 0, end: 0 };
     this.range(address, length, span);
@@ -207,7 +207,7 @@ export class MemoryBus {
     return bytes;
   }
 
-  /** Transactional debugger edit at an idle Worker message boundary; does not charge work. */
+  /** Transactional debugger edit at an idle host message boundary; does not charge work. */
   public edit(address: number, bytes: Uint8Array): void {
     const span = { start: 0, end: 0 };
     this.range(address, bytes.length, span);

@@ -52,6 +52,9 @@ pub const LANGUAGE_REVISION: &str = "MODL/1";
 /// The deterministic packed-cartridge format revision.
 pub const CARTRIDGE_FORMAT_REVISION: u16 = 2;
 
+/// Default deterministic seed used by native Studio/games and CLI headless execution.
+pub const DEFAULT_SEED: u32 = 604_772_761;
+
 /// Identifies the compiler in generated artifacts and diagnostics.
 #[must_use]
 pub const fn compiler_version() -> &'static str {

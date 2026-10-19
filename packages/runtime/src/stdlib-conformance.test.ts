@@ -75,7 +75,16 @@ describe('compiled standard library across production hosts', () => {
           {
             input:
               [
-                { type: 'load', javascript, manifest, files: {}, rom: 'AQ==', save: '', debug },
+                {
+                  type: 'load',
+                  javascript,
+                  manifest,
+                  files: {},
+                  rom: 'AQ==',
+                  save: '',
+                  debug,
+                  seed: 0,
+                },
                 { type: 'frame', input: emptyInputFrame() },
                 { type: 'stop' },
               ]

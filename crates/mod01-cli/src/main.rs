@@ -116,7 +116,7 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         frames: u32,
         /// Unsigned 32-bit deterministic seed for a headless run.
-        #[arg(long, default_value_t = 604_772_761)]
+        #[arg(long, default_value_t = modl_core::DEFAULT_SEED)]
         seed: u32,
         /// Optional revision-1 scripted controller trace JSON.
         #[arg(long)]

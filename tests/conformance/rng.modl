@@ -1,0 +1,5 @@
+// A seeded image used to compare the real CLI and native-host defaults.
+on draw:
+  clear(0)
+  for point in 0..32:
+    pixel(rng_int(0, 240), rng_int(0, 144), 255)

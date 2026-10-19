@@ -424,6 +424,11 @@ held/press/release transitions, pointer state, reset and copying registers to RA
 
 ## Synthetic work model
 
+Native Studio, native games and CLI headless runs use deterministic seed
+`604772761` by default. `--seed` overrides it in headless runs; internal native
+conformance loads can supply the same explicit seed. Equal source/assets/input,
+save image and seed produce equal devices across these hosts.
+
 Work units are deterministic accounting units, not real CPU instructions and not evidence for a
 fictional clock speed. The compiler currently charges 8 units at each function/callback entry, 4 at
 loop back-edges, 4 per task-state transition, 4 per allocation or fixed-capacity write, one per

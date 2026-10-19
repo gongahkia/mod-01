@@ -96,3 +96,13 @@ choices remain outstanding.
   F12 navigation, comments/undo, diagnostics, graph selection, completion,
   replace-all and line navigation. Captures are retained locally under
   `output/native-qa-8iPAwp/`; QA edits were in memory, not saved into game source.
+
+- Extended-colour coverage corrected a remaining compiler-only 32-colour check
+  in `ba2d0ab`. `palette_profile.rs` checks all 256 literal colours in both
+  compiler modes; `palette.modl` renders every index through typed Color values
+  in release/debug, native/headless conformance.
+- Native and CLI now use the same default seed, 604772761, rather than native
+  silently using zero. The seeded production-host test compiles a real random
+  image and compares every frame's pixels and work for the default and seed 1,
+  in release/debug. The shared/native/headless helper/palette suite and native
+  host tests pass together (11 tests); explicit seed zero remains supported.

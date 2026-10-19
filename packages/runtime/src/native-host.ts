@@ -2,7 +2,7 @@ import { createInterface } from 'node:readline';
 import { deserialize, serialize } from 'node:v8';
 
 import { createConsoleRuntime, type ConsoleRuntime } from './console-runtime';
-import { HARDWARE } from './hardware';
+import { DEFAULT_SEED, HARDWARE } from './hardware';
 import type { InputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import { RuntimeFault } from './errors';
@@ -26,6 +26,7 @@ type Command =
       rom: string;
       save: string;
       debug?: boolean;
+      seed?: number;
       symbolNames?: Record<string, string>;
     }
   | { type: 'frame'; input: InputFrame }
@@ -131,7 +132,7 @@ async function handle(command: Command): Promise<unknown> {
         }
       >;
       runtime = createConsoleRuntime(factory as CartridgeFactory, {
-        seed: 0,
+        seed: command.seed === undefined ? DEFAULT_SEED : command.seed,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: command.manifest.updateRate,
         hardwareRevision: command.manifest.hardwareRevision ?? 2,

@@ -27,6 +27,8 @@ var BudgetExceeded = class extends RuntimeFault {
 };
 //#endregion
 //#region src/hardware.ts
+/** Default seed shared by native play and CLI headless runs; explicit seeds remain supported. */
+var DEFAULT_SEED = 604772761;
 var HARDWARE = Object.freeze({
   width: 240,
   height: 144,
@@ -5248,7 +5250,7 @@ async function handle(command) {
       );
       const manifestAssets = command.manifest.assets;
       runtime = createConsoleRuntime(factory, {
-        seed: 0,
+        seed: command.seed === void 0 ? DEFAULT_SEED : command.seed,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: command.manifest.updateRate,
         hardwareRevision: command.manifest.hardwareRevision ?? 2,

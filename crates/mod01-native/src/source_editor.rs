@@ -55,6 +55,37 @@ enum EditAction {
 }
 
 impl SourceEditor {
+    pub fn forget_member(&mut self, context: &egui::Context, project: &NativeProject) {
+        for path in project.source_paths() {
+            let id = egui::Id::unique((
+                "native-modl-source",
+                project.member_alias(),
+                &project.manifest.id,
+                &path,
+            ));
+            if let Some(mut state) = egui::TextEdit::load_state(context, id) {
+                state.clear_undoer();
+                state.store(context, id);
+            }
+        }
+        self.pending = None;
+    }
+    pub fn reveal(
+        &mut self,
+        project: &mut NativeProject,
+        path: &str,
+        offset: usize,
+    ) -> Result<(), String> {
+        project.select_source(path)?;
+        let mut byte = offset.min(project.editor_text.len());
+        while !project.editor_text.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        let cursor = project.editor_text[..byte].chars().count();
+        self.pending = Some(cursor..cursor);
+        Ok(())
+    }
+
     pub fn dismiss_completion(&mut self) {
         self.show_complete = false;
         self.focus_complete = false;
@@ -137,7 +168,10 @@ impl SourceEditor {
             .max_height(controls_height)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui_theme::legend(ui, &project.selected_file);
+                    ui_theme::legend(
+                        ui,
+                        format!("{}/{}", project.member_alias(), project.selected_file),
+                    );
                     if ui
                         .button("FIND")
                         .on_hover_text("Ctrl/Cmd+F; F3 next, Shift+F3 previous")
@@ -236,7 +270,11 @@ impl SourceEditor {
         let mut changed = false;
         let source_id = editor_id(project);
         egui::ScrollArea::both()
-            .id_salt(("source-scroll", &project.selected_file))
+            .id_salt((
+                "source-scroll",
+                project.member_alias(),
+                &project.selected_file,
+            ))
             .max_height(height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -298,8 +336,9 @@ impl SourceEditor {
     }
 
     fn refresh(&mut self, project: &mut NativeProject) {
-        if self.identity != project.manifest.id {
-            self.identity.clone_from(&project.manifest.id);
+        let identity = format!("{}:{}", project.member_alias(), project.manifest.id);
+        if self.identity != identity {
+            self.identity = identity;
             self.completion_model = None;
             self.model = None;
             self.fingerprint = None;
@@ -787,6 +826,7 @@ impl SourceEditor {
 fn editor_id(project: &NativeProject) -> egui::Id {
     egui::Id::unique((
         "native-modl-source",
+        project.member_alias(),
         &project.manifest.id,
         &project.selected_file,
     ))
@@ -1057,6 +1097,35 @@ fn completion_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debugger_navigation_uses_utf8_byte_spans_and_clamps_to_valid_editor_cursors() {
+        let mut project = NativeProject::from_source(
+            include_str!("../../../templates/blank/cart.m01w").to_owned(),
+            None,
+        )
+        .unwrap();
+        let text = "on draw:\n  print(\"é\", 0, 0, 1)\n";
+        project
+            .files
+            .insert("src/other.modl".to_owned(), text.as_bytes().to_vec());
+        let mut editor = SourceEditor::default();
+        let offset = text.find('é').unwrap();
+        editor
+            .reveal(&mut project, "src/other.modl", offset + 1)
+            .unwrap();
+        assert_eq!(project.selected_file, "src/other.modl");
+        assert_eq!(project.editor_text, text);
+        let expected = text[..offset].chars().count();
+        assert_eq!(editor.pending, Some(expected..expected));
+        editor
+            .reveal(&mut project, "src/other.modl", usize::MAX)
+            .unwrap();
+        let end = text.chars().count();
+        assert_eq!(editor.pending, Some(end..end));
+        assert!(editor.reveal(&mut project, "src/missing.modl", 0).is_err());
+        assert_eq!(project.selected_file, "src/other.modl");
+    }
 
     fn key(key: Key, modifiers: Modifiers) -> egui::Event {
         egui::Event::Key {

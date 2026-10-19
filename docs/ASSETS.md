@@ -5,6 +5,14 @@ handles such as `#hero` and `#theme`. Sprite/tile-set/display JSON use current
 revision 2; map/font/sound/music each use their own current revision 1 schema.
 These are independent asset schemas, not compatibility profiles.
 
+Integer fields use bounded numeric values under [JSON's number grammar](https://www.rfc-editor.org/rfc/rfc8259.html#section-6),
+not a number's spelling: `2`, `2.0` and `2e0` mean the same thing. Native sprite,
+tile/map/font/display and tracker tools share the validator's integer reader.
+Opening/rendering accepted numbers does not normalize the authored JSON; explicit
+edits can write ordinary integer values. Fractions, booleans, numeric strings and
+out-of-range values are not repaired into valid integers. Tile PNG export refuses
+invalid colours instead of silently exporting black or clamping them.
+
 Stored noise/WFC map recipes consume current revision-2 tile sets and emit current
 revision-1 maps. Generated results pass the same asset/compiler/packed admission;
 obsolete revision-1 tile sets are rejected instead of producing an un-packable game.

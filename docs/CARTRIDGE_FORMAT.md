@@ -92,9 +92,11 @@ source and 16 MiB per member. This does not enlarge any member's machine capacit
 Game identity includes the entire shipping artifact and exact enclosing source;
 catalog identity covers sorted aliases and exact logical cartridge bytes.
 
-These are implemented core APIs; CLI/Studio/runtime bundle integration remains
-in progress. Single-cartridge APIs explicitly refuse bundled source instead of
-silently dropping dependencies. See [bundle implementation](BUNDLES.md).
+CLI, native Studio/player, PNG and native desktop export use these whole-game
+APIs. Single-cartridge APIs explicitly refuse bundled source instead of silently
+dropping dependencies. The [bundle contract](BUNDLES.md) documents the shared
+scheduler, member-scoped editing/debugging and remaining final verification;
+[Relay Station](RELAY_STATION.md) is a maintained playable composition.
 
 ## Cartridge PNG
 
@@ -103,21 +105,39 @@ Exactly one private `moCa` chunk contains the byte-exact canonical cartridge
 and one `moCm` chunk contains bounded canonical presentation metadata.
 PNG CRCs and the cartridge inventory are both validated.
 
+The payload is a complete admitted game, including a flat multi-cartridge bundle;
+the PNG wrapper is bounded by the game shipping limit plus 8 MiB of image/chunk
+overhead. This does not enlarge a logical console ROM beyond 1 MiB. Both encoding
+and decoding validate the current whole game, so a valid CRC cannot conceal an
+obsolete or forged payload. CRC calculation streams type/data slices without an
+extra payload-sized temporary copy. Studio and CLI share main's presentation
+metadata even when another member is selected for editing; existing single-cart
+PNG bytes and pixels are unchanged.
+
 The image is presentation only; importing reconstructs source from the packed
 payload, never from the pixels. Studio and CLI accept raw and PNG cartridges.
 Use `mod01 export png PROJECT --output game.m01c.png`.
 
 ## Native distribution
 
-`mod01 export native` bundles the same cartridge with a native player, Node
-runtime and notices. It does not change cartridge semantics or embed a browser.
+`mod01 export native` bundles the same complete admitted game with a native player,
+Node runtime and notices. All logical cartridges and their source travel together;
+main owns package presentation, while each cartridge retains its separate save ID
+and ROM capacity. It does not change cartridge semantics or embed a browser.
 See [NATIVE_GAMES.md](NATIVE_GAMES.md) for target binaries, directory/`.app`
 layouts, reproducibility boundaries and OS signing requirements.
 
 ## Headless and replay interchange
 
 `mod01 run PROJECT_OR_CARTRIDGE --headless` uses the same compiler/core.
-Flags include `--seed`, `--frames`, `--input`, `--save` and `--output`.
+Flags include `--seed`, `--frames`, `--input`, `--save`, `--saves`,
+`--parameter` and `--output`. `--save` supplies the entry cartridge's raw image;
+`--saves` instead reads a JSON object of persistent cartridge IDs to canonical
+base64 byte images. They are mutually exclusive. Missing declared IDs start with
+zeroed 8 KiB images; undeclared IDs, malformed base64 or over-capacity images fail
+before running code. The save-catalog file is bounded to 512 KiB. The optional
+initial transfer parameter defaults to empty Text and is bounded to 1,024 UTF-8
+bytes. Headless execution never writes user save files.
 The current input JSON schema is revision 1: ordered, non-overlapping records
 with frame, optional duration, four-port button assignments and optional
 complete pointer state. An optional `menuAction` integer 1–5 records a cartridge
@@ -126,11 +146,45 @@ are rejected; absence means no activation. Navigation and pause duration are
 host state, not extra machine frames. The current `.m01rec` envelope also uses revision 1;
 other replay schemas are rejected.
 
-Trace results include framebuffer, state, audio-command, Float32 little-endian
-PCM and committed-save hashes, work usage and stable fault/span details.
-Limits are 36,000 frames, 8 MiB trace input, 16 MiB decoded files, 1 MiB ROM
-and 8 KiB save data. A modeled cartridge fault is reported in the trace;
-malformed host input exits unsuccessfully.
+Replay admission is shared by a Rust/TypeScript conformance corpus. JSON numbers
+use their bounded integral value under [JSON's number grammar](https://www.rfc-editor.org/rfc/rfc8259.html#section-6),
+not their spelling: `1`, `1.0` and `1e0` are
+equivalent; fractional/out-of-range values and booleans are not integers. Expanded
+pointer coordinates normalize negative zero to zero. Compact empty traces need
+no trailing newline. Optional pointer/action/duration fields may be omitted, but
+explicit null is invalid. Unknown fields, duplicate ports/buttons, overlapping
+ranges, byte-order marks and malformed UTF-8 are rejected. The schema stays
+revision 1; this does not add a legacy decoder or migration path.
+
+The current headless request/result schema is revision 2; the input replay schema
+above remains revision 1. There is no older-request fallback. Every source/raw/PNG
+run uses shared whole-game Rust admission and the production game scheduler,
+including one-member games. `game.identity` covers the complete shipping artifact;
+`game.members` records each alias's own ID, logical ROM size and SHA-256.
+`cartridge` describes the initial logical member, not an oversized bundle ROM.
+
+Results identify each frame's producing alias, persistent ID, local frame and
+global game frame, plus work usage, framebuffer/audio-command/Float32
+little-endian PCM hashes and fault/span details. Following-state checkpoints may
+already contain the next prepared cartridge, while the output still belongs to
+the previous one. `stateSha256` covers the whole running game, input barrier and
+all saves, excluding only artifact identity and compiler mode: this allows authored
+tests to assert state without a self-referential hash of their own source.
+`snapshotSha256` includes that identity/mode binding too. Summary fields use the
+`finalStateSha256`/`finalSnapshotSha256` names. Whole-catalog save hashes and per-ID
+`initialSaves`/`finalSaves` hashes make save ownership observable.
+
+Canonical trace hashing sorts object keys by ASCII/code-unit order. Byte arrays
+are represented as `{ "$bytes": "lowercase hex" }`; Float32 arrays use
+`{ "$float32le": "lowercase little-endian hex" }`, avoiding host-specific JSON
+encoding and per-frame million-element temporary number arrays. Per-ID save hashes
+remain SHA-256 of the exact padded 8 KiB committed bytes.
+
+Limits are 36,000 global frames, 8 MiB replay input, up to 32 declared members,
+16 MiB decoded data/1 MiB logical ROM/8 KiB saves per member, and the shared
+bounded game transport. A modeled frame fault is reported without applying its
+pending transition or persisting that frame's save catalog; malformed host input
+exits unsuccessfully.
 
 ## Reproducibility and size classes
 

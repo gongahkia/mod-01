@@ -147,7 +147,7 @@ export function decodeRuntimeAssets(
   const visual: VisualAsset[] = [];
   const audio: AudioAsset[] = [];
   for (const [name, declaration] of Object.entries(declarations).sort(([left], [right]) =>
-    left.localeCompare(right),
+    left < right ? -1 : left > right ? 1 : 0,
   )) {
     const bytes = files[declaration.path];
     if (bytes === undefined) {

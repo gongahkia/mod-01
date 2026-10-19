@@ -38,11 +38,33 @@ drawing/fill tools, PNG import/export, palette picking and undo. Structured tool
 edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
 raw asset text remains visible.
 
+Asset JSON/source, sprite/atlas PNG and WAV save dialogs suggest namespaced
+`asset-NAME.EXT` filenames rather than raw device-like asset names or source
+basenames. The readable ASCII label is sanitized and capped at 64 characters;
+source extensions are kept when safe, otherwise `.json` is suggested. These are
+editable suggestions, not unique IDs: inspect the destination before replacing
+an existing file. Asset IDs, declared source paths and exported contents do not
+change.
+
+Sound controls use integer MIDI/frame inputs, with duration 1–3600 and envelope/
+vibrato periods 0–3600. Click to type or drag to adjust; fractional integer input
+is rejected. Floating fields retain full precision when focused without an edit.
+Opening a patch never clamps/rebuilds its source, including integral JSON floats
+and malformed fields; invalid fields remain available in raw JSON. Pitch values
+use the shared core's frequency validation rather than narrower editor-only
+limits. Choosing pulse explicitly supplies a default duty only if needed;
+choosing wavetable explicitly supplies a four-sample table only if needed.
+Existing valid tables survive waveform switches. Wavetable samples and bounded
+4–32 sample add/remove controls participate in ordinary per-asset undo/redo;
+unrelated source annotations survive edits.
+
 The music workbench shows all eight channels together, with MIDI note, patch and
 optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
 chromatic notes from the selected octave; comma/L/period/semicolon/slash extend
 the range. STEP controls row advance (zero repeats the same row). AUDITION ONLY
 plays notes without editing. Patch choices come from declared sound assets.
+Selected-cell volume retains full floating-point precision on focus/Enter;
+explicit volume edits remain one ordinary per-asset undo transaction.
 Arrows, Tab/Shift-Tab, Home/End and Page Up/Down navigate; Shift+arrows selects a
 rectangular block. Delete/Backspace clears; Insert inserts an eight-cell row.
 Ctrl/Cmd+A/C/X/V selects/copies/cuts/pastes a block, clipping at the pattern edge.
@@ -70,6 +92,21 @@ format: opening/recovering/creating another cartridge clears it. Changed asset
 kind/path/bytes or layered source invalidate cached state. Raw JSON text widgets
 also use separate asset/project identities so their text undo cannot cross assets.
 
+`DELETE ASSET` in Assets/Sprites opens a confirmation for the selected member's
+exact cartridge ID, asset name, kind and path. Stop the game and apply/revert a
+manifest draft first. The shared workcart checker refuses module, stored MODL
+test, map/music and generation-recipe references; schema-invalid dependency
+records must be repaired or removed first. Capacity overages do not prevent
+deleting an otherwise unreferenced asset. Cancellation and rejection preserve
+authored contents and editor history. Successful deletion removes the declaration and
+unshared runtime payload in memory, discards only that asset's structured/sprite/
+raw-text undo, and retains other members, their asset histories and player saves.
+Auxiliary authoring files, including sprite sidecars, are retained. This is not
+an asset-edit undo operation: before saving, reopening the workcart discards
+ALL unsaved edits, not only the deletion; after saving, use the ordinary recovery
+revisions. No disk file changes
+until SAVE. Raw JSON widgets are also scoped by member alias and cartridge ID.
+
 ASSET BANK shows the shared Rust validator's live visual-byte/allocation-slot
 usage in Assets and Sprites, including unsaved JSON, structured edits and sprite
 frame changes. It refreshes at most four times per second; REFRESH requests the
@@ -92,10 +129,54 @@ their patch bank is unchanged. STOP AUDIO, leaving Assets, opening another
 project or running the cartridge stops and discards queued preview audio.
 Without an audio device the same preview runs silently. EXPORT WAV is a separate
 offline render and never starts playback.
+Native WAV export is limited to 8 MiB (2,621 complete 60 Hz synth frames, about
+43.7 seconds), including a sound's release. The exact size is checked before
+rendering any PCM, not after allocating a long file. Oversized output is rejected
+without truncation; shorten the patch/release or music order and retry. This
+native transport limit does not reduce the runtime library's existing default
+sound/music renderer capacity.
+
+The `AUD`/`SILENT` status indicator reports native device availability; hover it
+for the latest device notice. The current
+[CPAL error classifications](https://docs.rs/cpal/0.18.2/cpal/enum.ErrorKind.html)
+keep underruns, automatically rerouted devices and realtime-scheduling notices
+nonfatal. These notices are coalesced rather than logged from the audio callback.
+An unusable stream is released on the UI thread and playback/preview continues
+silently without stopping the VM, changing saves or rewinding replay. Restore the
+device and restart Studio/player to re-open output; there is no automatic retry
+loop. Native synth telemetry and offline WAV export remain available without a
+working output device. This does not replace physical-device/audio-quality QA.
 
 Saving keeps bounded local recovery revisions. The save manager exports/imports
 checksummed cartridge-bound save containers and retains recovery before
 replacement. Local saves are keyed by validated cartridge identity.
+
+On disk, native saves use the shared portable stem under the application data
+directory: `saves/cart-ID.bin` and `cart-ID.schema`. Dots in an ID become
+underscores only in filenames; the ID inside the game/save container is unchanged.
+Recovery lives in `saves/recovery/cart-ID.saves/TIMESTAMP.m01save`. Pruning retains
+ten valid backups for that exact ID, never a different ID with a shared name
+prefix. The newly created backup is retained even if the clock moves backwards;
+foreign, malformed, oversized and linked files are not pruned. Recovery creation
+uses [atomic create-new](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.create_new)
+so timestamp collisions cannot overwrite an existing file.
+
+Image/schema reads are bounded to 8 KiB/64 bytes; save-container imports are
+bounded to 17 KiB before decoding. Missing data uses an empty image/schema 1;
+malformed or oversized data reports an error, not a repaired default. Existing
+linked files and managed save/recovery directories are refused. Commits stage
+through exclusively created, distinct image/schema filenames, sync their bytes,
+then [rename into place](https://doc.rust-lang.org/std/fs/fn.rename.html).
+Concurrent commits cannot share a staging file; failure cleans up only the
+transaction's own stage. Old `.tmp` paths are never reused or removed. This is
+per-file atomic replacement, not a cross-file schema/image transaction or a
+security sandbox against an adversary replacing application-data directories.
+
+There is no old-path fallback or automatic data migration. Existing unprefixed
+development `.bin`/`.schema` files and flat recovery files are left untouched.
+To retain an earlier development save, export/import its current `.m01save`
+container, or—while Studio and players are stopped—copy the raw `.bin` and any
+matching `.schema` sidecar to the new names. Keep the originals until verified.
 
 ## Running and debugging
 
@@ -110,13 +191,21 @@ release; Ctrl/Cmd/Alt shortcuts do not become gameplay. Escape is host-only.
 The host never receives a cartridge-selected filesystem path.
 Runtime loads, stops and isolated previews carry private native session generations;
 queued replies/commands from an abandoned session cannot update a new cartridge's
-frame, audio, debugger or committed save. The child-process JSON protocol is
-unchanged. Missing-bundle startup errors remain visible across generation changes.
+frame, audio, debugger or committed save. Generations stay private to the bridge;
+missing-bundle startup errors remain visible across generation changes.
 
 Debug compilation supports source statement stepping, breakpoint conditions,
 watches, memory inspection/editing, state/tasks and snapshot restore. It uses the
 same compiler IR and device implementation as ordinary play. A paused debugger
 does not advance machine frame time.
+Malformed/foreign checkpoints and invalid memory reads/edits report
+`DEBUG REQUEST REJECTED` without killing a healthy native host or changing its
+suspended source, input, replay cursor, menu or memory. Auto-stepping pauses so
+the diagnostic can be inspected; manual stepping/resume remains available. Only
+read-only debugger requests and the shared core's transactional validation errors
+are recoverable. Errors outside those operations, including execution faults,
+unexpected write failures and transport errors, still stop the session. Restore and edit bytes must use bounded canonical
+base64, not Node's permissive decoder.
 
 RECORD REPLAY starts a fresh run (using the current save), clears loaded playback
 and records one input per completed display frame, including frame zero exactly
@@ -129,6 +218,12 @@ request tracking waits for all outstanding replies before advancing debug steps.
 
 The standalone game surface is available through `--play PATH` or OPEN GAME VIEW.
 It uses the same execution/input/audio/save devices. Studio and that game surface
+update native window constraints when switching views: Studio requires 900×600,
+the ordinary player 480×320, and the player with touch controls 480×500. Enabling
+touch or opening SOURCE grows a smaller window so controls cannot clip the full
+240×144 framebuffer or make the source editor unusable. Disabling touch restores
+the smaller allowable minimum without forcing the user's window to shrink.
+Studio and the game surface
 share the native system menu: MENU/PAUSE, Escape, controller Select or touch MENU
 opens it without advancing machine time. Up/down and Z/Enter (controller A/Start)
 select; X/controller B/Escape resumes. Resume/restart/source inspection and the

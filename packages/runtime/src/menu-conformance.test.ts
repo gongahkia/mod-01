@@ -10,6 +10,7 @@ import { runHeadless } from './headless';
 import { emptyInputFrame, type InputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import { decodeReplayTrace, encodeReplayTrace, replayInputFrames } from './replay';
+import { runtimeGameFixture } from './test-support/game';
 
 describe('actual MODL pause actions across release, debug, native and replay', () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -109,15 +110,18 @@ describe('actual MODL pause actions across release, debug, native and replay', (
         assets: {},
       };
       const headless = await runHeadless({
-        revision: 1,
-        javascript,
-        manifest,
-        entries: {},
-        rom: [1],
+        revision: 2,
+        game: runtimeGameFixture({
+          javascript,
+          manifest,
+          debug,
+          sourceMap: readFileSync(output.replace(/\.mjs$/, '.js.map'), 'utf8'),
+        }),
         seed: 7,
         frames: inputs.length,
         trace,
-        save: [],
+        parameter: '',
+        saves: {},
       });
       expect(headless.fault).toBeUndefined();
       expect(headless.frames.map((frame) => frame.workUnits)).toEqual(
@@ -132,13 +136,15 @@ describe('actual MODL pause actions across release, debug, native and replay', (
       const host = join(root, 'packages/runtime/standalone/native-host.mjs');
       const load = {
         type: 'load',
-        javascript,
-        manifest,
-        files: {},
-        rom: 'AQ==',
-        save: '',
+        game: runtimeGameFixture({
+          javascript,
+          manifest,
+          files: {},
+          debug,
+        }),
+        parameter: '',
+        saves: {},
         seed: 7,
-        debug,
       };
       const native = (commands: unknown[]) =>
         execFileSync(process.execPath, ['--permission', `--allow-fs-read=${host}`, host], {

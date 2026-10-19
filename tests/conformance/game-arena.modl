@@ -1,0 +1,20 @@
+state ticks: Int = 0
+state visits: Int = 0
+on start:
+  assert cart_parameter() == "score=7", "arena parameter"
+  assert mem_read(0) == 0, "fresh arena RAM"
+  visits = save_get_int("visits", 0) + 1
+  save_set_int("visits", visits)
+  menu_item(1, "RETURN")
+on menu(action: Int):
+  assert action == 1, "return action"
+  load_cart("main", "returned")
+on update:
+  ticks += 1
+  mem_write(1, ticks)
+on draw:
+  clear(7)
+  if btnp(pad1, a):
+    clear(9)
+  if pointer_primary():
+    clear(11)

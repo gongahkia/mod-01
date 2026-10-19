@@ -11,6 +11,64 @@ fn project() -> (ProjectManifest, BTreeMap<String, Vec<u8>>) {
     (project.manifest, project.files)
 }
 
+#[test]
+fn asset_integer_values_use_numeric_meaning_without_rounding_or_repair() {
+    use modl_core::assets::integer_value;
+    for source in ["2", "2.0", "2e0"] {
+        let value: Value = serde_json::from_str(source).unwrap();
+        assert_eq!(integer_value(&value, 0, 255), Some(2));
+    }
+    for (source, expected) in [("-0.0", 0), ("-32768.0", -32768), ("32767e0", 32767)] {
+        let value: Value = serde_json::from_str(source).unwrap();
+        assert_eq!(integer_value(&value, -32768, 32767), Some(expected));
+    }
+    for value in [
+        json!(0.5),
+        json!(-1),
+        json!(256.0),
+        json!(true),
+        json!("2"),
+        Value::Null,
+    ] {
+        assert!(integer_value(&value, 0, 255).is_none());
+    }
+    assert_eq!(
+        integer_value(&json!(i32::MAX), i32::MIN, i32::MAX),
+        Some(i32::MAX)
+    );
+    assert_eq!(
+        integer_value(&json!(i32::MIN), i32::MIN, i32::MAX),
+        Some(i32::MIN)
+    );
+    assert!(integer_value(&json!(1), 2, 0).is_none());
+}
+
+#[test]
+fn hardware_showcase_hud_and_bitmap_glyph_agree_with_the_current_machine() {
+    let project = parse_workcart(include_str!(
+        "../../../cartridges/hardware-gauntlet/cart.m01w"
+    ))
+    .unwrap();
+    let source = std::str::from_utf8(&project.files["src/main.modl"]).unwrap();
+    let label = format!("R{}", project.manifest.hardware_revision);
+    assert!(
+        source.contains(&format!("font_print(#typeface, \"{label}\"")),
+        "showcase HUD must identify its actual current machine"
+    );
+    let font: Value = serde_json::from_slice(&project.files["assets/typeface.m01f"]).unwrap();
+    for character in label.chars() {
+        let code = u32::from(character);
+        assert!(
+            font["glyphs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|glyph| glyph["code"] == code),
+            "the {character} label glyph must not fall back to a question mark"
+        );
+    }
+}
+
 fn add(
     manifest: &mut ProjectManifest,
     files: &mut BTreeMap<String, Vec<u8>>,
@@ -50,14 +108,21 @@ fn every_maintained_game_example_and_template_has_valid_current_assets() {
                 continue;
             }
             let project = parse_workcart(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let report = analyze_project_assets(&project.manifest, &project.files);
-            assert!(
-                report.is_valid(),
-                "{}: {:?}",
-                path.display(),
-                report.diagnostics
-            );
-            checked += 1;
+            let mut members = vec![("main".to_owned(), project.manifest, project.files)];
+            for child in project.bundle {
+                let parsed = parse_workcart(&child.source).unwrap();
+                members.push((child.alias, parsed.manifest, parsed.files));
+            }
+            for (alias, manifest, files) in members {
+                let report = analyze_project_assets(&manifest, &files);
+                assert!(
+                    report.is_valid(),
+                    "{}/{alias}: {:?}",
+                    path.display(),
+                    report.diagnostics
+                );
+                checked += 1;
+            }
         }
     }
     assert!(

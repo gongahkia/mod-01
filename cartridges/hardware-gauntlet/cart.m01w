@@ -17,7 +17,7 @@ label = "presentation/label.svg"
 [[module]]
 path = "src/main.modl"
 source = """
-// Hardware Revision 1 public stress showcase
+// Current machine public stress showcase
 // Made by @gongahkia
 
 const SYSTEM: Int = 328192
@@ -61,7 +61,7 @@ on draw:
         rect_fill(x * 16 + 8, y * 16 + 8, 8, 8, 11)
   rect_fill(8, 8, 224, 42, 2)
   print("HARDWARE GAUNTLET", 68, 14, 7)
-  font_print(#typeface, "R1", 108, 28, 23)
+  font_print(#typeface, "R2", 108, 28, 23)
   if page == 0:
     print("BUS + ROM + ENDIAN", 67, 62, 15)
   elif page == 1:
@@ -107,7 +107,7 @@ name = "typeface"
 kind = "font"
 path = "assets/typeface.m01f"
 payload = """
-{"revision":1,"kind":"font","glyphWidth":5,"glyphHeight":7,"baseline":6,"advanceX":6,"advanceY":8,"missingGlyph":63,"glyphs":[{"code":49,"pixels":[0,0,1,0,0,0,1,1,0,0,1,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,1,1,1,1,1]},{"code":63,"pixels":[0,1,1,1,0,1,0,0,0,1,0,0,0,0,1,0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0]},{"code":82,"pixels":[1,1,1,1,0,1,0,0,0,1,1,0,0,0,1,1,1,1,1,0,1,0,1,0,0,1,0,0,1,0,1,0,0,0,1]}]}
+{"revision":1,"kind":"font","glyphWidth":5,"glyphHeight":7,"baseline":6,"advanceX":6,"advanceY":8,"missingGlyph":63,"glyphs":[{"code":50,"pixels":[0,1,1,1,0,1,0,0,0,1,0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,1,1,1,1]},{"code":63,"pixels":[0,1,1,1,0,1,0,0,0,1,0,0,0,0,1,0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0]},{"code":82,"pixels":[1,1,1,1,0,1,0,0,0,1,1,0,0,0,1,1,1,1,1,0,1,0,1,0,0,1,0,0,1,0,1,0,0,0,1]}]}
 """
 
 [[file]]

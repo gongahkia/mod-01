@@ -13,6 +13,7 @@ import { emptyInputFrame } from './input';
 import { decodeSaveValues } from './save';
 import type { ProjectAssetDeclaration } from './asset-codec';
 import type { CartridgeFactory } from './machine';
+import { runtimeGameFixture } from './test-support/game';
 
 describe('source-visible software 3D game', () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -40,9 +41,20 @@ describe('source-visible software 3D game', () => {
         manifest: { assets: Record<string, ProjectAssetDeclaration> };
         files: Record<string, number[]>;
       };
-      const model = JSON.parse(execFileSync(cli, ['graph', project], { encoding: 'utf8' })) as {
-        symbols: { id: number; name: string; kind: string }[];
+      const graph = JSON.parse(execFileSync(cli, ['graph', project], { encoding: 'utf8' })) as {
+        revision: number;
+        members: {
+          main: {
+            cartridgeId: string;
+            model: {
+              symbols: { id: number; name: string; kind: string }[];
+            };
+          };
+        };
       };
+      expect(graph.revision).toBe(1);
+      expect(graph.members.main.cartridgeId).toBe('prism-corridor');
+      const model = graph.members.main.model;
       const symbols = Object.fromEntries(
         model.symbols
           .filter((symbol) => symbol.kind === 'state')
@@ -152,22 +164,19 @@ describe('source-visible software 3D game', () => {
       const commands = [
         {
           type: 'load',
-          javascript: readFileSync(output, 'utf8'),
-          debug,
-          manifest: {
-            id: 'prism-corridor',
-            updateRate: 60,
-            display: null,
-            assets: view.manifest.assets,
-          },
-          files: Object.fromEntries(
-            Object.entries(view.files).map(([path, bytes]) => [
-              path,
-              Buffer.from(bytes).toString('base64'),
-            ]),
-          ),
-          rom: 'AQ==',
-          save: '',
+          game: runtimeGameFixture({
+            javascript: readFileSync(output, 'utf8'),
+            debug,
+            manifest: {
+              id: 'prism-corridor',
+              updateRate: 60,
+              display: null,
+              assets: view.manifest.assets,
+            },
+            files: view.files,
+          }),
+          parameter: '',
+          saves: {},
           seed: 1,
         },
         ...Array.from({ length: 416 }, (_, frame) => ({

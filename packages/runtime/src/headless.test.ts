@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { runHeadless, type HeadlessRequest } from './headless';
+import { runtimeGameFixture } from './test-support/game';
 
 const javascript = `export default function createCartridge(api) {
   let frame = 0;
@@ -17,15 +18,17 @@ const javascript = `export default function createCartridge(api) {
 
 function request(overrides: Partial<HeadlessRequest> = {}): HeadlessRequest {
   return {
-    revision: 1,
-    javascript,
-    manifest: { id: 'headless-test', updateRate: 60, display: null, assets: {} },
-    entries: {},
-    rom: [77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0],
+    revision: 2,
+    game: runtimeGameFixture({
+      javascript,
+      manifest: { id: 'headless-test', updateRate: 60, display: null, assets: {} },
+      rom: [77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0],
+    }),
     seed: 7,
     frames: 3,
     trace: { revision: 1, frames: [] },
-    save: [],
+    parameter: '',
+    saves: {},
     ...overrides,
   };
 }
@@ -58,10 +61,13 @@ describe('production headless host', () => {
 
   it('reports modeled cartridge faults and rejects malformed traces before execution', async () => {
     const faulting = request({
-      javascript: javascript.replace(
-        'frame += 1;',
-        "api.fault('M019998', 'fixture fault', { start: 4, end: 9 });",
-      ),
+      game: runtimeGameFixture({
+        javascript: javascript.replace(
+          'frame += 1;',
+          "api.fault('M019998', 'fixture fault', { start: 4, end: 9 });",
+        ),
+        manifest: { id: 'headless-test', updateRate: 60, display: null, assets: {} },
+      }),
     });
     await expect(runHeadless(faulting)).resolves.toMatchObject({
       frames: [],
@@ -78,5 +84,45 @@ describe('production headless host', () => {
         trace: { revision: 1, frames: [{ frame: 3, controllers: [] }] },
       }),
     ).rejects.toThrow(/invalid MOD-01 headless request/);
+  });
+
+  it('separates equivalent machine state from artifact/mode-bound checkpoint identity', async () => {
+    const source = request();
+    const release = await runHeadless(source);
+    const debug = await runHeadless({
+      ...source,
+      game: { ...source.game, identity: 'b'.repeat(64), debug: true },
+    });
+    expect(debug.game.identity).not.toBe(release.game.identity);
+    expect(debug.summary.finalStateSha256).toBe(release.summary.finalStateSha256);
+    expect(debug.summary.finalSnapshotSha256).not.toBe(release.summary.finalSnapshotSha256);
+    for (const [index, frame] of release.frames.entries()) {
+      expect(debug.frames[index]).toMatchObject({
+        cartridgeAlias: 'main',
+        cartridgeId: 'headless-test',
+        cartridgeFrame: index,
+        stateSha256: frame.stateSha256,
+        framebufferSha256: frame.framebufferSha256,
+        workUnits: frame.workUnits,
+        pcmSha256: frame.pcmSha256,
+        saveSha256: frame.saveSha256,
+      });
+    }
+  });
+
+  it('accepts only the current whole-game envelope and bounded per-ID saves/parameters', async () => {
+    const source = request();
+    for (const invalid of [
+      { ...source, revision: 1 },
+      { ...source, revision: 3 },
+      { ...source, extra: true },
+      { ...source, frames: 36_001 },
+      { ...source, seed: -1 },
+      { ...source, saves: { missing: '' } },
+      { ...source, parameter: '\ud800' },
+      { ...source, parameter: 'x'.repeat(1025) },
+      { ...source, saves: { 'headless-test': 'AR==' } },
+    ])
+      await expect(runHeadless(invalid)).rejects.toThrow();
   });
 });

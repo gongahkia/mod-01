@@ -17,6 +17,7 @@ pub mod lexer;
 pub mod native_export;
 pub mod parser;
 pub mod playground;
+pub mod runtime_game;
 pub mod sema;
 pub mod span;
 pub mod token;

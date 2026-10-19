@@ -29,6 +29,13 @@ granted. The bridge bounds each response to 16 MiB, imposes a five-second respon
 deadline, and kills a stalled or faulted process. Packaged games include Node;
 development and the external CLI headless workflow require a local Node install.
 
+The bridge resolves host symlinks, then uses `dunce`'s safe Windows path
+simplification for both Node's entry and exact-file read grant. Rust's verbatim
+`\\?\` spellings are not interchangeable with Node permission keys. Reserved
+or otherwise ambiguous names are not blindly stripped, and no directory/all-file
+permission fallback is added. A real child-host probe checks spaces, Unicode and
+`#` in the host path while confirming an adjacent file remains unreadable.
+
 These are defence-in-depth controls and a responsiveness boundary. Node's
 permission model is not an OS sandbox against malicious arbitrary JavaScript.
 Do not treat imported native executables, replacement runtimes or a compromised

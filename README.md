@@ -21,11 +21,11 @@ pnpm install --frozen-lockfile
 pnpm native
 ```
 
-On Linux, install development packages for ALSA, udev, X11/Wayland, xkbcommon,
+On Linux, install development packages for ALSA, udev, X11/Wayland, xkbcommon (including its X11 bridge),
 OpenGL and GTK3 first. CI's exact Ubuntu package list is in
 [ci.yml](.github/workflows/ci.yml). Fedora uses the corresponding
 `alsa-lib-devel systemd-devel libX11-devel libXrandr-devel libXi-devel
-wayland-devel libxkbcommon-devel mesa-libGL-devel gtk3-devel` packages.
+wayland-devel libxkbcommon-devel libxkbcommon-x11-devel mesa-libGL-devel gtk3-devel` packages.
 If pkg-config does not search system libraries, add the system pkgconfig directories
 to `PKG_CONFIG_PATH`.
 
@@ -84,9 +84,12 @@ The quality gate runs formatting, lint, types, runtime/compiler/native tests,
 builds and artifact verification. The native packaging workflow also runs on
 Windows and macOS; local Linux verification does not substitute for those jobs.
 
-The approved native-consolidation work is tracked honestly in
-[the acceptance ledger](docs/NATIVE_IMPLEMENTATION.md). Unchecked rows are still
-in progress. [Standard-library semantics](docs/STANDARD_LIBRARY.md) include
+The completed native-consolidation work is tracked in
+[the acceptance ledger](docs/NATIVE_IMPLEMENTATION.md).
+The [decision-by-decision audit](docs/NATIVE_ACCEPTANCE.md) links all 21 original
+review items to evidence, including actual Windows/macOS/Linux window checks
+and the explicit hardware/release qualification limits.
+[Standard-library semantics](docs/STANDARD_LIBRARY.md) include
 deterministic math, safe number conversion, bounded text and explicit bit ops.
 
 ## Boundaries

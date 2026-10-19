@@ -1,6 +1,7 @@
 //! Source-preserving eight-channel tracker. This edits assets, never synthesizer state.
 use crate::ui_theme;
 use eframe::egui::{self, Key};
+use modl_core::assets::integer_value;
 use serde_json::{Value, json};
 
 const CHANNELS: usize = 8;
@@ -195,9 +196,8 @@ impl TrackerEditor {
         // Preflight the entire block; never partially transpose at MIDI boundaries.
         if (r0..=r1).any(|row| {
             (c0..=c1).any(|channel| {
-                rows[row][channel]["note"]
-                    .as_i64()
-                    .is_some_and(|note| !(0..=127).contains(&(note + i64::from(delta))))
+                integer_value(&rows[row][channel]["note"], 0, 127)
+                    .is_some_and(|note| !(0..=127).contains(&(note + i32::from(delta))))
             })
         }) {
             self.status = "TRANSPOSE REFUSED / MIDI RANGE 0–127".to_owned();
@@ -205,8 +205,8 @@ impl TrackerEditor {
         }
         for row in r0..=r1 {
             for channel in c0..=c1 {
-                if let Some(note) = rows[row][channel]["note"].as_i64() {
-                    rows[row][channel]["note"] = json!(note + i64::from(delta));
+                if let Some(note) = integer_value(&rows[row][channel]["note"], 0, 127) {
+                    rows[row][channel]["note"] = json!(note + i32::from(delta));
                 }
             }
         }
@@ -392,7 +392,7 @@ impl TrackerEditor {
 
     fn transport_controls(&mut self, ui: &mut egui::Ui, document: &mut Value, sounds: &[String]) {
         ui.horizontal_wrapped(|ui| {
-            let mut speed = document["framesPerRow"].as_u64().unwrap_or(6);
+            let mut speed = integer_value(&document["framesPerRow"], 1, 240).unwrap_or(6);
             ui.label("FRAMES/ROW");
             if ui
                 .add(egui::DragValue::new(&mut speed).range(1..=240))
@@ -776,8 +776,7 @@ impl TrackerEditor {
                         let painter = ui
                             .painter()
                             .with_clip_rect(cell_rect.intersect(ui.clip_rect()));
-                        let note = cell["note"]
-                            .as_u64()
+                        let note = integer_value(&cell["note"], 0, 127)
                             .map_or_else(|| "---".to_owned(), |note| note_name(note as u8));
                         let volume = cell
                             .get("volume")
@@ -834,7 +833,7 @@ impl TrackerEditor {
                 }
                 return;
             }
-            let mut note = cell["note"].as_u64().unwrap_or(60);
+            let mut note = integer_value(&cell["note"], 0, 127).unwrap_or(60);
             if ui.add(egui::DragValue::new(&mut note).range(0..=127)).changed() { cell["note"] = json!(note); }
             ui.label(note_name(note.min(127) as u8));
             let mut sound = cell["sound"].as_str().unwrap_or("").to_owned();
@@ -843,7 +842,7 @@ impl TrackerEditor {
             });
             let mut volume = cell["volume"].as_f64().unwrap_or(1.0);
             ui.label("VOL");
-            if ui.add(egui::DragValue::new(&mut volume).range(0.0..=1.0).speed(0.01)).changed() { cell["volume"] = json!(volume); }
+            if ui.add(egui::DragValue::new(&mut volume).range(0.0..=1.0).speed(0.01).custom_formatter(|value, _| value.to_string())).changed() { cell["volume"] = json!(volume); }
             if ui.button("DEFAULT VOLUME").clicked() { cell.as_object_mut().unwrap().remove("volume"); }
             if ui.button("AUDITION").clicked() { self.actions.push(Action::Audition { sound, note: note.min(127) as u8, volume }); }
         });
@@ -864,9 +863,7 @@ fn valid_shape(document: &Value) -> bool {
         return false;
     };
     document["kind"] == "music"
-        && document["framesPerRow"]
-            .as_u64()
-            .is_some_and(|speed| (1..=240).contains(&speed))
+        && integer_value(&document["framesPerRow"], 1, 240).is_some()
         && document["loop"].is_boolean()
         && order.iter().all(|entry| {
             entry
@@ -882,9 +879,7 @@ fn valid_shape(document: &Value) -> bool {
                                 && cells.iter().all(|cell| {
                                     cell.is_null()
                                         || (cell.is_object()
-                                            && cell["note"]
-                                                .as_u64()
-                                                .is_some_and(|note| note <= 127)
+                                            && integer_value(&cell["note"], 0, 127).is_some()
                                             && cell["sound"]
                                                 .as_str()
                                                 .is_some_and(|sound| !sound.is_empty())
@@ -942,6 +937,97 @@ mod tests {
 
     fn song() -> Value {
         json!({"kind":"music","revision":1,"framesPerRow":240,"loop":true,"order":["A","A"],"patterns":{"A":{"rows":vec![vec![Value::Null;8];16],"annotation":"retain"}},"authored":"retain"})
+    }
+
+    #[test]
+    fn integer_asset_spellings_keep_tracker_shape_note_entry_and_transposition_valid() {
+        let mut document = song();
+        document["framesPerRow"] = json!(240.0);
+        document["patterns"]["A"]["rows"][0][0] = json!({"note":60.0,"sound":"beep","volume":0.333_333_333_333_333_3,"annotation":"retain"});
+        let before = document.clone();
+        let mut editor = TrackerEditor::new();
+        assert!(editor.normalize(&document));
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        grid_frame(&mut editor, &mut document, &context, vec![], false);
+        assert_eq!(
+            document, before,
+            "viewing a valid song cannot rewrite its number spelling"
+        );
+        editor.transpose(&mut document, 1);
+        assert_eq!(document["patterns"]["A"]["rows"][0][0]["note"], 61);
+        assert_eq!(
+            document["patterns"]["A"]["rows"][0][0]["volume"],
+            before["patterns"]["A"]["rows"][0][0]["volume"]
+        );
+        assert_eq!(
+            document["patterns"]["A"]["rows"][0][0]["annotation"],
+            "retain"
+        );
+        document["patterns"]["A"]["rows"][0][0]["note"] = json!(127.0);
+        let boundary = document.clone();
+        editor.transpose(&mut document, 1);
+        assert_eq!(
+            document, boundary,
+            "MIDI boundary preflight must also handle integral floats"
+        );
+    }
+
+    #[test]
+    fn focusing_tracker_volume_preserves_authored_precision() {
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut document = song();
+        document["patterns"]["A"]["rows"][0][0] =
+            json!({"note":60,"sound":"beep","volume":0.333_333_333_333_333_3,"annotation":"keep"});
+        let original = document.clone();
+        let mut editor = TrackerEditor::new();
+        assert!(editor.normalize(&document));
+        let mut frame = |events| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    editor.cell_controls(ui, &mut document, &["beep".to_owned()]);
+                },
+            );
+            let position = output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text.starts_with("0.333")
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            });
+            output.drop_without_applying_deltas();
+            position
+        };
+        frame(vec![]);
+        let position = frame(vec![]).unwrap();
+        frame(vec![egui::Event::PointerMoved(position)]);
+        for pressed in [true, false] {
+            frame(vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+        frame(vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        frame(vec![]);
+        assert_eq!(
+            document, original,
+            "focus/Enter cannot quantize authored volume"
+        );
     }
 
     #[test]

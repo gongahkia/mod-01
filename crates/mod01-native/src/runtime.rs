@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    ffi::OsString,
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdout, Command, Stdio},
@@ -83,11 +84,13 @@ impl RuntimeBridge {
             if generation
                 .is_none_or(|generation| generation == self.generation.load(Ordering::Relaxed))
             {
-                self.pending.set(if event["type"] == "error" {
-                    0
-                } else {
-                    self.pending.get().saturating_sub(1)
-                });
+                self.pending.set(
+                    if event["type"] == "error" && event["recoverable"] != true {
+                        0
+                    } else {
+                        self.pending.get().saturating_sub(1)
+                    },
+                );
                 return Some(event);
             }
         }
@@ -101,13 +104,28 @@ fn worker(
     events: Sender<(Option<u64>, Value)>,
     active: Arc<AtomicU64>,
 ) {
-    let host_path = match host_path.canonicalize() {
+    // Rust's Windows verbatim paths are not interchangeable with Node's
+    // permission keys. Preserve realpath identity while simplifying only safe
+    // ordinary-path equivalents (not reserved names/trailing-dot variants).
+    let host_path = match dunce::canonicalize(&host_path) {
         Ok(path) => path,
         Err(error) => {
-            let _ = events.send((
-                None,
-                error_event(format!("native runtime bundle is missing: {error}")),
-            ));
+            let message = format!("native runtime bundle is missing: {error}");
+            let _ = events.send((None, error_event(message.clone())));
+            // Keep the receiver alive: startup preflight may finish before the UI
+            // submits load. Every later command must get an actionable reply,
+            // not a scheduler-dependent "sending on a closed channel" failure.
+            for (generation, command) in commands {
+                if generation != active.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let reply = if command["type"] == "stop" {
+                    serde_json::json!({"type":"stopped"})
+                } else {
+                    error_event(message.clone())
+                };
+                let _ = events.send((Some(generation), reply));
+            }
             return;
         }
     };
@@ -131,9 +149,11 @@ fn worker(
                 .filter(|path| path.is_file())
                 .unwrap_or_else(|| PathBuf::from("node"));
             let mut process = Command::new(executable);
+            let mut read_permission = OsString::from("--allow-fs-read=");
+            read_permission.push(host_path.as_os_str());
             process
                 .arg("--permission")
-                .arg(format!("--allow-fs-read={}", host_path.display()))
+                .arg(read_permission)
                 .arg(&host_path)
                 .env_clear()
                 .stdin(Stdio::piped())
@@ -176,7 +196,7 @@ fn worker(
         };
         match exchange(running, &command) {
             Ok(reply) => {
-                let faulted = reply["type"] == "error";
+                let faulted = reply["type"] == "error" && reply["recoverable"] != true;
                 let _ = publish(reply);
                 if faulted {
                     if let Some(failed) = child.take() {
@@ -251,6 +271,70 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn restricted_host_launch_keeps_space_unicode_and_hash_paths_but_denies_adjacent_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "mod01 host é # {}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let host = directory.join("host.mjs");
+        std::fs::write(
+            directory.join("blocked.txt"),
+            b"owned permission probe; do not read",
+        )
+        .unwrap();
+        let source = r"import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
+const host = fileURLToPath(import.meta.url);
+for await (const line of createInterface({input:process.stdin,crlfDelay:Infinity})) {
+  const command = JSON.parse(line);
+  if (command.type === 'stop') { console.log(JSON.stringify({type:'stopped'})); continue; }
+  let denied = '';
+  try { readFileSync(new URL('./blocked.txt',import.meta.url)); } catch(error) { denied = error.code; }
+  console.log(JSON.stringify({type:'permission-probe',bytes:readFileSync(host).length,denied}));
+}
+";
+        std::fs::write(&host, source).unwrap();
+        let runtime = RuntimeBridge::new(host);
+        runtime.send(json!({"type":"load"})).unwrap();
+        let result = receive(&runtime);
+        runtime.send(json!({"type":"stop"})).unwrap();
+        let stopped = receive(&runtime);
+        drop(runtime);
+        // Both files and this uniquely named directory belong only to the probe.
+        std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(result["type"], "permission-probe", "{result}");
+        assert_eq!(result["bytes"], source.len());
+        assert_eq!(result["denied"], "ERR_ACCESS_DENIED");
+        assert_eq!(stopped["type"], "stopped");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_cli_paths_simplify_only_unambiguous_windows_drive_names() {
+        use std::path::Path;
+        assert_eq!(
+            dunce::simplified(Path::new(r"\\?\C:\host folder\é\native-host.mjs")),
+            Path::new(r"C:\host folder\é\native-host.mjs")
+        );
+        for path in [
+            r"\\?\C:\host.\native-host.mjs",
+            r"\\?\C:\CON\native-host.mjs",
+        ] {
+            assert_eq!(
+                dunce::simplified(Path::new(path)),
+                Path::new(path),
+                "unsafe spelling cannot silently identify another module"
+            );
+        }
+    }
+
+    #[test]
     fn queued_frame_save_audio_and_stop_replies_cannot_cross_runtime_sessions() {
         let (commands, received) = mpsc::channel();
         let (events, replies) = mpsc::channel();
@@ -284,6 +368,24 @@ mod tests {
         events.send((Some(1), json!({"type":"memory"}))).unwrap();
         assert_eq!(bridge.poll().unwrap()["type"], "memory");
         assert!(bridge.has_pending());
+        events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
+        assert!(!bridge.has_pending());
+        bridge.send(json!({"type":"memory"})).unwrap();
+        bridge.send(json!({"type":"snapshot"})).unwrap();
+        assert_eq!(received.recv().unwrap().0, 1);
+        assert_eq!(received.recv().unwrap().0, 1);
+        events
+            .send((
+                Some(1),
+                json!({"type":"error","recoverable":true,"message":"read rejected"}),
+            ))
+            .unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "error");
+        assert!(
+            bridge.has_pending(),
+            "a rejection acknowledges only its own request"
+        );
         events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
         assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
         assert!(!bridge.has_pending());
@@ -338,10 +440,11 @@ mod tests {
         bridge
             .send(second.load_command(false, &[]).unwrap())
             .unwrap();
-        assert_eq!(
-            receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-second","menuItems":[]})
-        );
+        let loaded = receive(&bridge);
+        assert_eq!(loaded["type"], "loaded");
+        assert_eq!(loaded["cartridgeId"], "epoch-second");
+        assert_eq!(loaded["active"]["cartridgeAlias"], "main");
+        assert_eq!(loaded["menuItems"], json!([]));
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))
             .unwrap();
@@ -361,10 +464,11 @@ mod tests {
         bridge
             .send(first.load_command(false, &[]).unwrap())
             .unwrap();
-        assert_eq!(
-            receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-first","menuItems":[]})
-        );
+        let loaded = receive(&bridge);
+        assert_eq!(loaded["type"], "loaded");
+        assert_eq!(loaded["cartridgeId"], "epoch-first");
+        assert_eq!(loaded["active"]["cartridgeAlias"], "main");
+        assert_eq!(loaded["menuItems"], json!([]));
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))
             .unwrap();
@@ -397,6 +501,27 @@ mod tests {
                 .unwrap()
                 .contains("native runtime bundle is missing")
         );
+    }
+
+    #[test]
+    fn completed_startup_failure_keeps_load_and_stop_channels_alive_with_authoritative_replies() {
+        let bridge = RuntimeBridge::new(std::env::temp_dir().join(format!(
+            "missing-delayed-mod01-host-{}.mjs",
+            std::process::id()
+        )));
+        // Drain the global startup failure before sending anything. Previously,
+        // the worker had exited and this ordering deterministically broke send.
+        let startup = receive(&bridge);
+        assert_eq!(startup["type"], "error");
+        for _ in 0..3 {
+            bridge.send(json!({"type":"load"})).unwrap();
+            let reply = receive(&bridge);
+            assert_eq!(reply["message"], startup["message"]);
+            assert!(!bridge.has_pending());
+            bridge.send(json!({"type":"stop"})).unwrap();
+            assert_eq!(receive(&bridge)["type"], "stopped");
+            assert!(!bridge.has_pending());
+        }
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
-    CompileMode, ProjectManifest, compile_project, decode_cartridge_png, load_cartridge_program,
-    pack_workcart, parse_project_manifest, rewrite_workcart, unpack_workcart,
+    CompileMode, ProjectManifest, compile_project, decode_cartridge_png,
+    game::{PackedGame, decode_game, pack_game_workcart},
+    parse_project_manifest, rewrite_workcart,
+    runtime_game::prepare_runtime_game,
+    workcart::MAX_WORKCART_DOCUMENT_BYTES,
     workcart_project_view,
 };
 use serde_json::{Value, json};
@@ -12,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-const MAX_PROJECT_TOTAL: u64 = 16 * 1024 * 1024;
 
 /// A disposable module/asset view backed by one authoritative current workcart.
 #[derive(Clone)]
@@ -20,6 +22,10 @@ pub struct NativeProject {
     pub root: Option<PathBuf>,
     pub workcart_path: Option<PathBuf>,
     workcart_source: String,
+    member_source: String,
+    member_alias: String,
+    member_ids: BTreeMap<String, String>,
+    member_paths: BTreeMap<String, String>,
     pub manifest_source: String,
     pub manifest: ProjectManifest,
     pub files: BTreeMap<String, Vec<u8>>,
@@ -40,20 +46,25 @@ impl NativeProject {
         }
         let file = fs::File::open(&path).map_err(|error| error.to_string())?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > MAX_PROJECT_TOTAL {
-            return Err("cartridge source exceeds 16 MiB".to_owned());
+        let is_source = path
+            .extension()
+            .is_some_and(|extension| extension == "m01w");
+        let limit = if is_source {
+            MAX_WORKCART_DOCUMENT_BYTES
+        } else {
+            modl_core::cartridge_png::MAX_CARTRIDGE_PNG_BYTES
+        } as u64;
+        if !metadata.is_file() || metadata.len() > limit {
+            return Err("cartridge exceeds its source/game container limit".to_owned());
         }
         let mut source = Vec::new();
-        file.take(MAX_PROJECT_TOTAL + 1)
+        file.take(limit + 1)
             .read_to_end(&mut source)
             .map_err(|error| error.to_string())?;
-        if source.len() as u64 > MAX_PROJECT_TOTAL {
-            return Err("cartridge source exceeds 16 MiB".to_owned());
+        if source.len() as u64 > limit {
+            return Err("cartridge exceeds its source/game container limit".to_owned());
         }
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "m01w")
-        {
+        if is_source {
             return Self::from_source(
                 String::from_utf8(source).map_err(|error| error.to_string())?,
                 Some(path),
@@ -64,11 +75,8 @@ impl NativeProject {
         } else {
             source
         };
-        load_cartridge_program(&bytes).map_err(|error| error.to_string())?;
-        Self::from_source(
-            unpack_workcart(&bytes).map_err(|error| error.to_string())?,
-            None,
-        )
+        let game = decode_game(&bytes).map_err(|error| error.to_string())?;
+        Self::from_source(game.source().to_owned(), None)
     }
 
     pub fn create(path: &Path, id: &str) -> Result<Self, String> {
@@ -111,6 +119,13 @@ impl NativeProject {
     ) -> Result<Self, String> {
         let view = workcart_project_view(&source).map_err(|error| error.to_string())?;
         let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
+        let whole = modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+        let mut member_ids = BTreeMap::from([("main".to_owned(), manifest.id.clone())]);
+        for member in whole.bundle {
+            let cart =
+                modl_core::parse_workcart(&member.source).map_err(|error| error.to_string())?;
+            member_ids.insert(member.alias, cart.manifest.id);
+        }
         let selected_file = manifest.entry.clone();
         let editor_text = String::from_utf8(
             view.files
@@ -125,7 +140,11 @@ impl NativeProject {
         Ok(Self {
             root,
             workcart_path,
+            member_source: source.clone(),
             workcart_source: source,
+            member_alias: "main".to_owned(),
+            member_ids,
+            member_paths: BTreeMap::new(),
             manifest_source: view.manifest,
             manifest,
             files: view.files,
@@ -147,11 +166,185 @@ impl NativeProject {
         self.selected_file = path.to_owned();
         Ok(())
     }
+
+    pub fn member_alias(&self) -> &str {
+        &self.member_alias
+    }
+
+    pub fn members(&self) -> Vec<(String, String)> {
+        self.member_ids
+            .iter()
+            .map(|(alias, id)| {
+                (
+                    alias.clone(),
+                    if alias == &self.member_alias {
+                        self.manifest.id.clone()
+                    } else {
+                        id.clone()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Flushes just the selected member into the complete enclosing source. Other
+    /// members retain their exact source, and a no-op preserves the whole document.
+    pub fn source(&self) -> Result<String, String> {
+        let mut files = self.files.clone();
+        files.insert(
+            self.selected_file.clone(),
+            self.editor_text.as_bytes().to_vec(),
+        );
+        let edited = rewrite_workcart(&self.member_source, &self.manifest_source, &files)
+            .map_err(|error| error.to_string())?;
+        if self.member_alias == "main" {
+            return Ok(edited);
+        }
+        let mut whole =
+            modl_core::parse_workcart(&self.workcart_source).map_err(|error| error.to_string())?;
+        let member = whole
+            .bundle
+            .iter_mut()
+            .find(|member| member.alias == self.member_alias)
+            .ok_or("selected cartridge is missing")?;
+        if member.source == edited {
+            return Ok(self.workcart_source.clone());
+        }
+        member.source = edited;
+        modl_core::workcart::encode_workcart_with_bundle(
+            &whole.manifest,
+            &whole.files,
+            &whole.recipes,
+            &whole.tests,
+            &whole.bundle,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// Switching is transactional and needs valid source structure, not valid MODL
+    /// code. In-progress compiler errors remain editable and are saved with the game.
+    pub fn select_member(&mut self, alias: &str) -> Result<(), String> {
+        if alias == self.member_alias {
+            return Ok(());
+        }
+        let source = self.source()?;
+        let whole = modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+        let member_source = if alias == "main" {
+            source.clone()
+        } else {
+            whole
+                .bundle
+                .iter()
+                .find(|member| member.alias == alias)
+                .ok_or("cartridge alias is not in this game")?
+                .source
+                .clone()
+        };
+        let view = workcart_project_view(&member_source).map_err(|error| error.to_string())?;
+        let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
+        let selected_file = self
+            .member_paths
+            .get(alias)
+            .filter(|path| view.files.contains_key(*path))
+            .cloned()
+            .unwrap_or_else(|| manifest.entry.clone());
+        let editor_text = String::from_utf8(
+            view.files
+                .get(&selected_file)
+                .cloned()
+                .ok_or("selected source is missing")?,
+        )
+        .map_err(|error| error.to_string())?;
+        self.member_paths
+            .insert(self.member_alias.clone(), self.selected_file.clone());
+        self.member_ids
+            .insert(self.member_alias.clone(), self.manifest.id.clone());
+        self.dirty |= source != self.workcart_source;
+        self.workcart_source = source;
+        self.member_source = member_source;
+        self.member_alias = alias.to_owned();
+        self.manifest_source = view.manifest;
+        self.manifest = manifest;
+        self.files = view.files;
+        self.selected_file = selected_file;
+        self.editor_text = editor_text;
+        Ok(())
+    }
     pub fn sync_editor(&mut self) {
         self.files.insert(
             self.selected_file.clone(),
             self.editor_text.as_bytes().to_vec(),
         );
+    }
+
+    pub fn add_member(&mut self, alias: &str, source: &str) -> Result<(), String> {
+        let source = modl_core::workcart::add_workcart_member(&self.source()?, alias, source)
+            .map_err(|error| error.to_string())?;
+        self.replace_composition(source, alias)
+    }
+
+    pub fn remove_member(&mut self, alias: &str) -> Result<(), String> {
+        let source = modl_core::workcart::remove_workcart_member(&self.source()?, alias)
+            .map_err(|error| error.to_string())?;
+        let selected = if self.member_alias == alias {
+            "main".to_owned()
+        } else {
+            self.member_alias.clone()
+        };
+        self.replace_composition(source, &selected)
+    }
+
+    /// Delete only in the selected member, through the shared reference checker.
+    /// Other members, recipes, tests and auxiliary source remain in the game.
+    pub fn delete_asset(&mut self, name: &str) -> Result<(), String> {
+        let source = self.source()?;
+        let selected = self.member_alias.clone();
+        let source = if selected == "main" {
+            modl_core::delete_workcart_asset(&source, name).map_err(|error| error.to_string())?
+        } else {
+            let mut whole =
+                modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+            let member = whole
+                .bundle
+                .iter_mut()
+                .find(|member| member.alias == selected)
+                .ok_or("selected cartridge is missing")?;
+            member.source = modl_core::delete_workcart_asset(&member.source, name)
+                .map_err(|error| error.to_string())?;
+            modl_core::workcart::encode_workcart_with_bundle(
+                &whole.manifest,
+                &whole.files,
+                &whole.recipes,
+                &whole.tests,
+                &whole.bundle,
+            )
+            .map_err(|error| error.to_string())?
+        };
+        self.replace_composition(source, &selected)
+    }
+
+    fn replace_composition(&mut self, source: String, selected: &str) -> Result<(), String> {
+        let mut candidate = Self::from_source(source, self.workcart_path.clone())?;
+        candidate.root.clone_from(&self.root);
+        candidate.member_paths = self.member_paths.clone();
+        candidate
+            .member_paths
+            .insert(self.member_alias.clone(), self.selected_file.clone());
+        candidate
+            .member_paths
+            .retain(|alias, _| candidate.member_ids.contains_key(alias));
+        if let Some(path) = candidate
+            .member_paths
+            .get("main")
+            .cloned()
+            .filter(|path| candidate.files.contains_key(path))
+        {
+            candidate.select_source(&path)?;
+        }
+        candidate.select_member(selected)?;
+        candidate.dirty = true;
+        *self = candidate;
+        Ok(())
     }
     pub fn source_paths(&self) -> Vec<String> {
         self.files
@@ -166,8 +359,7 @@ impl NativeProject {
             .workcart_path
             .as_ref()
             .ok_or("choose a workcart path before saving")?;
-        let rewritten = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
-            .map_err(|error| error.to_string())?;
+        let rewritten = self.source()?;
         let previous = match fs::read_to_string(path) {
             Ok(source) => Some(source),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -218,17 +410,46 @@ impl NativeProject {
     }
 
     pub fn pack(&self) -> Result<Vec<u8>, String> {
-        let source = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
-            .map_err(|error| error.to_string())?;
-        pack_workcart(&source)
-            .map(|packed| packed.bytes)
+        self.game().map(PackedGame::into_bytes)
+    }
+
+    pub fn game(&self) -> Result<PackedGame, String> {
+        let source = self.source()?;
+        pack_game_workcart(&source).map_err(|error| error.to_string())
+    }
+
+    /// Returns main's portable filename stem together with the whole-game PNG.
+    pub fn cartridge_png(&self) -> Result<(String, Vec<u8>), String> {
+        let game = self.game()?;
+        let png = modl_core::cartridge_png::encode_game_png(&game)?;
+        Ok((game.file_stem(), png))
+    }
+
+    pub fn export_native(
+        &self,
+        parent: &Path,
+        tools: &modl_core::NativeToolchain,
+    ) -> Result<PathBuf, String> {
+        let game = self.game()?;
+        let output = parent.join(format!("{}-native", game.file_stem()));
+        modl_core::export_native_game(&output, game.bytes(), tools)
             .map_err(|error| error.to_string())
     }
 
-    pub fn javascript(&self, debug: bool) -> Result<String, String> {
-        let compilation = compile_project(
-            &self.manifest_source,
-            &self.files,
+    /// Fresh/disposable entry save convenience; all other members start with empty saves.
+    pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
+        let game = self.game()?;
+        let saves = BTreeMap::from([(game.entry().manifest.id.clone(), save.to_vec())]);
+        Self::game_command(&game, debug, &saves)
+    }
+
+    pub fn game_command(
+        game: &PackedGame,
+        debug: bool,
+        saves: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Value, String> {
+        let prepared = prepare_runtime_game(
+            game,
             if debug {
                 CompileMode::Debug
             } else {
@@ -236,52 +457,25 @@ impl NativeProject {
             },
         )
         .map_err(|error| error.to_string())?;
-        compilation
-            .generated
-            .map(|program| program.javascript)
-            .ok_or_else(|| {
-                compilation
-                    .analysis
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-    }
-
-    pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
-        let rom = self.pack()?;
-        let javascript = self.javascript(debug)?;
-        let symbol_names = if debug {
-            compile_project(&self.manifest_source, &self.files, CompileMode::Debug)
-                .map_err(|error| error.to_string())?
-                .analysis
-                .symbols
-                .into_iter()
-                .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
-                .collect::<BTreeMap<_, _>>()
-        } else {
-            BTreeMap::new()
-        };
-        let files: serde_json::Map<String, Value> = self
-            .manifest
-            .assets
-            .values()
-            .map(|asset| asset.path.as_str())
-            .chain(self.manifest.display.iter().map(String::as_str))
-            .filter_map(|path| {
-                self.files
-                    .get(path)
-                    .map(|bytes| (path.to_owned(), Value::String(STANDARD.encode(bytes))))
-            })
-            .collect();
+        if saves.iter().any(|(id, bytes)| {
+            bytes.len() > 8192
+                || !game
+                    .catalog()
+                    .cartridges()
+                    .values()
+                    .any(|cart| &cart.manifest.id == id)
+        }) {
+            return Err(
+                "initial saves must belong to admitted game members and fit 8 KiB".to_owned(),
+            );
+        }
+        let saves = saves
+            .iter()
+            .map(|(id, bytes)| (id.clone(), STANDARD.encode(bytes)))
+            .collect::<BTreeMap<_, _>>();
         Ok(json!({
-            "type": "load", "javascript": javascript,
-            "manifest": { "id": self.manifest.id, "hardwareRevision": self.manifest.hardware_revision,
-                "updateRate": self.manifest.update_rate, "display": self.manifest.display, "assets": self.manifest.assets },
-            "files": files, "rom": STANDARD.encode(rom), "save": STANDARD.encode(save),
-            "debug": debug, "symbolNames": symbol_names,
+            "type": "load", "game": prepared, "saves": saves,
+            "seed": modl_core::DEFAULT_SEED, "parameter": "",
         }))
     }
 }

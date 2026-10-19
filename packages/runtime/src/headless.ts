@@ -1,11 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import { decodeRuntimeAssets, type ProjectAssetDeclaration } from './asset-codec';
-import { createConsoleRuntime, type ConsoleFrame } from './console-runtime';
 import { RuntimeFault } from './errors';
+import { canonicalBytes, pcmBytes, saveHashes, sha256, stateBytes } from './execution-hashes';
+import { decodeRuntimeBytes, loadRuntimeGame, type RuntimeGamePayload } from './game-loader';
 import { HARDWARE } from './hardware';
 import { emptyInputFrame } from './input';
-import type { CartridgeFactory } from './machine';
 import {
   isReplayTrace,
   replayInputFrames,
@@ -17,41 +16,47 @@ export type HeadlessTraceFrame = ReplayTraceFrame;
 export type HeadlessTrace = ReplayTrace;
 
 export interface HeadlessRequest {
-  readonly revision: 1;
-  readonly javascript: string;
-  readonly manifest: {
-    readonly id: string;
-    readonly updateRate: 30 | 60;
-    readonly display: string | null;
-    readonly assets: Readonly<Record<string, ProjectAssetDeclaration>>;
-  };
-  readonly entries: Readonly<Record<string, readonly number[]>>;
-  readonly rom: readonly number[];
+  readonly revision: 2;
+  readonly game: RuntimeGamePayload;
   readonly seed: number;
   readonly frames: number;
   readonly trace: HeadlessTrace;
-  readonly save: readonly number[];
+  readonly parameter: string;
+  readonly saves: Readonly<Record<string, string>>;
 }
 
 export interface HeadlessFrameResult {
   readonly frame: number;
+  readonly cartridgeFrame: number;
+  readonly cartridgeAlias: string;
+  readonly cartridgeId: string;
   readonly workUnits: number;
   readonly framebufferSha256: string;
   readonly stateSha256: string;
+  readonly snapshotSha256: string;
   readonly audioCommandSha256: string;
   readonly pcmSha256: string;
   readonly saveSha256: string;
 }
 
 export interface HeadlessResult {
-  readonly revision: 1;
+  readonly revision: 2;
   readonly cartridge: { readonly id: string; readonly bytes: number; readonly sha256: string };
+  readonly game: {
+    readonly identity: string;
+    readonly members: Readonly<
+      Record<string, { readonly id: string; readonly bytes: number; readonly sha256: string }>
+    >;
+  };
   readonly configuration: {
     readonly seed: number;
     readonly requestedFrames: number;
     readonly updateRate: 30 | 60;
     readonly inputTraceSha256: string;
     readonly initialSaveSha256: string;
+    readonly initialSaves: Readonly<Record<string, string>>;
+    readonly parameter: string;
+    readonly debug: boolean;
   };
   readonly frames: readonly HeadlessFrameResult[];
   readonly summary: {
@@ -64,12 +69,17 @@ export interface HeadlessResult {
     readonly busMappedBytes: number;
     readonly finalFramebufferSha256: string;
     readonly finalStateSha256: string;
+    readonly finalSnapshotSha256: string;
     readonly audioCommandsSha256: string;
     readonly pcmSha256: string;
     readonly finalSaveSha256: string;
+    readonly finalSaves: Readonly<Record<string, string>>;
   };
   readonly fault?: {
     readonly frame: number;
+    readonly cartridgeFrame: number;
+    readonly cartridgeAlias: string;
+    readonly cartridgeId: string;
     readonly code: string;
     readonly message: string;
     readonly sourceSpan: { readonly start: number; readonly end: number };
@@ -80,27 +90,26 @@ export interface HeadlessResult {
 export async function runHeadless(value: unknown): Promise<HeadlessResult> {
   if (!isHeadlessRequest(value)) throw new TypeError('invalid MOD-01 headless request');
   const request = value;
-  const loaded: unknown = await import(
-    `data:text/javascript;base64,${Buffer.from(request.javascript).toString('base64')}`
-  );
-  const factory = readFactory(loaded);
-  const files = Object.fromEntries(
-    Object.entries(request.entries).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
-  );
-  // Decode before constructing the runtime so malformed/unbounded asset data cannot partially boot.
-  decodeRuntimeAssets(request.manifest.assets, files, request.manifest.display);
-  const runtime = createConsoleRuntime(factory, {
+  const { runtime, metadata } = await loadRuntimeGame(request.game, {
     seed: request.seed,
-    workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
-    updateRate: request.manifest.updateRate,
-    assets: {
-      declarations: request.manifest.assets,
-      files,
-      displayPath: request.manifest.display,
-    },
-    save: Uint8Array.from(request.save),
-    rom: Uint8Array.from(request.rom),
+    parameter: request.parameter,
+    saves: Object.fromEntries(
+      Object.entries(request.saves).map(([id, image]) => [
+        id,
+        decodeRuntimeBytes(image, HARDWARE.saveCapacityBytes),
+      ]),
+    ),
   });
+  const initial = runtime.snapshot();
+  const members = Object.fromEntries(
+    [...metadata].map(([alias, member]) => {
+      const rom = decodeRuntimeBytes(member.rom, HARDWARE.cartridgeCapacityBytes);
+      return [alias, { id: member.manifest.id, bytes: rom.length, sha256: sha256(rom) }];
+    }),
+  );
+  const main = metadata.get('main'),
+    entry = members.main;
+  if (main === undefined || entry === undefined) throw new TypeError('missing admitted game entry');
   const inputs = replayInputFrames(request.trace);
   const frameResults: HeadlessFrameResult[] = [];
   const commandHash = createHash('sha256');
@@ -127,17 +136,25 @@ export async function runHeadless(value: unknown): Promise<HeadlessResult> {
       voicePeak = Math.max(voicePeak, result.output.audio.activeVoices);
       frameResults.push({
         frame: result.frame,
+        cartridgeFrame: result.cartridgeFrame,
+        cartridgeAlias: result.cartridgeAlias,
+        cartridgeId: result.cartridgeId,
         workUnits: result.workUnits,
         framebufferSha256: sha256(result.output.indexedPixels),
-        stateSha256: sha256(canonicalBytes(snapshot)),
+        stateSha256: sha256(stateBytes(snapshot)),
+        snapshotSha256: sha256(canonicalBytes(snapshot)),
         audioCommandSha256: sha256(commands),
         pcmSha256: sha256(framePcm),
-        saveSha256: sha256(snapshot.save.committed),
+        saveSha256: sha256(canonicalBytes(snapshot.saves)),
       });
     } catch (error: unknown) {
       if (!(error instanceof RuntimeFault)) throw error;
+      const status = runtime.inspect();
       fault = {
         frame,
+        cartridgeFrame: status.cartridgeFrame,
+        cartridgeAlias: status.cartridgeAlias,
+        cartridgeId: status.cartridgeId,
         code: error.code,
         message: error.message,
         sourceSpan: error.sourceSpan,
@@ -149,18 +166,18 @@ export async function runHeadless(value: unknown): Promise<HeadlessResult> {
   const finalSnapshot = runtime.snapshot();
   const final = frameResults.at(-1);
   return {
-    revision: 1,
-    cartridge: {
-      id: request.manifest.id,
-      bytes: request.rom.length,
-      sha256: sha256(Uint8Array.from(request.rom)),
-    },
+    revision: 2,
+    cartridge: entry,
+    game: { identity: initial.identity, members },
     configuration: {
       seed: request.seed,
       requestedFrames: request.frames,
-      updateRate: request.manifest.updateRate,
+      updateRate: main.manifest.updateRate,
       inputTraceSha256: sha256(canonicalBytes(request.trace)),
-      initialSaveSha256: sha256(Uint8Array.from(request.save)),
+      initialSaveSha256: sha256(canonicalBytes(initial.saves)),
+      initialSaves: saveHashes(initial),
+      parameter: request.parameter,
+      debug: initial.debug,
     },
     frames: frameResults,
     summary: {
@@ -172,24 +189,21 @@ export async function runHeadless(value: unknown): Promise<HeadlessResult> {
       voicePeak,
       busMappedBytes: runtime.memoryRegions().reduce((total, region) => total + region.length, 0),
       finalFramebufferSha256: final?.framebufferSha256 ?? sha256(new Uint8Array()),
-      finalStateSha256: sha256(canonicalBytes(finalSnapshot)),
+      finalStateSha256: sha256(stateBytes(finalSnapshot)),
+      finalSnapshotSha256: sha256(canonicalBytes(finalSnapshot)),
       audioCommandsSha256: commandHash.digest('hex'),
       pcmSha256: pcmHash.digest('hex'),
-      finalSaveSha256: sha256(finalSnapshot.save.committed),
+      finalSaveSha256: sha256(canonicalBytes(finalSnapshot.saves)),
+      finalSaves: saveHashes(finalSnapshot),
     },
     ...(fault === undefined ? {} : { fault }),
   };
 }
 
 function isHeadlessRequest(value: unknown): value is HeadlessRequest {
-  if (!isRecord(value) || !hasExactKeys(value, HEADLESS_KEYS) || value.revision !== 1) return false;
+  if (!isRecord(value) || !hasExactKeys(value, HEADLESS_KEYS) || value.revision !== 2) return false;
   if (
-    typeof value.javascript !== 'string' ||
-    value.javascript.length === 0 ||
-    value.javascript.length > 2 * 1024 * 1024 ||
-    !isManifest(value.manifest) ||
-    !isByteRecord(value.entries, 4096, 16 * 1024 * 1024) ||
-    !isByteArray(value.rom, HARDWARE.cartridgeCapacityBytes) ||
+    !isRecord(value.game) ||
     typeof value.seed !== 'number' ||
     !Number.isSafeInteger(value.seed) ||
     value.seed < 0 ||
@@ -199,7 +213,15 @@ function isHeadlessRequest(value: unknown): value is HeadlessRequest {
     value.frames < 0 ||
     value.frames > 36_000 ||
     !isReplayTrace(value.trace, value.frames) ||
-    !isByteArray(value.save, HARDWARE.saveCapacityBytes)
+    typeof value.parameter !== 'string' ||
+    !isRecord(value.saves) ||
+    Object.keys(value.saves).length > 32 ||
+    Object.entries(value.saves).some(
+      ([id, image]) =>
+        !/^[a-z0-9][a-z0-9.-]{2,63}$/.test(id) ||
+        typeof image !== 'string' ||
+        image.length > Math.ceil(HARDWARE.saveCapacityBytes / 3) * 4,
+    )
   )
     return false;
   return true;
@@ -207,108 +229,13 @@ function isHeadlessRequest(value: unknown): value is HeadlessRequest {
 
 const HEADLESS_KEYS = [
   'revision',
-  'javascript',
-  'manifest',
-  'entries',
-  'rom',
+  'game',
   'seed',
   'frames',
   'trace',
-  'save',
+  'parameter',
+  'saves',
 ] as const;
-
-function isManifest(value: unknown): value is HeadlessRequest['manifest'] {
-  return (
-    isRecord(value) &&
-    hasExactKeys(value, ['id', 'updateRate', 'display', 'assets']) &&
-    typeof value.id === 'string' &&
-    /^[a-z0-9][a-z0-9.-]{2,63}$/.test(value.id) &&
-    (value.updateRate === 30 || value.updateRate === 60) &&
-    (value.display === null || typeof value.display === 'string') &&
-    isAssetDeclarations(value.assets)
-  );
-}
-
-function isAssetDeclarations(
-  value: unknown,
-): value is Readonly<Record<string, ProjectAssetDeclaration>> {
-  if (!isRecord(value) || Object.keys(value).length > 4096) return false;
-  return Object.values(value).every(
-    (asset) =>
-      isRecord(asset) &&
-      hasExactKeys(asset, ['kind', 'path']) &&
-      typeof asset.kind === 'string' &&
-      ['sprite', 'animation', 'tile_set', 'map', 'font', 'sound', 'music'].includes(asset.kind) &&
-      typeof asset.path === 'string' &&
-      asset.path.length > 0 &&
-      asset.path.length <= 1024,
-  );
-}
-
-function isByteRecord(
-  value: unknown,
-  entryLimit: number,
-  byteLimit: number,
-): value is Readonly<Record<string, readonly number[]>> {
-  if (!isRecord(value) || Object.keys(value).length > entryLimit) return false;
-  let total = 0;
-  for (const [path, bytes] of Object.entries(value)) {
-    if (path.length === 0 || path.length > 1024 || !isByteArray(bytes, byteLimit - total))
-      return false;
-    total += bytes.length;
-  }
-  return true;
-}
-
-function isByteArray(value: unknown, limit: number): value is readonly number[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= limit &&
-    Object.keys(value).length === value.length &&
-    value.every((byte) => Number.isSafeInteger(byte) && byte >= 0 && byte <= 255)
-  );
-}
-
-function readFactory(value: unknown): CartridgeFactory {
-  if (!isRecord(value) || typeof value.default !== 'function') {
-    throw new RuntimeFault('M019101', 'compiled module does not export a cartridge factory', {
-      start: 0,
-      end: 0,
-    });
-  }
-  return value.default as CartridgeFactory;
-}
-
-function pcmBytes(frame: ConsoleFrame): Uint8Array {
-  const samples = frame.output.audio.left.length;
-  const bytes = new Uint8Array(samples * 8);
-  const view = new DataView(bytes.buffer);
-  for (let index = 0; index < samples; index += 1) {
-    view.setFloat32(index * 8, frame.output.audio.left[index] ?? 0, true);
-    view.setFloat32(index * 8 + 4, frame.output.audio.right[index] ?? 0, true);
-  }
-  return bytes;
-}
-
-function canonicalBytes(value: unknown): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(canonicalValue(value)));
-}
-
-function canonicalValue(value: unknown): unknown {
-  if (value instanceof Uint8Array || value instanceof Float32Array) return [...value];
-  if (Array.isArray(value)) return value.map(canonicalValue);
-  if (isRecord(value))
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalValue(item)]),
-    );
-  return value;
-}
-
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort();
@@ -318,5 +245,5 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

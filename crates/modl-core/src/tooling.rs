@@ -1,5 +1,5 @@
 //! Original-source navigation and dependency relationships derived from resolved compiler IR.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -69,6 +69,74 @@ pub struct ProjectModel {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub references: Vec<SymbolReference>,
+}
+
+/// Source analysis, not runnable-game admission. Member keys scope all source,
+/// symbol and node IDs; equal local IDs in two cartridges are never merged.
+#[derive(Clone, Debug, Serialize)]
+pub struct GameModel {
+    pub revision: u8,
+    pub entry: &'static str,
+    pub members: BTreeMap<String, GameMemberModel>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameMemberModel {
+    pub cartridge_id: String,
+    pub model: ProjectModel,
+}
+
+/// Derives each member's graph from its own resolved compiler IR. Invalid MODL
+/// drafts retain original-source diagnostics without executing or packing code.
+///
+/// # Errors
+/// Refuses invalid current workcart structure/metadata, duplicate persistent IDs,
+/// and member-qualified linking errors. This never imports JavaScript or reads paths.
+pub fn analyze_game_model(source: &str) -> Result<GameModel, crate::CartridgeError> {
+    let main = crate::parse_workcart(source)?;
+    let mut projects = BTreeMap::new();
+    for member in &main.bundle {
+        projects.insert(member.alias.clone(), crate::parse_workcart(&member.source)?);
+    }
+    projects.insert(crate::bundle::BUNDLE_ENTRY.to_owned(), main);
+    let mut identities = BTreeSet::new();
+    let mut members = BTreeMap::new();
+    for (alias, project) in projects {
+        if !identities.insert(project.manifest.id.clone()) {
+            return Err(crate::CartridgeError {
+                code: "M014071",
+                message: format!(
+                    "bundle cartridge '{alias}' reuses save identity '{}'; every member needs its own cartridge id",
+                    project.manifest.id
+                ),
+            });
+        }
+        let analyzed = (|| {
+            let metadata =
+                toml::to_string(&project.manifest).map_err(|error| crate::CartridgeError {
+                    code: "M014020",
+                    message: error.to_string(),
+                })?;
+            crate::analyze_project_model(&metadata, &project.files)
+        })()
+        .map_err(|mut error| {
+            error.message = format!("bundle cartridge '{alias}': {}", error.message);
+            error
+        })?;
+        members.insert(
+            alias,
+            GameMemberModel {
+                cartridge_id: project.manifest.id,
+                model: analyzed,
+            },
+        );
+    }
+    Ok(GameModel {
+        revision: 1,
+        entry: crate::bundle::BUNDLE_ENTRY,
+        members,
+    })
 }
 
 impl ProjectModel {

@@ -196,6 +196,9 @@ timing, raw activation/volume changes and output-stage faults.
 `save_commit()` commits it explicitly. The trusted native host persists only
 committed data from successful frames, under the validated cartridge ID.
 Snapshots include working, committed and pending state.
+Exposed integer-save values and pending-write lists use ascending ASCII key
+order, matching canonical save bytes. Asset declaration lists use that same
+deterministic name order, not the host's locale-sensitive collation.
 
 ## Math, text and bit operations
 

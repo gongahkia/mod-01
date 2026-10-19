@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       '**/node_modules/**',
+      'output/**',
       'packages/runtime/standalone/**',
       'packages/runtime/vite.*.config.ts',
     ],

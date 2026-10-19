@@ -38,6 +38,7 @@ cartridges=(
   hardware-gauntlet
   modl-tutorial
   prism-corridor
+  relay-station
 )
 
 printf 'cartridge\tm01c-bytes\tm01c-sha256\tm01c.png-sha256\n'
@@ -54,7 +55,8 @@ for cartridge in "${cartridges[@]}"; do
   cmp "${first}.m01c" "${second}.m01c"
   cmp "${first}.m01c.png" "${second}.m01c.png"
   "${cli}" info "${first}.m01c.png" >/dev/null
-  "${cli}" run "${first}.m01c" --headless --frames 5 >/dev/null
+  "${cli}" run "${first}.m01c" --headless --frames 5 --output "${first}-smoke.json" >/dev/null
+  node scripts/check-headless-trace.mjs "${first}-smoke.json" 5 "${cartridge}"
 
   m01c_bytes=$(wc -c < "${first}.m01c" | tr -d ' ')
   m01c_hash=$(sha256 "${first}.m01c")
@@ -64,3 +66,4 @@ for cartridge in "${cartridges[@]}"; do
 done
 
 node scripts/verify-native-game.mjs
+node scripts/verify-relay-station.mjs

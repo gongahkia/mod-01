@@ -1,3 +1,4 @@
+use modl_core::assets::integer_value;
 use std::collections::VecDeque;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -213,8 +214,10 @@ impl SpriteEditor {
     ) -> Result<Self, String> {
         let value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-        let width = value["width"].as_u64().ok_or("sprite width is missing")? as usize;
-        let height = value["height"].as_u64().ok_or("sprite height is missing")? as usize;
+        let width = integer_value(&value["width"], 1, MAX_AXIS as i32)
+            .ok_or("sprite width is invalid")? as usize;
+        let height = integer_value(&value["height"], 1, MAX_AXIS as i32)
+            .ok_or("sprite height is invalid")? as usize;
         if !(1..=MAX_AXIS).contains(&width) || !(1..=MAX_AXIS).contains(&height) {
             return Err("sprite dimensions exceed native editor limit".to_owned());
         }
@@ -237,7 +240,8 @@ impl SpriteEditor {
             }
             let mut layer = Layer::blank("Layer 1", width, height);
             for (index, value) in indices.iter().enumerate() {
-                let color = value.as_u64().ok_or("invalid indexed sprite pixel")? as usize;
+                let color =
+                    integer_value(value, 0, 255).ok_or("invalid indexed sprite pixel")? as usize;
                 if color >= palette.len() {
                     return Err("sprite color exceeds palette".to_owned());
                 }
@@ -591,6 +595,39 @@ fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_AXIS, MAX_AXIS, SpriteDocument, SpriteEditor, Tool, palette};
+
+    #[test]
+    fn integer_asset_spellings_preserve_indexed_sprite_pixels() {
+        let bytes =
+            br#"{"revision":2.0,"kind":"sprite","width":2.0,"height":1e0,"frames":[[0.0,255e0]]}"#;
+        let colors = palette();
+        let editor =
+            SpriteEditor::from_indexed("hero".into(), "assets/hero.m01g".into(), bytes, &colors)
+                .unwrap();
+        assert_eq!(editor.document.width, 2);
+        assert_eq!(editor.document.height, 1);
+        assert_eq!(
+            &editor.active_layer().pixels[..4],
+            &[colors[0][0], colors[0][1], colors[0][2], 0]
+        );
+        assert_eq!(
+            &editor.active_layer().pixels[4..],
+            &[colors[255][0], colors[255][1], colors[255][2], 255]
+        );
+        assert!(!editor.dirty);
+        for bad in ["0.5", "256.0", "-1.0", "true", "\"7\""] {
+            let source = format!(r#"{{"width":1.0,"height":1.0,"frames":[[{bad}]]}}"#);
+            assert!(
+                SpriteEditor::from_indexed(
+                    "hero".into(),
+                    "assets/hero.m01g".into(),
+                    source.as_bytes(),
+                    &colors
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn png_import_matches_the_shared_converter_and_resizes_as_one_undo_transaction() {

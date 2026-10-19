@@ -12,6 +12,7 @@ import type { CartridgeFactory } from './machine';
 import type { ProjectAssetDeclaration } from './asset-codec';
 import { decodeSaveValues } from './save';
 import { runHeadless } from './headless';
+import { runtimeGameFixture } from './test-support/game';
 
 function completeDebugBoot(runtime: ConsoleRuntime, debug: boolean): void {
   if (!debug) return;
@@ -384,15 +385,19 @@ describe('public MODL hardware conformance', () => {
         assets: manifest.assets,
       };
       const headless = await runHeadless({
-        revision: 1,
-        javascript,
-        manifest: hostManifest,
-        entries: source.files,
-        rom: [1],
+        revision: 2,
+        game: runtimeGameFixture({
+          javascript,
+          manifest: hostManifest,
+          files: source.files,
+          debug: mode === 'debug',
+          sourceMap: readFileSync(output.replace(/\.mjs$/, '.js.map'), 'utf8'),
+        }),
         seed: 1,
         frames: 2,
         trace: { revision: 1, frames: [] },
-        save: [],
+        parameter: '',
+        saves: {},
       });
       expect(headless.fault).toBeUndefined();
       expect(headless.summary.completedFrames).toBe(2);
@@ -405,17 +410,14 @@ describe('public MODL hardware conformance', () => {
             [
               {
                 type: 'load',
-                javascript,
-                manifest: hostManifest,
-                files: Object.fromEntries(
-                  Object.entries(source.files).map(([path, bytes]) => [
-                    path,
-                    Buffer.from(bytes).toString('base64'),
-                  ]),
-                ),
-                rom: 'AQ==',
-                save: '',
-                debug: mode === 'debug',
+                game: runtimeGameFixture({
+                  javascript,
+                  manifest: hostManifest,
+                  files: source.files,
+                  debug: mode === 'debug',
+                }),
+                parameter: '',
+                saves: {},
                 seed: 1,
               },
               { type: 'frame', input: emptyInputFrame() },

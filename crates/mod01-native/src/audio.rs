@@ -18,11 +18,63 @@ const MAX_QUEUED_FRAMES: usize = 48_000;
 #[derive(Default)]
 struct Queue(VecDeque<[f32; 2]>);
 
+/// The device callback records a bounded first notice only. Logging, pausing and
+/// dropping streams belong to the UI thread, never the realtime callback.
+#[derive(Default)]
+struct DeviceHealth {
+    failed: AtomicBool,
+    warned: AtomicBool,
+    failure: Mutex<Option<String>>,
+    warning: Mutex<Option<String>>,
+}
+
+impl DeviceHealth {
+    fn record(&self, error: cpal::Error) {
+        if self.failed.load(Ordering::Acquire) {
+            return;
+        }
+        if matches!(
+            error.kind(),
+            cpal::ErrorKind::Xrun
+                | cpal::ErrorKind::DeviceChanged
+                | cpal::ErrorKind::RealtimeDenied
+        ) {
+            if !self.warned.swap(true, Ordering::AcqRel)
+                && let Ok(mut warning) = self.warning.lock()
+            {
+                *warning = Some(error.to_string().chars().take(512).collect());
+            }
+        } else {
+            self.fail(error);
+        }
+    }
+
+    fn fail(&self, error: cpal::Error) {
+        if !self.failed.swap(true, Ordering::AcqRel)
+            && let Ok(mut failure) = self.failure.lock()
+        {
+            *failure = Some(error.to_string().chars().take(512).collect());
+        }
+    }
+
+    fn failure(&self) -> Option<String> {
+        self.failure.lock().map_or_else(
+            |_| Some("audio status lock failed".to_owned()),
+            |failure| failure.clone(),
+        )
+    }
+
+    fn take_warning(&self) -> Option<String> {
+        self.warning.lock().ok()?.take()
+    }
+}
+
 pub struct AudioOutput {
     queue: Arc<Mutex<Queue>>,
     stream: Stream,
     output_rate: u32,
     started: AtomicBool,
+    health: Arc<DeviceHealth>,
 }
 
 impl AudioOutput {
@@ -37,7 +89,9 @@ impl AudioOutput {
         let output_rate = config.sample_rate;
         let channels = usize::from(config.channels);
         let queue = Arc::new(Mutex::new(Queue::default()));
-        let errors = |error| eprintln!("MOD-01 audio output: {error}");
+        let health = Arc::new(DeviceHealth::default());
+        let callback_health = Arc::clone(&health);
+        let errors = move |error| callback_health.record(error);
         let stream = match supported.sample_format() {
             SampleFormat::F32 => {
                 let queue = Arc::clone(&queue);
@@ -84,10 +138,15 @@ impl AudioOutput {
             stream,
             output_rate,
             started: AtomicBool::new(false),
+            health,
         })
     }
 
     pub fn push(&self, left: &str, right: &str) -> Result<(), String> {
+        if self.health.failed.load(Ordering::Acquire) {
+            self.clear();
+            return Ok(()); // The synth/VM continue; the owner releases this failed device.
+        }
         let left = decode_channel(left)?;
         let right = decode_channel(right)?;
         self.push_samples(&left, &right)
@@ -112,11 +171,19 @@ impl AudioOutput {
         drop(queue);
         if !self.started.swap(true, Ordering::Relaxed) {
             if let Err(error) = self.stream.play() {
-                self.started.store(false, Ordering::Relaxed);
-                return Err(error.to_string());
+                self.health.fail(error);
+                self.clear();
             }
         }
         Ok(())
+    }
+
+    pub fn failure(&self) -> Option<String> {
+        self.health.failure()
+    }
+
+    pub fn take_warning(&self) -> Option<String> {
+        self.health.take_warning()
     }
 
     pub fn clear(&self) {
@@ -195,7 +262,60 @@ fn drain<T: Copy>(
 
 #[cfg(test)]
 mod tests {
-    use super::resample;
+    use super::*;
+
+    #[test]
+    fn callback_warnings_are_bounded_and_coalesced_without_muting_a_healthy_stream() {
+        for kind in [
+            cpal::ErrorKind::Xrun,
+            cpal::ErrorKind::DeviceChanged,
+            cpal::ErrorKind::RealtimeDenied,
+        ] {
+            let health = DeviceHealth::default();
+            health.record(cpal::Error::with_message(kind, "x".repeat(1024)));
+            assert!(!health.failed.load(Ordering::Acquire));
+            assert!(health.failure().is_none());
+            assert_eq!(health.take_warning().unwrap().len(), 512);
+            for _ in 0..1000 {
+                health.record(cpal::Error::new(kind));
+            }
+            assert!(health.take_warning().is_none());
+            assert!(health.failure().is_none());
+        }
+    }
+
+    #[test]
+    fn device_failures_keep_only_the_first_notice_across_repeated_callbacks() {
+        for kind in [
+            cpal::ErrorKind::DeviceBusy,
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::HostUnavailable,
+            cpal::ErrorKind::InvalidInput,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::ResourceExhausted,
+            cpal::ErrorKind::StreamInvalidated,
+            cpal::ErrorKind::UnsupportedConfig,
+            cpal::ErrorKind::UnsupportedOperation,
+            cpal::ErrorKind::BackendError,
+            cpal::ErrorKind::Other,
+        ] {
+            let health = DeviceHealth::default();
+            health.record(cpal::Error::with_message(kind, "original device failure"));
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    scope.spawn(|| {
+                        for _ in 0..1000 {
+                            health.record(cpal::Error::new(cpal::ErrorKind::BackendError));
+                        }
+                    });
+                }
+            });
+            health.record(cpal::Error::new(cpal::ErrorKind::Xrun));
+            assert!(health.failed.load(Ordering::Acquire));
+            assert_eq!(health.failure().as_deref(), Some("original device failure"));
+            assert!(health.take_warning().is_none());
+        }
+    }
 
     #[test]
     fn resamples_to_device_rate() {

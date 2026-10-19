@@ -170,9 +170,19 @@ fn debug_and_replay_commits_are_disposable_but_ordinary_play_still_persists() {
     );
     let path = save_path(&project.manifest.id).unwrap();
     assert!(!path.exists());
+    let owner = project.manifest.id.clone();
+    app.running_members.insert(
+        "main".to_owned(),
+        RunningMember {
+            id: owner.clone(),
+            title: String::new(),
+            entry: "src/main.modl".to_owned(),
+            sources: BTreeMap::new(),
+        },
+    );
     app.project = Some(project);
     let bytes = vec![57_u8; 8192];
-    let reply = json!({"frame":0,"workUnits":1,"saveCommit":STANDARD.encode(&bytes)});
+    let reply = json!({"frame":0,"cartridgeAlias":"main","cartridgeId":owner,"workUnits":1,"saveCommit":STANDARD.encode(&bytes)});
     app.debugging = true;
     app.accept_frame(&reply, &context);
     let debug_wrote = path.exists();

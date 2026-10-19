@@ -442,15 +442,40 @@ impl Schema<'_> {
 }
 
 fn integer(value: &Value, minimum: i32, maximum: i32) -> bool {
-    value.as_f64().is_some_and(|value| {
-        value.fract() == 0.0 && value >= f64::from(minimum) && value <= f64::from(maximum)
-    })
+    integer_value(value, minimum, maximum).is_some()
+}
+
+/// Reads the same bounded integral JSON value accepted by asset admission.
+/// Numeric spelling (`2`, `2.0`, `2e0`) does not change its meaning. Invalid
+/// values are rejected, never rounded, clamped or replaced with a fallback.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // finite, integral and within exact i32 bounds
+pub fn integer_value(value: &Value, minimum: i32, maximum: i32) -> Option<i32> {
+    value
+        .as_f64()
+        .filter(|number| {
+            number.is_finite()
+                && number.fract() == 0.0
+                && *number >= f64::from(minimum)
+                && *number <= f64::from(maximum)
+        })
+        .map(|number| number as i32)
 }
 
 fn number_in(value: &Value, minimum: f64, maximum: f64) -> bool {
     value
         .as_f64()
         .is_some_and(|value| value.is_finite() && (minimum..=maximum).contains(&value))
+}
+
+/// The same per-document schema used by admission, without aggregate capacity checks.
+pub(crate) fn validate_asset_document(
+    name: &str,
+    path: &str,
+    kind: AssetKind,
+    value: &Value,
+) -> Result<(), AssetDiagnostic> {
+    Schema { name, path }.validate(kind, value).map(|_| ())
 }
 
 /// Reports all independent asset failures (bounded to 128) without changing authored files.

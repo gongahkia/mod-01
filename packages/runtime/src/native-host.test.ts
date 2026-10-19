@@ -1,9 +1,12 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { deserialize, serialize } from 'node:v8';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { emptyInputFrame } from './input';
+import { runtimeGameFixture } from './test-support/game';
+import type { GameSnapshot } from './game-runtime';
 
 const host = fileURLToPath(new URL('../standalone/native-host.mjs', import.meta.url));
 const javascript = `export default function createCartridge(api) {
@@ -35,6 +38,100 @@ const debugJavascript = `export default function createCartridge(api) {
 }`;
 
 describe('native process host', () => {
+  it('rejects oversized sound/music exports and still answers a valid export in the same process', () => {
+    const patch = {
+      kind: 'sound',
+      name: 'tone',
+      waveform: 'triangle',
+      note: 60,
+      durationFrames: 1,
+      volume: 0.5,
+      pan: 0,
+      envelope: { attackFrames: 0, decayFrames: 0, sustainLevel: 1, releaseFrames: 0 },
+      pitch: { slideSemitonesPerFrame: 0, vibratoDepthSemitones: 0, vibratoPeriodFrames: 0 },
+    };
+    const commands = [
+      { type: 'render-wav', kind: 'sound', asset: { ...patch, durationFrames: 3600 }, sounds: [] },
+      {
+        type: 'render-wav',
+        kind: 'music',
+        asset: {
+          kind: 'music',
+          name: 'song',
+          framesPerRow: 240,
+          order: ['A'],
+          loop: false,
+          patterns: { A: { rows: Array.from({ length: 128 }, () => Array<null>(8).fill(null)) } },
+        },
+        sounds: [patch],
+      },
+      { type: 'render-wav', kind: 'sound', asset: patch, sounds: [] },
+      { type: 'stop' },
+    ];
+    const replies = execFileSync(
+      process.execPath,
+      ['--permission', `--allow-fs-read=${host}`, host],
+      {
+        input: commands.map((command) => JSON.stringify(command)).join('\n') + '\n',
+        timeout: 5000,
+      },
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(replies.map((reply) => reply.type)).toEqual(['error', 'error', 'wav', 'stopped']);
+    for (const reply of replies.slice(0, 2)) {
+      expect(reply.code).toBe('M019100');
+      expect(reply.message).toBe('WAV output exceeds 8388608-byte limit');
+    }
+    const wav = Buffer.from(replies[2]?.bytes as string, 'base64');
+    expect(wav.byteLength).toBe(44 + 800 * 4);
+    expect(wav.subarray(0, 4).toString()).toBe('RIFF');
+  });
+  it('requires the current whole-game load command without an entry-only fallback', () => {
+    const game = runtimeGameFixture({
+      javascript,
+      manifest: { id: 'current-native', updateRate: 60, display: null, assets: {} },
+    });
+    const commands = [
+      {
+        type: 'load',
+        javascript,
+        manifest: game.members.main?.manifest,
+        files: {},
+        rom: 'AQ==',
+        save: '',
+      },
+      { type: 'load', game, parameter: '', saves: null },
+      { type: 'load', game, parameter: '', saves: { 'current-native': 'AB==' } },
+      { type: 'load', game, parameter: '', saves: {} },
+      { type: 'stop' },
+    ];
+    const replies = execFileSync(
+      process.execPath,
+      ['--permission', `--allow-fs-read=${host}`, host],
+      {
+        input: commands.map((command) => JSON.stringify(command)).join('\n') + '\n',
+      },
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(replies.map((reply) => reply.type)).toEqual([
+      'error',
+      'error',
+      'error',
+      'loaded',
+      'stopped',
+    ]);
+    expect(replies[3]).toMatchObject({
+      cartridgeAlias: 'main',
+      cartridgeId: 'current-native',
+      active: { frame: 0, cartridgeFrame: 0, booted: true },
+    });
+  });
   it('runs revision-2 frames and restores an opaque snapshot', async () => {
     const child = spawn(process.execPath, ['--permission', `--allow-fs-read=${host}`, host], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -75,17 +172,17 @@ describe('native process host', () => {
       expect(
         await request({
           type: 'load',
-          javascript,
-          manifest: {
-            id: 'native-test',
-            hardwareRevision: 2,
-            updateRate: 60,
-            display: null,
-            assets: {},
-          },
-          files: {},
-          rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
-          save: '',
+          game: runtimeGameFixture({
+            javascript,
+            manifest: {
+              id: 'native-test',
+              updateRate: 60,
+              display: null,
+              assets: {},
+            },
+          }),
+          parameter: '',
+          saves: {},
         }),
       ).toMatchObject({ type: 'loaded', cartridgeId: 'native-test' });
       const first = await request({ type: 'frame', input: emptyInputFrame() });
@@ -94,6 +191,18 @@ describe('native process host', () => {
       expect(Buffer.from(first.left as string, 'base64').length).toBe(800 * 4);
       const snapshot = await request({ type: 'snapshot' });
       expect(snapshot).toMatchObject({ type: 'snapshot', frame: 1, booted: true });
+      const checkpoint = deserialize(
+        Buffer.from(snapshot.snapshot as string, 'base64'),
+      ) as GameSnapshot;
+      for (const candidate of [
+        { ...checkpoint, identity: '0'.repeat(64) },
+        { ...checkpoint, console: { ...checkpoint.console, memory: { revision: 1, regions: [] } } },
+      ]) {
+        expect(
+          await request({ type: 'restore', snapshot: serialize(candidate).toString('base64') }),
+        ).toMatchObject({ type: 'error', code: 'M019103', recoverable: true });
+        expect((await request({ type: 'snapshot' })).snapshot).toBe(snapshot.snapshot);
+      }
       const second = await request({ type: 'frame', input: emptyInputFrame() });
       expect(await request({ type: 'restore', snapshot: snapshot.snapshot })).toMatchObject({
         type: 'restored',
@@ -105,19 +214,20 @@ describe('native process host', () => {
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
       const debugCommand = {
         type: 'load',
-        javascript: debugJavascript,
-        debug: true,
-        manifest: {
-          id: 'native-debug',
-          hardwareRevision: 2,
-          updateRate: 60,
-          display: null,
-          assets: {},
-        },
-        files: {},
-        rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
-        save: '',
-        symbolNames: { s0: 'score', s1: 'health' },
+        game: runtimeGameFixture({
+          javascript: debugJavascript,
+          debug: true,
+          manifest: {
+            id: 'native-debug',
+            updateRate: 60,
+            display: null,
+            assets: {},
+          },
+          files: {},
+          symbolNames: { s0: 'score', s1: 'health' },
+        }),
+        parameter: '',
+        saves: {},
       };
       const debugLoad = await request(debugCommand);
       if (debugLoad.type === 'error') throw new Error(String(debugLoad.message));
@@ -154,7 +264,40 @@ describe('native process host', () => {
       ).toMatchObject({
         type: 'error',
         code: 'M019021',
+        recoverable: true,
         sourceSpan: { start: 0, end: 0 },
+      });
+      // Last front-buffer byte followed by reserved padding: no partial write.
+      expect(await request({ type: 'memory-edit', address: 0x186ff, bytes: 'AQI=' })).toMatchObject(
+        {
+          type: 'error',
+          code: 'M019021',
+          recoverable: true,
+        },
+      );
+      expect(await request({ type: 'memory', address: 0x186ff, length: 1 })).toMatchObject({
+        type: 'memory',
+        bytes: 'AA==',
+      });
+      expect(await request({ type: 'memory-edit', address: 0, bytes: 'AB==' })).toMatchObject({
+        type: 'error',
+        code: 'M019100',
+        recoverable: true,
+      });
+      expect(await request({ type: 'memory-edit', address: 0, bytes: 'Bw==' })).toMatchObject({
+        type: 'memory-edited',
+      });
+      expect(await request({ type: 'memory', address: 0, length: 1 })).toMatchObject({
+        type: 'memory',
+        bytes: 'Bw==',
+      });
+      expect(await request({ type: 'restore', snapshot: 'AA==' })).toMatchObject({
+        type: 'error',
+        recoverable: true,
+      });
+      // Rejected restore must not consume the fresh scratchpad session either.
+      expect(await request({ type: 'scratch', input: emptyInputFrame() })).toMatchObject({
+        type: 'scratch',
       });
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
     } finally {

@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { emptyInputFrame } from './input';
+import { emptyInputFrame, type Button, type PointerState } from './input';
 import {
   decodeReplayTrace,
   encodeReplayTrace,
@@ -9,6 +10,53 @@ import {
 } from './replay';
 
 describe('M01REC revision 1', () => {
+  const corpus = JSON.parse(
+    readFileSync(new URL('../../../tests/conformance/replays.json', import.meta.url), 'utf8'),
+  ) as {
+    name: string;
+    json: string;
+    expanded?: {
+      frame: number;
+      ports?: Record<string, Button[]>;
+      pointer?: PointerState;
+      menuAction?: number;
+    }[];
+  }[];
+
+  it.each(corpus)('agrees with the shared Rust/CLI corpus: $name', (item) => {
+    const bytes = new TextEncoder().encode(item.json);
+    if (item.expanded === undefined) {
+      expect(() => decodeReplayTrace(bytes)).toThrow();
+      return;
+    }
+    const expected = new Map(
+      item.expanded.map((frame) => {
+        const input = emptyInputFrame();
+        for (const [port, buttons] of Object.entries(frame.ports ?? {})) {
+          const target = input.controllers[Number(port) - 1];
+          if (target === undefined) throw new Error('invalid conformance fixture');
+          for (const button of buttons) (target.buttons as Record<Button, boolean>)[button] = true;
+        }
+        return [
+          frame.frame,
+          {
+            ...input,
+            ...(frame.pointer === undefined ? {} : { pointer: frame.pointer }),
+            ...(frame.menuAction === undefined ? {} : { menuAction: frame.menuAction }),
+          },
+        ] as const;
+      }),
+    );
+    expect(replayInputFrames(decodeReplayTrace(bytes))).toEqual(expected);
+    expect(
+      replayInputFrames(
+        decodeReplayTrace(
+          encodeReplayTrace([...expected].map(([frame, input]) => ({ frame, input }))),
+        ),
+      ),
+    ).toEqual(expected);
+  });
+
   it('round-trips exact bounded controller and pointer frames', () => {
     const input = emptyInputFrame();
     (input.controllers[1].buttons as Record<string, boolean>).a = true;

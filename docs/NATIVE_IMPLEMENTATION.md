@@ -11,6 +11,12 @@ Checkboxes mean the complete behaviour has been demonstrated, not merely that an
 API, UI label, or test file exists. Each implementation slice receives an atomic
 Git commit. The final audit must link the evidence for every row below.
 
+The [decision-by-decision acceptance audit](NATIVE_ACCEPTANCE.md) maps all 21
+original review IDs to current implementation and execution evidence. Progress
+entries below are reverse-chronological history: later entries supersede older
+open/closed statements. All scoped rows are complete; the audit records the
+successful desktop matrix and its explicit hardware/release limitations.
+
 | Requirement                   | Acceptance evidence                                                                                                                                                                                         | Complete |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | Native-only product           | Browser app, Wasm bridge, PWA, workers, web sharing/export and browser-only build/test dependencies removed; native build/check/package gates pass.                                                         | [x]      |
@@ -23,17 +29,17 @@ Git commit. The final audit must link the evidence for every row below.
 | Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [x]      |
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [x]      |
-| Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
+| Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [x]      |
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [x]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [x]      |
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [x]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [x]      |
-| Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
+| Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested; [acceptance evidence](BUNDLES.md#acceptance-evidence).           | [x]      |
 | Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [x]      |
 | Examples and games            | Documented, playable and tested 2D and software-rendered 3D games demonstrate the added APIs using public facilities.                                                                                       | [x]      |
-| Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [ ]      |
+| Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [x]      |
 
 ## Excluded
 
@@ -51,6 +57,565 @@ choices remain outstanding.
 
 ## Progress
 
+- All scoped acceptance rows are now complete. At `fe2eefb`,
+  [CI run 39266764189](https://github.com/gongahkia/mod-01/actions/runs/39266764189)
+  passes the full gate and every Windows/macOS/Linux native job. Actual exported
+  windows are visible at 976×689 / 960×674 / 960×650, respectively; every probe
+  requires the real first committed frame/save and ordinary exit status 0.
+  The inspected successful Windows capture shows the intended colour-200 frame,
+  rectangle, HUD and cursor; its report confirms an 8192-byte save. The complete
+  game verifiers also pass on all three operating systems. The full gate now
+  includes 329 runtime/script tests in 45 files, 134 core, 151 Linux native,
+  34 CLI integration and one CLI unit test. Windows GUI qualification explicitly
+  uses CI-only Mesa llvmpipe, not a physical GPU claim. The acceptance audit
+  retains the original decisions, local interaction evidence and remaining
+  out-of-scope hardware/signing limitations. The user has authorized the push
+  and merge; main's eventual merge commit still requires its own CI run.
+- The Windows capture shows the real player correctly running the blank game;
+  its missing save was a QA-fixture bug, not a runtime failure. CRLF checkout
+  text prevented the multiline initializer replacement. The extracted generator
+  now normalizes only its temporary copy and rejects missing template markers.
+  Regressions first reproduce the CRLF/missing-marker failures, then require
+  identical LF/CRLF fixtures containing the real save and colour-200 program.
+- With the Linux dependency repaired, Linux and macOS pass actual-window CI.
+  Windows' Mesa setup succeeds and window detection passes, but its first saved
+  frame has not yet been qualified. The probe now targets the owning PID and
+  exact game title (not a console window), uses the native roaming known folder,
+  and preserves bounded GUI evidence separately from shipping artifacts. The
+  Windows enumeration/capture/targeted-close helper is verified against an owned
+  WinForms fixture; Linux's real game probe still passes. Software-driver cold
+  startup gets 30 seconds without removing the first-frame/save/clean-exit gates.
+- Windows' first real-window runner exposed insufficient OpenGL support, not a
+  game/runtime failure. Its GUI QA now provisions pinned Mesa 26.2.4 with the
+  primary publisher's SHA-256 verified before extraction, and stages its DLLs
+  only in the owned test package using llvmpipe. No global driver/registry change
+  or upstream deployment script is used; ordinary exports/distributed archives
+  remain unchanged. Four tests cover CI-only gating, required DLLs, dependencies
+  and non-overwrite preflight. This is explicit software-driver qualification;
+  the actual Windows window/frame/clean-close check still must pass remotely.
+- The first actual-window CI run exposed a missing Linux runtime dependency:
+  xkbcommon's X11 bridge is loaded at window creation, not linked by the headless
+  verifier. Both Ubuntu setup lists now install `libxkbcommon-x11-dev`; local
+  instructions and native-game requirements name the separate bridge too. The
+  real macOS window already passes at `2b72103` (960×674, first frame/save and
+  clean close). The same initial run exposed insufficient OpenGL support on the
+  Windows runner; that remains a separate qualification issue, not a skipped test.
+- Fresh remote CI at `7060d9b` passed the full gate and native Rust/runtime/package
+  checks on all three desktop operating systems:
+  [run 39257406061](https://github.com/gongahkia/mod-01/actions/runs/39257406061).
+  This confirms the Windows path repair in actual Rust/Node execution. The audit
+  also identified that those package verifiers bypass the real window. A new
+  CI probe launches an actual no-argument, empty-PATH packaged game, observes its
+  own visible OS window, requires the first committed frame/save, requests a
+  normal close and rejects nonzero/signal exits. Linux/X11 passes locally; the
+  new Windows/macOS GUI probes still require execution. No synthetic event or
+  display-free result is being counted as proof that those windows opened.
+  Windows interop also parses and executes the exact PowerShell helper: it
+  observes an owned 600×400 WinForms fixture and closes it. The helper uses a
+  process-only execution policy; this does not alter user/machine policy or
+  substitute for the pending complete Windows packaged-game GUI check.
+- The acceptance audit now maps every original review ID, including rejected
+  items and note overrides, to concrete code/tests and scope qualifications.
+  At `7060d9b` the full gate passes 322 runtime/script, 134 core, 151 native,
+  34 CLI integration and one CLI unit test, all format/lint/type/Clippy/build
+  checks, ten deterministic cartridge pairs and three Linux package comparisons.
+  Fresh release Studio packaging and both release verifiers also pass. An actual
+  no-argument standalone launch from `/tmp` with empty PATH and isolated XDG data
+  shows menu docking, live night-bank graphics, the minimum player and active
+  vault source inspection; normal relaunch preserves separate saves. Current
+  Windows/macOS execution and actual window startup still need evidence. The
+  export/final-handoff rows deliberately remain open; no remote push is implied.
+- One actual Studio workflow now starts with an unsaved 256-colour source edit,
+  steps both game members through the debugger, records each accepted input once,
+  saves with the prior source recoverable, exports while the child is selected,
+  and reopens the exported game for release replay. All seven frames' pixels,
+  work and active member match source stepping; saves remain disposable. The
+  export-layout fixture does not execute a fake player: separate fresh Linux
+  release verifiers launch actual ordinary, >1 MiB two-member and maintained
+  Relay Station packages with empty PATH and matching complete traces. The
+  focused workflow test and all-feature workspace Clippy pass; other desktop
+  execution remains an explicit open qualification, not inferred from Linux.
+- Windows runtime admission audit found the old remote CI failure is still
+  relevant: Rust's verbatim `\\?\` host path fails Node 24.21's exact-file
+  permission check. A SHA-256-verified official Windows Node 24.21 binary executed
+  through WSL interop reproduces the denial; ordinary absolute entry/grant paths
+  work and still deny an adjacent fixture. Node 24.19 additionally rejects the
+  verbatim entry during realpath resolution. The native bridge now uses pinned
+  `dunce` 1.0.5 to simplify only unambiguous Windows paths and passes the grant as
+  an OS string, not lossy display text. A real restricted-child probe covers
+  spaces/Unicode/# and adjacent-file denial; Windows-only tests preserve reserved
+  and trailing-dot spellings. The helper's full upstream CC0 licence travels in
+  existing native library notices. Actual Rust Windows/macOS execution at this
+  new commit remains pending; this Node probe is not a complete desktop OS pass.
+  All 150 native tests, five core native-export tests, workspace Clippy/build,
+  unchanged ten-cartridge raw/PNG pairs and all three Linux package comparisons
+  pass. Windows Node 24.21 also passes the ordinary-path probe from a directory
+  containing spaces, Unicode and # while denying its adjacent file.
+- Save I/O regression first reproduced a predictable `.tmp` symlink overwriting
+  an owned foreign fixture and publishing that link as the save. Native storage
+  now uses distinct create-new image/schema stages, sync-before-rename and cleanup
+  of only its own failed stage. Shared bounded readers cover images (8 KiB),
+  schemas (64 bytes) and imported containers (17 KiB); known linked files and
+  managed save/recovery directories are refused, including dangling links and
+  the recovery root. Invalid data is not repaired or migrated. Tests cover actual
+  Studio commit wiring, preserved foreign/old-temp files, bounded sparse files,
+  invalid schemas, ordinary replacement and eight concurrent image/schema writers.
+  This is per-file local storage hygiene, not an adversarial directory sandbox
+  or an atomic transaction across two separate files. All 149 native tests and
+  warning-free all-feature workspace Clippy pass; existing save-container bytes,
+  IDs, paths and schema are unchanged.
+- Hardware Gauntlet no longer labels the current machine as R1. Its public-API
+  showcase now renders R2 with an actual `2` bitmap glyph and a current-machine
+  source comment. A regression first failed the old label and now derives the
+  expected HUD from manifest metadata and requires every custom label glyph.
+  Inspected native captures show R2 and keyboard page switching without faults;
+  normal GUI shutdown leaves authored source unchanged. The full gate passes
+  322 runtime/script, 134 core, 143 native, 34 CLI integration and one CLI unit
+  test, formatting/lint/types/all-feature Clippy/builds, ten deterministic raw/PNG
+  pairs and all three Linux package comparisons. An explicit previous-hash
+  comparison proves the other nine raw/PNG pairs unchanged; only this intentionally
+  corrected showcase's bytes differ. Local full-gate log and captures are retained
+  in `output/asset-number-qa-N5dNmf`.
+- Actual native asset GUI inspection used an isolated, validator-admitted bank
+  with integral JSON floats. Captures in `output/asset-number-qa-N5dNmf` show
+  correct 2×2 map/font/sprite, tile flag 7/colours, tracker 240/C-4 and signed
+  raster -3/+8 with physical remap 255. This QA exposed a separate tracker bug:
+  focus/Enter rounded authored volume 0.3333333333333333 to 0.3333 and created an
+  undo entry. The real-font UI regression first reproduced it. Full-precision
+  formatting now preserves focus-only source; a workbench regression verifies
+  explicit 0.125 edits and exact undo/redo with metadata. Both tests and workspace
+  Clippy pass. Rebuilt GUI captures prove full precision and disabled Undo after
+  focus/Enter; both sessions close normally and source SHA-256 stays unchanged.
+- Returned runtime asset lists, integer-save views and pending-write lists now
+  use ascending ASCII order, matching the existing device descriptor stores and
+  canonical on-disk save encoding. This removes the three remaining runtime
+  locale-sensitive comparators; no device IDs or save format are redefined.
+  Regressions first rejected accidental host-collation calls and now verify
+  mixed-case/underscore/digit names, reversed insertion, unchanged save images
+  and restore ordering while localeCompare is deliberately unavailable. The
+  21 focused runtime tests, lint/types/build and existing CLI replay goldens pass.
+  All 322 runtime/script tests pass. The strengthened ten-cartridge artifact
+  verifier and all three actual Linux package comparisons pass with unchanged
+  packed/PNG hashes, including the maintained complete bank-swap route.
+- Native asset number readers now reuse the shared Rust admission helper instead
+  of serde_json's storage-specific integer accessors. Regressions first reproduced
+  valid `2.0` sprite rejection, `255.0` tile export as transparent black and a
+  disabled `240.0`/`60.0` tracker. Real-font tile/map/font/display UI output now
+  matches integral-spelling banks without source/history changes; the same float
+  bank passes whole-game packing. Sprite colours, PNG alpha/colour, map fill,
+  tracker note display/transposition and signed raster scroll use numeric meaning.
+  Invalid PNG colours are rejected rather than silently clamped/defaulted. Four
+  native regressions and the shared reader boundary test pass. All 141 native
+  and 133 core tests plus warning-free all-feature workspace Clippy pass.
+- Requirement-specific bundle audit is complete against the reviewed local
+  dependency/transition/reload/state/save/validation contract. The bundle guide
+  now links admission, scheduler, native editor/debugger and cross-host/package
+  evidence, including the maintained game and night-bank rewind. Removed stale
+  claims that the native handler or replay integration is unimplemented. This
+  closes the multi-cartridge row only; desktop platform/hardware qualification,
+  identified general tooling hardening and the full product audit remain open.
+- Release artifact smoke checks now inspect the JSON result, not only CLI exit
+  status. Each of ten maintained packed games must report the current result
+  revision, expected identity, five requested/completed frames, five ordered
+  records and no fault field. Two regressions cover incomplete/malformed traces
+  and an actual faulting MODL cartridge whose CLI process returns structured JSON
+  with exit status zero; the release checker rejects it with status one. Lint,
+  the two tests and the strengthened artifact/package verifier pass with all
+  cartridge bytes unchanged. All 320 runtime/script tests in 43 files and the
+  repository format check also pass. This changes verification, not CLI fault reporting.
+- A shared 40-case source-readable Rust/TypeScript replay corpus first reproduced
+  compact-empty, integral-number and negative-zero differences. Both decoders now
+  agree on accepted schemas and exact expanded inputs/round trips, including
+  integral fraction/exponent spellings, bounded ranges, port identity, pointer
+  coordinates and menu actions. Explicit null pointer is rejected like other
+  invalid optional fields; strict JSON/UTF-8 admission rejects a BOM consistently.
+  Numeric values are canonicalized without changing the current revision or
+  adding compatibility branches. The corpus follows JSON's single numeric grammar,
+  not serde_json's storage distinction between integer/floating number variants.
+  The full gate passes 318 runtime, 132 core, 137 native, 34 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, ten
+  unchanged deterministic raw/PNG pairs, both 120-frame Linux package checks and
+  the 110-frame CLI/native/source/raw/PNG/standalone comparison.
+- Actual Studio runs the maintained Relay Station programs/assets in release and
+  statement-step debug modes through all 110 replay frames. Per-frame pixels,
+  work, active routing and recorded input match; selected donor source cannot
+  change main's launch entry, source events identify main/vault correctly and the
+  donor never executes. A real Studio checkpoint after the night-bank swap
+  rewinds to frame 23 and replays to identical canonical state/checkpoint and
+  per-ID saves. Both modes use isolated test save IDs and persist no commits;
+  authored source remains unchanged. The regression and workspace Clippy pass.
+  Opaque V8 bytes are deliberately not compared after restore: Node documents
+  that equal values can serialize differently; canonical evidence is authoritative.
+- CLI and native verification now share the same canonical evidence helpers,
+  with unchanged existing replay goldens. Native reports bounded per-frame
+  SHA-256 checks for indexed pixels, interleaved PCM and audio commands, plus
+  canonical final state/checkpoint and per-ID saves. The maintained Relay Station
+  verifier compares every one of 110 frames from source/raw/PNG across both hosts
+  and an actual Linux packaged executable from an unrelated directory with empty
+  PATH. Routing, work, all final hashes, two bank swaps, non-silent audio, six main
+  and 104 vault frames, two commits each and untouched donor save agree. The
+  desktop CI packaging matrix also runs this check; other-OS execution remains
+  unobserved locally. Seven targeted host/headless and four native player tests,
+  existing CLI replay goldens, workspace Clippy/lint/types/build and both existing
+  120-frame native packages pass. Actual Studio source-stepping of this route and
+  the final requirement audit remain open.
+- `cartridges/relay-station` is a maintained playable 47,591-byte three-member
+  game: 60 Hz station, 30 Hz vault and compatible data-only night bank. Public
+  MODL implements movement, three ordered relay interactions, two bank swaps,
+  menu actions, parameter handoff, task/RNG HUD and per-ID visits/clears. Its
+  110-frame source-readable replay returns home with six main and 104 vault
+  frames, two save commits each and non-silent production PCM; the donor never
+  boots. CLI regression anchors the final image, PCM and distinct save images;
+  maintained asset checks now cover every embedded member, not only main.
+  Inspected `output/relay-station-qa-mFRPyN` captures show station, day/night
+  sprite changes, live counters, full minimum player/touch and active-member
+  source inspection. Updated bundle/format docs distinguish implemented
+  integration from the still-open complete cross-host/final audit. The actual
+  Linux package reproduces the 110-frame native source report, including final
+  checkpoint, from an unrelated directory with empty PATH. The full gate passes
+  278 runtime, 132 core, 134 native, 34 CLI integration and one CLI report-unit
+  test, formatting/lint/types/all-feature Clippy/builds, ten deterministic raw/PNG
+  pairs (the previous nine unchanged) and both existing 120-frame Linux package
+  verifications. Direct CLI/native per-frame comparison remains open.
+- Actual bundle GUI QA found SOURCE retained the 480×320 player window, leaving
+  Studio unusably small. Native mode/touch transitions now update the same shared
+  viewport minimum policy and grow undersized windows: Studio 900×600, player
+  480×320, touch player 480×500. Unchanged modes emit no repeated resize commands,
+  and disabling touch does not force shrinkage. Real-font framebuffer layout
+  and real viewport-command tests pass. Inspected `output/relay-station-qa-mFRPyN`
+  captures prove the full game/touch controls at 480×500 and SOURCE automatically
+  reopening the active vault member at 900×600. Both GUI sessions exit normally;
+  targeted player tests and workspace Clippy pass. Physical touchscreen QA is
+  still separate from this layout/interaction evidence.
+- Authoring the maintained bundle example exposed a real block-parser gap:
+  leading comments were accepted by the lexer but rejected before a block's
+  first indent. Records, enums, functions/tasks/callbacks, nested loops and match
+  arms now skip comment/blank lines consistently before consuming that indent.
+  Regressions first reproduced the failure and still reject comment-only empty
+  bodies. All 102 core library tests and workspace Clippy pass; the new game
+  checks and formats through the public CLI after this fix.
+- Native display-free verification now accepts bounded current replay input via
+  `--input REPLAY`, with ordinary Studio sharing the same ≤8 MiB file reader.
+  Unknown/repeated/missing options and inputs beyond the requested 1–36,000 frames
+  are rejected before loading a game. Reports bind consumed input and the final
+  opaque whole-game checkpoint as well as the existing pixels/PCM/routing/saves.
+  Real two-member tests compare neutral vs transferred play, repeat exact
+  fingerprints, preserve source/replay bytes and prove input-range preflight.
+  Compact current empty traces no longer depend on a trailing newline.
+  Targeted replay/launch/native-verifier tests and workspace Clippy pass; both
+  real 120-frame Linux package verifications retain identical fingerprints,
+  including the newly checked final checkpoint, without PATH.
+- Native Assets/Sprites now expose confirmed, stopped-session, member-bound
+  deletion through the shared reference checker. Alias, cartridge ID, asset name,
+  kind and path are rechecked before changing the selected member; other members
+  retain exact source. Only the deleted asset's structured/sprite/raw-text history
+  is discarded, and raw JSON widget IDs now include member/save-ID scope. Modal
+  details scroll while Cancel/Confirm remain visible at 900×600. Five native
+  regressions cover real pointer cancellation/reference errors/confirmation,
+  stale/running targets, source/tests/auxiliary preservation, unsaved sprite
+  flushing/sidecar retention, member isolation and non-resurrecting undo/redo.
+  Inspected `output/native-asset-delete-qa-4hZHn8` captures demonstrate actual
+  creation of a tile set/map, reference-blocked tile deletion, then map/tile
+  removal with the live bank falling 3→2→0 slots. The file hash stays unchanged
+  until Save; recovery retains the previous tile source exactly. The final saved
+  workcart equals the initial blank QA workcart, passes CLI check/pack and five
+  actual native packed frames. The GUI session closes normally with status zero.
+  The full gate passes 278 runtime, 130 core, 131 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, nine
+  unchanged raw/PNG pairs and both real 120-frame Linux package verifications.
+  Multi-cartridge example/conformance and the final cross-host/platform audit
+  remain open.
+- Shared reference-safe deletion now validates other map/music documents with
+  the same per-document schema as asset admission. Schema-invalid dependency
+  records cannot be silently treated as unreferenced; the diagnostic names the
+  unverifiable owner and field. Removing that malformed asset itself remains
+  possible. This does not require aggregate capacity admission: a regression
+  deletes an unreferenced 65-frame animation to repair an overcapacity bank.
+  All six core deletion regressions and warning-free workspace Clippy pass.
+- Native debugger request rejection now preserves the healthy host and Studio's
+  live source/input/replay/menu context. The regression first proved a malformed
+  restore killed the real suspended two-member game. Recovery is explicitly
+  limited to read-only requests and proven transactional restore/edit validation;
+  actual execution, unexpected write and transport failures remain fatal.
+  Rejections acknowledge only their own pending request; invalid restore does
+  not consume a fresh scratchpad. Canonical bounded snapshot/edit decoding
+  replaces permissive byte repair. Production host tests cover foreign/deeply
+  invalid checkpoints with byte-identical before/after snapshots, cross-region
+  edit rollback, invalid/valid reads and edits, plus scratchpad continuation.
+  The real Studio regression resumes the same arena statement/input and replays
+  all seven frames after four rejected requests without changing recorded inputs.
+  The full gate passes 278 runtime, 128 core, 126 native, 33 CLI integration and
+  one CLI report-unit test, all formatting/lint/types/Clippy/build steps, nine
+  unchanged raw/PNG pairs and both real 120-frame Linux package verifications.
+- Native WAV export now passes its existing 8 MiB transport bound into shared
+  renderers, which preflight exact PCM16 bytes before executing synth frames.
+  No output is truncated and the renderers' default capacity is unchanged.
+  Tests cover exact/header/release boundaries, invalid budgets/assets, the
+  largest admitted native frame count, the next rejected frame and zero synth
+  execution on oversized requests. The generated production host rejects both
+  long sounds and otherwise valid tracker songs, then serves a valid WAV in the
+  same process. Studio documents the limit and exposes it on the export tooltip.
+  The full gate passes 278 runtime, 128 core, 125 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, nine
+  unchanged raw/PNG pairs and both 120-frame Linux package verifications without
+  PATH. Remaining cross-host/product audit and physical/platform QA stay open.
+- Native sound controls no longer write fractional MIDI/frame values or clamp
+  valid long envelopes on opening. Integer fields cover the full current schema,
+  float fields preserve full precision on focus/Enter, and malformed source is
+  left recoverable rather than repaired by repaint. Explicit waveform changes
+  supply only required missing duty/table defaults; authored tables survive
+  switches and expose bounded 4–32 sample editing with document undo/redo.
+  A regression first demonstrated opening-source mutation. Real-font pointer/
+  keyboard tests cover integer rejection/edits, unchanged opening, metadata,
+  waveform selection, sample bounds and undo. Edited patches pass shared core
+  validation/packing and reach the production native synth without disk writes.
+  All nine asset-tool tests and all-feature workspace Clippy pass. Inspected
+  `output/native-sound-qa-Djb4eW` captures show all five waveform choices and
+  scrollable four-sample editing with a valid bank at 900×600. GUI edits remained
+  disposable; the session closed normally with status zero.
+- Asset source, sprite/tile-atlas PNG and WAV export dialogs now share portable
+  `asset-NAME.EXT` suggestions, including reserved device-like IDs. Labels are
+  bounded/sanitized, source extensions are checked, and explicit user-selected
+  destinations remain authoritative. Asset identities, project paths and output
+  payloads are unchanged. Regressions cover device names, maximum/unsafe/Unicode
+  labels, all current export extensions and unsafe extension fallback. This is
+  filename-default hardening, not Windows execution evidence or a unique-ID map.
+  Both filename tests, all four Studio asset integrations and warning-free
+  all-feature workspace Clippy pass.
+- Native device callbacks now coalesce bounded first notices instead of repeatedly
+  logging ALSA errors. Current CPAL classifications keep xrun/reroute/realtime
+  warnings nonfatal; unusable streams are muted/cleared and released by the UI
+  owner. `AUD`/`SILENT` indicators retain device detail separately from VM status.
+  Game and live-synth timelines continue with no output device, and output is
+  re-opened by restarting the application rather than an uncontrolled retry loop.
+  Two callback-policy regressions cover all current error classes, repeated/
+  concurrent notices and bounded messages; a real two-member native integration
+  proves losing output cannot stop, rewind or re-identify gameplay/replay.
+  Targeted audio/live-preview/game tests and workspace Clippy pass. The player
+  keeps audio/status on one truncated line and moves long titles above controls
+  at narrow widths. Its real-font egui regression covers long titles/statuses at
+  480×320 and 960×650; the inspected 480×320 capture in
+  `output/native-audio-qa-wiSy8a/player-minimum-final.png` shows the complete
+  framebuffer between controls and status. All 120 native tests pass, and a fresh
+  active-game GUI session exits with status zero on WM_DELETE_WINDOW without
+  audio callback logging. Physical audio quality, remaining editor hardening and
+  final audit remain open.
+- Native saves/schema/export defaults now use the checked shared portable stem,
+  without changing persistent IDs or the current save-container bytes. Recovery
+  has separate per-ID directories instead of ambiguous `ID-` prefix matching:
+  `abc` retention cannot prune `abc-def`. New backups use create-new plus sync,
+  bounded collision retries and retention that protects the immediate pre-change
+  copy against clock rollback. Only bounded, regular, valid same-ID backups count
+  toward the ten-copy limit; foreign/malformed/oversized/symlink files remain
+  untouched. Four new regressions cover these cases and old development-file
+  preservation. All five save-manager tests, 15 real native game integrations,
+  debug/replay save isolation and warning-free workspace Clippy pass. No user
+  files were migrated, renamed or deleted; old filenames are not silently loaded.
+  The full rerun passes 275 runtime, 128 core, 116 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/Clippy/builds, nine unchanged
+  raw/PNG pairs and both Linux package verifications without PATH. An earlier
+  gate was terminated by SIGTERM during native tests, not an assertion failure.
+  Inspected `output/native-save-qa-iYFLvq` captures prove `con.foo` displays as
+  its original ID, writes `cart-con_foo.bin`, and fits confirmation/reset at
+  900×600. Confirmed reset leaves a zero-length active image and a recovery with
+  the original 8 KiB SHA-256; stopped Studio exits normally on WM_DELETE_WINDOW.
+  This WSL audio device emitted repeated ALSA I/O errors during play: physical
+  audio/device-error handling is not verified by this GUI check. Asset export
+  defaults, device-failure handling and final cross-host/product audit remain open.
+- Core now provides a checked, injective portable cartridge filename stem:
+  `cart-ID`, with dots encoded as underscores (not legal in cartridge IDs).
+  Invalid IDs are rejected before path joining. CLI/Studio packed/PNG defaults,
+  native output folders, executable and macOS app names all use main's same stem.
+  Root IDs, title, exact packed bytes and per-member save ownership do not change.
+  Tests cover maximum-length/device/dotted/trailing-dot IDs, rejected traversal/
+  non-current IDs, six real CLI default export paths without Node, shared package
+  layouts and child-selected Studio export. These targeted core/CLI/native tests
+  and all-feature workspace Clippy pass. Save storage/recovery names, asset
+  export defaults and the final cross-host audit remain open.
+- Native player executables now use a separate `cart-ID[.exe]` file namespace.
+  A regression first reproduced a valid `node` ID overwriting the exported
+  player with bundled Node. The test checks distinct player/Node bytes, canonical
+  game/host/metadata/notices and unchanged persistent IDs across 14 collision/
+  device-like IDs and all three package layouts. The real Linux package verifier
+  now uses `node` as its two-member game's main ID, so that collision is exercised
+  with actual binaries rather than matching fake tool headers. All five core
+  export tests, warning-free all-feature workspace Clippy, native/CLI builds and
+  both real 120-frame Linux package verifications pass. Default export
+  folder/asset/save basename portability and final cross-host audit remain open.
+- CLI `info` now admits complete source/raw/PNG games and uses one revision-2
+  report for every representation: shipping archive storage, each alias's own
+  logical ROM/class/save ID, exact shared visual-bank/allocation usage, source
+  section sizes and largest linked routines. The old entry-only CLI adapter is
+  removed. `--static` needs no Node; default inspection profiles the real whole
+  game once with the ordinary default seed and reports completed/faulted/
+  unavailable evidence, observed member counts and unprofiled members. Startup
+  parameter errors or missing Node remain explicit alongside static metadata,
+  never a fabricated completed profile. Tests compare large source/raw/PNG
+  reports, core-vs-CLI visual usage, real transition profiles against headless
+  traces, unexecuted children, fault/unavailable cases and invalid unused-member
+  rejection. The full gate passes 275 runtime, 125 core, 112 native, 32 CLI
+  integration and one CLI report-unit test, formatting/lint/types/all-feature
+  Clippy/builds, nine unchanged raw/PNG pairs and both packaged Linux verifications
+  without PATH. The 3D conformance consumer now explicitly selects the current
+  graph's main model and retains its real release/debug gameplay assertions.
+  Graph and normal analysis adapters are connected; final cross-host
+  and product audit remain open.
+- CLI `graph` now emits a shared core compiler model for every game member, with
+  explicit alias/save-ID scope instead of treating overlapping file/symbol/node
+  IDs as global. Source drafts keep invalid child diagnostics and exact original
+  CRLF offsets without packing or executing code. Raw/PNG inputs first pass
+  authoritative whole-game admission and produce the same model. New core/CLI
+  regressions cover two-member scope, invalid child source, duplicate IDs,
+  identical source/raw/PNG results and all 32 members without Node. All four core
+  tooling tests, three CLI graph integrations and all-feature workspace Clippy
+  pass. Bundle-wide
+  normal `info` analysis and final cross-host audit remain open.
+- Native package export now admits the complete source/raw/PNG game before any
+  output is created, preserves exact shipped bytes and selects main's package
+  identity even from a child editor. Metadata records whole-game SHA-256 and every
+  member's own ROM size/save ID. Core tests cover large games and Linux/Windows/
+  macOS layouts (not cross-OS execution), rejection of rehashed foreign JavaScript
+  and refusal to overwrite. CLI and Studio integrations cover all three input
+  forms, unsaved child source, unused-member rejection and selected-child identity.
+  The production package verifier now fingerprints every display frame, PCM,
+  routing timeline and producer-owned save commit rather than only the final
+  framebuffer, and exercises a >1 MiB two-member transfer game without PATH.
+  Both members produce 60 frames/save commits and non-silent PCM in that 120-frame
+  Linux package run. Inspected `output/native-package-qa-zhnM9X` captures show the
+  exported executable launched without arguments from `/tmp` with PATH empty,
+  the native pause action entering arena, and SOURCE opening `arena/src/main.modl`
+  in a two-member Studio workspace. No source or user save files were changed.
+  The full gate passes 275 runtime, 124 core, 112 native and 27 CLI tests,
+  formatting/lint/types/all-feature Clippy/builds, nine unchanged raw/PNG pairs
+  and both 120-frame packaged Linux runs without PATH. The capture session ended
+  with external X11 window destruction (winit reported a TranslateCoordinates
+  error); this does not demonstrate graceful normal-window closure or device QA.
+  Bundle-wide analysis and the final cross-host/device audit remain open.
+- PNG export/import now carries an admitted complete game, with separate shipping
+  wrapper and logical-ROM limits. Core rejects CRC-correct invalid/obsolete payloads
+  and computes CRC over slices without another payload-sized temporary buffer.
+  Studio and CLI share main's presentation metadata and preserve ordinary PNG
+  encoding. New core/CLI/native tests exercise >1 MiB games (each logical member
+  remains <1 MiB), byte-identical shared export, exact source/raw/PNG headless traces
+  across transfers, child-selected export identity, and actual native PNG launch/
+  transition. The full gate passes 275 runtime, 122 core, 111 native and 26 CLI
+  tests, formatting/lint/types/all-feature Clippy/builds, nine unchanged raw/PNG
+  pairs and 120 packaged Linux frames without PATH. Desktop package export and
+  bundle-wide analysis remain open.
+- Native GAME CARTRIDGES now imports exact local source/packed members, creates
+  blank members with unique IDs and confirms reference-safe removal through shared
+  composition validation. Composition changes require stopped execution and valid
+  applied buffers; Save still targets only the enclosing game. Removed aliases
+  lose cached source/asset history and breakpoints so re-import cannot resurrect
+  old edits. Three new Studio integrations verify exact source/packed imports,
+  unchanged input files, duplicate/nested/running/draft/reference rejection, blank
+  creation/removal and stale-history isolation. All 110 native tests and workspace
+  Clippy pass. Inspected native captures at 1280×800 and 900×600 show add, successful
+  remove, reachable confirmation controls and the qualified refusal for a live
+  source reference. Whole-game export/analysis and cross-host audit remain open.
+- Native bridge startup preflight failures no longer race the first Load command:
+  the worker keeps its command receiver alive and replies with the actual missing-
+  runtime diagnostic (or a normal Stop acknowledgement). A regression drains the
+  startup error before submitting repeated Load/Stop commands, deterministically
+  reproducing the formerly timing-dependent closed-channel failure. All five
+  bridge tests and warning-free workspace Clippy pass.
+- Shared composition operations now preflight local member addition/removal before
+  returning changed source. Three core tests cover exact untouched source/metadata,
+  nesting/alias/save-ID/invalid-code rejection, member 32 versus 33, and safe removal
+  across retained modules, MODL tests and siblings. Computed request targets refuse
+  removal conservatively; comments/ordinary text/transfer parameters do not count.
+  These pure operations never touch disk or delete player saves. All 120 core unit/
+  integration tests and core Clippy pass; native composition controls are next.
+- Native source debugging now qualifies breakpoints/events by alias and original
+  module, using an immutable per-member source snapshot from the admitted launch.
+  Same-path/same-line breakpoints cannot hit a different cart; unsaved line edits
+  do not move running locations. The debugger shows the actual running excerpt
+  and opens the correct editable member/module only when its bytes still match;
+  changed drafts stay intact. System-menu source inspection selects the active
+  member. Restore clears stale source/watch inspection. Three new tests cover
+  conditional child breakpoints after unsaved line shifts, draft-safe navigation,
+  active-member source inspection and UTF-8 byte/cursor boundaries. All 106 native
+  tests and warning-free workspace Clippy pass. Real native debug/source screenshots
+  show the alias-qualified row, running excerpt and navigation control.
+- Studio's game-member picker now provides independent embedded source/manifest/
+  asset views while Save, Check and Run retain the complete game. Switching keeps
+  unsaved code (including compiler-invalid drafts), exact untouched child source,
+  per-member source selection and alias-scoped asset undo/redo; malformed raw JSON
+  or unapplied manifest drafts block switching safely. Running titles come from
+  the admitted active member rather than whichever cartridge is being edited.
+  Two new integration tests exercise these behaviours; all 103 native tests pass.
+  Inspected real native screenshots at 1280×800 and 900×600 show both member views,
+  and Run from the selected child starts main. The complete gate passes: 275
+  runtime, 117 core and 25 CLI tests, all format/lint/type/Clippy/build checks,
+  nine unchanged raw/PNG pairs and 120 Linux packaged frames without PATH.
+  Alias-qualified source breakpoints/navigation, composition controls and complete
+  export remain open; the multi-cart acceptance row remains open.
+- Native Studio/player now prepare every member through shared Rust and load one
+  whole-game host command, without an entry-only fallback. Frames carry global and
+  local time, producing alias/ID and next active context; snapshots bind the whole
+  game. Studio preloads every admitted ID's bounded disk save and writes successful
+  release commits to the admitted producer, never the editable project's current
+  ID or a newly active target. Six new Rust process/Studio tests exercise release
+  and source-stepped transitions, held-input release barriers, deferred target boot,
+  exact replay recording, cross-cart checkpoint restore, same-path/same-symbol-ID
+  debugger watches, save preload/isolation and invalid unused members. Bundle
+  editing, alias-qualified source navigation and complete export remain open.
+- Deferred loads now publish their separate boot framebuffer before frame zero in
+  release and full-frame debug execution. Two real compiled MODL regressions
+  reproduce the original failure, compare eager/loaded pixels, commands and work,
+  and verify checkpoint replay. Capture resets also prevent restored boot events
+  from mutating a previously returned debug trace. All 274 runtime tests (42 files),
+  including the 41 targeted scheduler/control/hardware tests, lint/types and rebuilt
+  production hosts pass.
+- CLI `pack`/`check`/`watch`/`info --source` and headless play now admit whole games
+  through shared Rust preparation and the production scheduler. Three new CLI
+  integrations exercise a shipping bundle larger than one ROM (each member still
+  <1 MiB), source/packed equivalence, exact per-ID save values, all 32 real MODL
+  members, failed-frame save/transition isolation and invalid unused dependencies
+  without Node. The full gate passes: 272 runtime tests, 117 core unit/integrations,
+  95 native tests, 25 CLI integrations, all format/lint/type/Clippy/build checks,
+  nine reproducible raw/PNG pairs and 120 packaged Linux frames without PATH.
+  Current headless envelopes/results
+  are revision 2, with member-tagged output, whole-game identity/state, per-ID save
+  hashes and a separately identity/mode-bound snapshot hash. State assertions
+  exclude only identity/mode so embedded tests need no self-referential source
+  hash; canonical typed bytes use tagged hex instead of huge temporary arrays.
+  The replay audit proves all original cartridge bytes, input hashes, work peaks,
+  final/checkpoint pixels, audio commands and PCM unchanged; only the three state
+  hashes are refreshed for the new whole-game representation. Native adapters,
+  bundle-aware editing/debugging/export and final cross-host QA remain open.
+- Scheduler/host-handoff checkpoint passes the complete `scripts/check.sh` gate:
+  270 runtime tests, 117 core unit/integration tests, 95 native tests, 22 CLI
+  integrations, formatting/lint/types, warning-free all-feature workspace Clippy,
+  build, nine reproducible raw/PNG pairs and 120 Linux packaged frames with bundled
+  Node and no PATH dependency. Existing cartridge/replay identities are unchanged.
+  The multi-cart acceptance row remains open for actual CLI/Studio/host wiring.
+- The host game loader validates the shared Rust payload, including every unused
+  asset and save identity, before importing code; all member factories must exist
+  before main boots. Eight tests cover real release/debug programs, per-alias
+  debugger metadata, checkpoints across loads, invalid unused members, malformed
+  source/byte transport, prototype-named file keys and pre-allocation aggregate
+  data bounds. The loader/scheduler's combined 26 tests, lint and types pass.
+  Native/headless command-handler integration is the next unfinished step.
+- Shared Rust host preparation is implemented in `runtime_game.rs`: every admitted
+  member is compiled in one mode with its own symbols/source map, declared data,
+  manifest and logical ROM, plus the whole-game identity. Four tests verify both
+  modes/all 32 members, exact ROM/asset transport, deterministic serialization,
+  independently mapped identical module paths, source/comment identity binding,
+  authoring-file exclusion and the existing 2 MiB compiled-source transport bound.
+  All core tests and warning-free core Clippy pass. This is the common handoff
+  for the pending native/headless adapter integration, not completion of that row.
+- The production whole-game scheduler is implemented with 18 tests, including
+  real release/debug MODL factories: completed-frame-only loads/reloads, deferred
+  destination boot, one global frame/input timeline, explicit parameter transfer,
+  per-ID committed saves, all-32-member cycling and checkpoint restoration.
+  Compatible data reloads preserve state/tasks, RAM, RNG, ROM/rate/display,
+  saves/menu and input history while resetting the asset bank and old voices.
+  Failed candidate restore leaves a live source continuation untouched; faults
+  cannot apply requests or persist their frame. All 262 runtime tests (41 files),
+  rebuilt production hosts, lint/types and formatting pass. Host adapters,
+  CLI/Studio authoring/debug integration and
+  cross-host acceptance verification remain open; the multi-cart row stays open.
 - A replayable input-owner barrier is implemented for scheduler integration:
   after a cartridge load, held buttons on all four ports and pointer presses stay
   blocked until release; unrelated fresh controls, hover and explicit menu events

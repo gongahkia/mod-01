@@ -1,0 +1,37 @@
+state ticks: Int = 0
+state bank: Int = 0
+state pulses: Int = 0
+task clock():
+  while true:
+    pulses += 1
+    mem_write(3, pulses)
+    wait 2f
+on start:
+  assert cart_parameter() == "reload", "reload parameter"
+  assert mem_read(0) == 0, "start must not rerun after reload"
+  mem_write(0, 91)
+  save_set_int("visits", save_get_int("visits", 0) + 1)
+  menu_item(1, "DONOR")
+  menu_item(2, "OWN ASSETS")
+  start clock()
+on menu(action: Int):
+  if action == 1:
+    reload_assets("donor")
+    bank = 1
+  elif action == 2:
+    reload_assets("main")
+    bank = 0
+on update:
+  ticks += 1
+  assert mem_read(1048576) == 11, "reload preserves executable ROM"
+  assert mem_read(328220) == 60, "reload preserves update rate"
+  mem_write(1, ticks)
+  mem_write(2, rng_int(0, 255))
+  assert mem_read(0) == 91, "retained RAM"
+on draw:
+  assert visual_id("hero") == 0, "same asset name and kind"
+  assert mem_read(2162688) == 1 or mem_read(2162688) == 7, "admitted asset bank"
+  clear(1)
+  mem_copy(102400, 2162688, 1)
+  if btnp(pad1, a):
+    pixel(2, 0, 9)

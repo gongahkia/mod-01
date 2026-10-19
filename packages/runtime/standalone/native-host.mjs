@@ -1,31 +1,6 @@
 import { createInterface } from 'node:readline';
 import { deserialize, serialize } from 'node:v8';
-//#region src/errors.ts
-var RuntimeFault = class extends Error {
-  code;
-  sourceSpan;
-  constructor(code, message, sourceSpan) {
-    super(message);
-    this.name = 'RuntimeFault';
-    this.code = code;
-    this.sourceSpan = sourceSpan;
-  }
-};
-var BudgetExceeded = class extends RuntimeFault {
-  used;
-  limit;
-  constructor(used, limit, sourceSpan) {
-    super(
-      'M019001',
-      `frame used ${String(used)} synthetic work units; limit is ${String(limit)}`,
-      sourceSpan,
-    );
-    this.name = 'BudgetExceeded';
-    this.used = used;
-    this.limit = limit;
-  }
-};
-//#endregion
+import { createHash } from 'node:crypto';
 //#region src/palette.json
 var palette_default = [
   [23, 20, 31],
@@ -324,205 +299,31 @@ var MASTER_PALETTE_RGBA = Object.freeze(
   ]),
 );
 //#endregion
-//#region src/budget.ts
-function isWorkBudgetSnapshot(value) {
-  if (
-    !isRecord$8(value) ||
-    Object.keys(value).length !== 4 ||
-    value.revision !== 1 ||
-    typeof value.limit !== 'number' ||
-    !Number.isSafeInteger(value.limit) ||
-    value.limit < 1 ||
-    value.limit > HARDWARE.workUnitsPerFrame ||
-    typeof value.used !== 'number' ||
-    !Number.isSafeInteger(value.used) ||
-    value.used < 0 ||
-    !Array.isArray(value.attribution) ||
-    value.attribution.length > HARDWARE.workUnitsPerFrame + 1
-  )
-    return false;
-  let total = 0;
-  let previousUnits = Infinity;
-  let previousStart = -1;
-  const spans = /* @__PURE__ */ new Set();
-  for (const entry of value.attribution) {
-    if (
-      !isRecord$8(entry) ||
-      Object.keys(entry).length !== 2 ||
-      typeof entry.units !== 'number' ||
-      !Number.isSafeInteger(entry.units) ||
-      entry.units < 0 ||
-      entry.units > value.used - total ||
-      !isRecord$8(entry.sourceSpan) ||
-      Object.keys(entry.sourceSpan).length !== 2 ||
-      typeof entry.sourceSpan.start !== 'number' ||
-      !Number.isSafeInteger(entry.sourceSpan.start) ||
-      entry.sourceSpan.start < 0 ||
-      typeof entry.sourceSpan.end !== 'number' ||
-      !Number.isSafeInteger(entry.sourceSpan.end) ||
-      entry.sourceSpan.end < entry.sourceSpan.start ||
-      entry.units > previousUnits ||
-      (entry.units === previousUnits && entry.sourceSpan.start < previousStart)
-    )
-      return false;
-    const key = `${String(entry.sourceSpan.start)}:${String(entry.sourceSpan.end)}`;
-    if (spans.has(key)) return false;
-    spans.add(key);
-    total += entry.units;
-    previousUnits = entry.units;
-    previousStart = entry.sourceSpan.start;
-  }
-  return total === value.used;
-}
-function isRecord$8(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-/** Per-frame synthetic execution budget and source-span attribution. */
-var WorkBudget = class {
-  frameLimit;
-  usedUnits = 0;
-  bySpan = /* @__PURE__ */ new Map();
-  constructor(frameLimit) {
-    if (
-      !Number.isSafeInteger(frameLimit) ||
-      frameLimit <= 0 ||
-      frameLimit > HARDWARE.workUnitsPerFrame
-    )
-      throw new RangeError('work-unit limit must be an integer between 1 and 50,000');
-    this.frameLimit = frameLimit;
-  }
-  get limit() {
-    return this.frameLimit;
-  }
-  get used() {
-    return this.usedUnits;
-  }
-  beginFrame() {
-    this.usedUnits = 0;
-    this.bySpan.clear();
-  }
-  snapshot() {
-    return structuredClone({
-      revision: 1,
-      limit: this.frameLimit,
-      used: this.usedUnits,
-      attribution: this.attribution(),
-    });
-  }
-  restore(value) {
-    if (!isWorkBudgetSnapshot(value) || value.limit !== this.frameLimit)
-      throw new TypeError('invalid or mismatched work-budget snapshot');
-    const entries = structuredClone(value.attribution);
-    this.usedUnits = value.used;
-    this.bySpan.clear();
-    for (const entry of entries)
-      this.bySpan.set(`${String(entry.sourceSpan.start)}:${String(entry.sourceSpan.end)}`, entry);
-  }
-  charge(units, sourceSpan) {
-    if (!Number.isInteger(units) || units < 0)
-      throw new RangeError('work-unit charge must be a non-negative finite integer');
-    const charged = Math.min(units, Number.MAX_SAFE_INTEGER - this.usedUnits);
-    this.usedUnits += charged;
-    const key = `${String(sourceSpan.start)}:${String(sourceSpan.end)}`;
-    const previous = this.bySpan.get(key);
-    this.bySpan.set(key, {
-      sourceSpan,
-      units: (previous?.units ?? 0) + charged,
-    });
-    if (charged !== units || this.usedUnits > this.frameLimit)
-      throw new BudgetExceeded(this.usedUnits, this.frameLimit, sourceSpan);
-  }
-  attribution() {
-    return [...this.bySpan.values()].sort(
-      (left, right) => right.units - left.units || left.sourceSpan.start - right.sourceSpan.start,
-    );
+//#region src/errors.ts
+var RuntimeFault = class extends Error {
+  code;
+  sourceSpan;
+  constructor(code, message, sourceSpan) {
+    super(message);
+    this.name = 'RuntimeFault';
+    this.code = code;
+    this.sourceSpan = sourceSpan;
   }
 };
-//#endregion
-//#region src/font.ts
-var BITMAP_FONT = Object.freeze({
-  glyphWidth: 5,
-  glyphHeight: 7,
-  advanceX: 6,
-  advanceY: 8,
-});
-var GLYPHS = Object.freeze({
-  ' ': [0, 0, 0, 0, 0, 0, 0],
-  '!': [4, 4, 4, 4, 4, 0, 4],
-  '"': [10, 10, 10, 0, 0, 0, 0],
-  '#': [10, 31, 10, 10, 31, 10, 0],
-  $: [4, 15, 20, 14, 5, 30, 4],
-  '%': [25, 26, 4, 4, 11, 19, 0],
-  '&': [12, 18, 20, 8, 21, 18, 13],
-  "'": [4, 4, 8, 0, 0, 0, 0],
-  '(': [2, 4, 8, 8, 8, 4, 2],
-  ')': [8, 4, 2, 2, 2, 4, 8],
-  '*': [0, 21, 14, 31, 14, 21, 0],
-  '+': [0, 4, 4, 31, 4, 4, 0],
-  ',': [0, 0, 0, 0, 4, 4, 8],
-  '-': [0, 0, 0, 31, 0, 0, 0],
-  '.': [0, 0, 0, 0, 0, 12, 12],
-  '/': [1, 2, 2, 4, 8, 8, 16],
-  0: [14, 17, 19, 21, 25, 17, 14],
-  1: [4, 12, 4, 4, 4, 4, 14],
-  2: [14, 17, 1, 2, 4, 8, 31],
-  3: [30, 1, 1, 14, 1, 1, 30],
-  4: [2, 6, 10, 18, 31, 2, 2],
-  5: [31, 16, 16, 30, 1, 1, 30],
-  6: [14, 16, 16, 30, 17, 17, 14],
-  7: [31, 1, 2, 4, 8, 8, 8],
-  8: [14, 17, 17, 14, 17, 17, 14],
-  9: [14, 17, 17, 15, 1, 1, 14],
-  ':': [0, 12, 12, 0, 12, 12, 0],
-  ';': [0, 12, 12, 0, 4, 4, 8],
-  '<': [2, 4, 8, 16, 8, 4, 2],
-  '=': [0, 0, 31, 0, 31, 0, 0],
-  '>': [8, 4, 2, 1, 2, 4, 8],
-  '?': [14, 17, 1, 2, 4, 0, 4],
-  '@': [14, 17, 23, 21, 23, 16, 14],
-  A: [14, 17, 17, 31, 17, 17, 17],
-  B: [30, 17, 17, 30, 17, 17, 30],
-  C: [14, 17, 16, 16, 16, 17, 14],
-  D: [28, 18, 17, 17, 17, 18, 28],
-  E: [31, 16, 16, 30, 16, 16, 31],
-  F: [31, 16, 16, 30, 16, 16, 16],
-  G: [14, 17, 16, 23, 17, 17, 15],
-  H: [17, 17, 17, 31, 17, 17, 17],
-  I: [14, 4, 4, 4, 4, 4, 14],
-  J: [7, 2, 2, 2, 2, 18, 12],
-  K: [17, 18, 20, 24, 20, 18, 17],
-  L: [16, 16, 16, 16, 16, 16, 31],
-  M: [17, 27, 21, 21, 17, 17, 17],
-  N: [17, 25, 25, 21, 19, 19, 17],
-  O: [14, 17, 17, 17, 17, 17, 14],
-  P: [30, 17, 17, 30, 16, 16, 16],
-  Q: [14, 17, 17, 17, 21, 18, 13],
-  R: [30, 17, 17, 30, 20, 18, 17],
-  S: [15, 16, 16, 14, 1, 1, 30],
-  T: [31, 4, 4, 4, 4, 4, 4],
-  U: [17, 17, 17, 17, 17, 17, 14],
-  V: [17, 17, 17, 17, 17, 10, 4],
-  W: [17, 17, 17, 21, 21, 21, 10],
-  X: [17, 17, 10, 4, 10, 17, 17],
-  Y: [17, 17, 10, 4, 4, 4, 4],
-  Z: [31, 1, 2, 4, 8, 16, 31],
-  '[': [14, 8, 8, 8, 8, 8, 14],
-  '\\': [16, 8, 8, 4, 2, 2, 1],
-  ']': [14, 2, 2, 2, 2, 2, 14],
-  '^': [4, 10, 17, 0, 0, 0, 0],
-  _: [0, 0, 0, 0, 0, 0, 31],
-  '`': [8, 4, 2, 0, 0, 0, 0],
-  '{': [3, 4, 4, 24, 4, 4, 3],
-  '|': [4, 4, 4, 4, 4, 4, 4],
-  '}': [24, 4, 4, 3, 4, 4, 24],
-  '~': [0, 0, 9, 22, 0, 0, 0],
-});
-var FALLBACK = GLYPHS['?'];
-/** Lowercase has a compact small-cap treatment in revision 1 of the original console font. */
-function glyphRows(character) {
-  if (character.length !== 1) return FALLBACK;
-  return GLYPHS[character] ?? GLYPHS[character.toUpperCase()] ?? FALLBACK;
-}
+var BudgetExceeded = class extends RuntimeFault {
+  used;
+  limit;
+  constructor(used, limit, sourceSpan) {
+    super(
+      'M019001',
+      `frame used ${String(used)} synthetic work units; limit is ${String(limit)}`,
+      sourceSpan,
+    );
+    this.name = 'BudgetExceeded';
+    this.used = used;
+    this.limit = limit;
+  }
+};
 //#endregion
 //#region src/bus.ts
 var MEMORY = Object.freeze({
@@ -770,6 +571,755 @@ var MemoryBus = class {
       );
   }
 };
+//#endregion
+//#region src/audio.ts
+function isSynthSnapshot(value) {
+  if (
+    !audioRecord(value) ||
+    Object.keys(value).length !== 5 ||
+    value.revision !== 1 ||
+    !audioCounter(value.frame) ||
+    !audioCounter(value.nextSequence) ||
+    value.nextSequence < 1 ||
+    !denseAudioArray(value.voices) ||
+    value.voices.length !== HARDWARE.audioVoices
+  )
+    return false;
+  const nextSequence = value.nextSequence;
+  if (!value.voices.every((voice, slot) => isVoice(voice, slot, nextSequence))) return false;
+  return (
+    value.tracker === null ||
+    (audioRecord(value.tracker) &&
+      Object.keys(value.tracker).length === 4 &&
+      typeof value.tracker.music === 'string' &&
+      value.tracker.music.length > 0 &&
+      value.tracker.music.length <= HARDWARE.cartridgeCapacityBytes &&
+      audioCounter(value.tracker.orderIndex) &&
+      audioCounter(value.tracker.row) &&
+      audioCounter(value.tracker.frameInRow))
+  );
+}
+function isVoice(voice, slot, nextSequence) {
+  return (
+    audioRecord(voice) &&
+    Object.keys(voice).length === 9 &&
+    typeof voice.active === 'boolean' &&
+    voice.slot === slot &&
+    typeof voice.sound === 'string' &&
+    voice.sound.length <= HARDWARE.cartridgeCapacityBytes &&
+    audioNumber(voice.note, 0, 127) &&
+    audioNumber(voice.volumeScale, 0, 1) &&
+    audioCounter(voice.ageFrames) &&
+    audioNumber(voice.phase, 0, 1) &&
+    voice.phase < 1 &&
+    audioCounter(voice.noiseState) &&
+    voice.noiseState > 0 &&
+    voice.noiseState <= 4294967295 &&
+    audioCounter(voice.sequence) &&
+    voice.sequence < nextSequence
+  );
+}
+function audioCounter(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+function audioNumber(value, minimum, maximum) {
+  return (
+    typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
+  );
+}
+function audioRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** Validated oscillator and tracker data. Arbitrary PCM samples are intentionally unrepresentable. */
+var AudioAssetStore = class {
+  entries = /* @__PURE__ */ new Map();
+  ordered;
+  ids = /* @__PURE__ */ new Map();
+  descriptors;
+  constructor(assets = []) {
+    for (const asset of assets) {
+      validateAudioAsset(asset);
+      if (this.entries.has(asset.name))
+        throw new TypeError(`duplicate audio asset '${asset.name}'`);
+      this.entries.set(asset.name, structuredClone(asset));
+    }
+    for (const asset of this.entries.values()) {
+      if (asset.kind !== 'music') continue;
+      for (const pattern of Object.values(asset.patterns))
+        for (const row of pattern.rows)
+          for (const cell of row)
+            if (cell !== null && this.entries.get(cell.sound)?.kind !== 'sound')
+              throw new TypeError(`music '${asset.name}' references missing sound '${cell.sound}'`);
+    }
+    this.ordered = [...this.entries.values()].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    );
+    this.descriptors = new Uint8Array(this.ordered.length * MEMORY.audioAssetStride);
+    const view = new DataView(this.descriptors.buffer);
+    for (const [id, asset] of this.ordered.entries()) {
+      this.ids.set(asset.name, id);
+      const fields =
+        asset.kind === 'sound'
+          ? [
+              1,
+              ['pulse', 'triangle', 'saw', 'noise', 'wavetable'].indexOf(asset.waveform) + 1,
+              asset.note,
+              asset.durationFrames,
+              asset.envelope.releaseFrames,
+              0,
+              0,
+              0,
+            ]
+          : [2, 0, 0, 0, 0, asset.framesPerRow, asset.order.length, Number(asset.loop)];
+      for (const [field, value] of fields.entries())
+        view.setUint32(id * MEMORY.audioAssetStride + field * 4, value, true);
+    }
+  }
+  get(name) {
+    return this.entries.get(name);
+  }
+  id(name) {
+    return this.ids.get(name) ?? -1;
+  }
+  byId(id) {
+    return this.ordered[id];
+  }
+  get count() {
+    return this.ordered.length;
+  }
+  memoryRegions() {
+    return this.descriptors.length === 0
+      ? []
+      : [
+          {
+            name: 'audio asset descriptors',
+            address: MEMORY.audioAssets,
+            bytes: this.descriptors,
+            writable: false,
+          },
+        ];
+  }
+};
+/** Eight-voice deterministic synthesizer and eight-channel order/pattern tracker. */
+var Synthesizer = class {
+  assets;
+  voices;
+  frame = 0;
+  nextSequence = 1;
+  tracker = null;
+  constructor(assets = new AudioAssetStore()) {
+    this.assets = assets;
+    this.voices = Array.from({ length: HARDWARE.audioVoices }, (_, slot) => emptyVoice(slot));
+  }
+  executeFrame(commands) {
+    for (const command of commands) this.executeCommand(command);
+    return this.finishFrame();
+  }
+  finishFrame() {
+    if (this.frame === Number.MAX_SAFE_INTEGER)
+      throw new RuntimeFault('M019012', 'audio-frame counter is exhausted', {
+        start: 0,
+        end: 0,
+      });
+    this.advanceTracker();
+    const sampleCount = HARDWARE.audioSampleRate / HARDWARE.frameRate;
+    const left = new Float32Array(sampleCount);
+    const right = new Float32Array(sampleCount);
+    for (const voice of this.voices) if (voice.active) this.mixVoice(voice, left, right);
+    for (const voice of this.voices)
+      if (voice.active) {
+        voice.ageFrames += 1;
+        const sound = this.assets.get(voice.sound);
+        if (
+          sound?.kind !== 'sound' ||
+          voice.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames
+        )
+          voice.active = false;
+      }
+    const inspection = this.inspectTracker();
+    this.frame += 1;
+    return {
+      left,
+      right,
+      activeVoices: this.voices.filter((voice) => voice.active).length,
+      tracker: inspection,
+    };
+  }
+  snapshot() {
+    return structuredClone({
+      revision: 1,
+      frame: this.frame,
+      nextSequence: this.nextSequence,
+      voices: this.voices,
+      tracker: this.tracker,
+    });
+  }
+  restore(snapshot) {
+    if (!isSynthSnapshot(snapshot)) throw new TypeError('invalid MOD-01 synthesizer snapshot');
+    for (const voice of snapshot.voices) {
+      const sound = this.assets.get(voice.sound);
+      if ((voice.active || voice.sound !== '') && sound?.kind !== 'sound')
+        throw new TypeError('snapshot references a missing sound');
+      if (
+        voice.active &&
+        sound?.kind === 'sound' &&
+        voice.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames
+      )
+        throw new TypeError('snapshot contains a voice beyond its sound lifetime');
+    }
+    if (snapshot.tracker !== null) {
+      const tracker = snapshot.tracker;
+      const music = this.assets.get(tracker.music);
+      if (
+        music?.kind !== 'music' ||
+        !validTrackerPosition(music, tracker.orderIndex, tracker.row, tracker.frameInRow)
+      )
+        throw new TypeError('snapshot references an invalid tracker position');
+    }
+    this.frame = snapshot.frame;
+    this.nextSequence = snapshot.nextSequence;
+    for (let index = 0; index < this.voices.length; index += 1)
+      Object.assign(this.voices[index], structuredClone(snapshot.voices[index]));
+    this.tracker = structuredClone(snapshot.tracker);
+  }
+  inspectVoices() {
+    return structuredClone(this.voices);
+  }
+  /** Native instrument audition uses the tracker's real note override and voice allocator. */
+  audition(soundName, note, volumeScale = 1) {
+    if (!audioInteger(note, 0, 127) || !audioNumber(volumeScale, 0, 1))
+      throw new RangeError('audition requires a note 0-127 and volume 0-1');
+    this.trigger(soundName, note, volumeScale);
+  }
+  inspectTracker() {
+    return this.tracker === null ? null : { ...this.tracker };
+  }
+  /** Start or seek the real sequencer without resetting voices or the synth clock. */
+  playMusic(name, orderIndex = 0, row = 0) {
+    const music = this.assets.get(name);
+    if (music?.kind !== 'music') throw new TypeError(`missing Music asset '${name}'`);
+    if (!validTrackerPosition(music, orderIndex, row, 0))
+      throw new RangeError('invalid tracker order or row');
+    this.tracker = {
+      music: name,
+      orderIndex,
+      row,
+      frameInRow: 0,
+    };
+  }
+  memoryRegions() {
+    return [
+      ...this.assets.memoryRegions(),
+      {
+        name: 'synth status',
+        address: MEMORY.audio,
+        length: 32,
+        writable: false,
+        readByte: (offset) => this.statusByte(offset),
+      },
+      {
+        name: 'tracker controls',
+        address: MEMORY.audioTracker,
+        length: 16,
+        writable: true,
+        readByte: (offset) => this.trackerByte(offset),
+        prepareWrite: (offset, bytes) => this.prepareTrackerWrite(offset, bytes),
+      },
+      ...this.voices.flatMap((voice) => [
+        {
+          name: `voice ${String(voice.slot)} controls`,
+          address: MEMORY.audioVoices + voice.slot * MEMORY.voiceStride,
+          length: 48,
+          writable: true,
+          readByte: (offset) => this.voiceByte(voice, offset),
+          prepareWrite: (offset, bytes) => this.prepareVoiceWrite(voice, offset, bytes),
+        },
+        {
+          name: `voice ${String(voice.slot)} allocation`,
+          address: MEMORY.audioVoices + voice.slot * MEMORY.voiceStride + 48,
+          length: 16,
+          writable: false,
+          readByte: (offset) => (offset < 8 ? integerByte(voice.sequence, offset) : 0),
+        },
+      ]),
+    ];
+  }
+  statusByte(offset) {
+    if (offset < 8) return integerByte(this.frame, offset);
+    if (offset < 16) return integerByte(this.nextSequence, offset - 8);
+    if (offset === 16) return this.voices.filter((voice) => voice.active).length;
+    if (offset === 17) return HARDWARE.audioVoices;
+    if (offset === 18) return HARDWARE.trackerChannels;
+    if (offset === 19) return Number(this.tracker !== null);
+    if (offset < 24) return integerByte(HARDWARE.audioSampleRate, offset - 20);
+    if (offset < 28) return integerByte(this.assets.count, offset - 24);
+    return integerByte(MEMORY.audioAssets, offset - 28);
+  }
+  trackerByte(offset) {
+    if (this.tracker === null) return 0;
+    return integerByte(
+      [
+        this.assets.id(this.tracker.music) + 1,
+        this.tracker.orderIndex,
+        this.tracker.row,
+        this.tracker.frameInRow,
+      ][Math.floor(offset / 4)] ?? 0,
+      offset % 4,
+    );
+  }
+  prepareTrackerWrite(offset, bytes) {
+    const staged = Uint8Array.from({ length: 16 }, (_, index) => this.trackerByte(index));
+    staged.set(bytes, offset);
+    const view = new DataView(staged.buffer);
+    const id = view.getUint32(0, true);
+    if (id === 0)
+      return () => {
+        this.tracker = null;
+      };
+    const music = this.assets.byId(id - 1);
+    if (music?.kind !== 'music') return void 0;
+    const next = {
+      music: music.name,
+      orderIndex: view.getUint32(4, true),
+      row: view.getUint32(8, true),
+      frameInRow: view.getUint32(12, true),
+    };
+    if (!validTrackerPosition(music, next.orderIndex, next.row, next.frameInRow)) return void 0;
+    return () => {
+      this.tracker = next;
+    };
+  }
+  voiceByte(voice, offset) {
+    if (offset === 0) return Number(voice.active);
+    if (offset < 4) return 0;
+    if (offset < 8) return integerByte(this.assets.id(voice.sound) + 1, offset - 4);
+    if (offset < 16) return floatByte(voice.note, offset - 8);
+    if (offset < 24) return floatByte(voice.volumeScale, offset - 16);
+    if (offset < 32) return integerByte(voice.ageFrames, offset - 24);
+    if (offset < 40) return floatByte(voice.phase, offset - 32);
+    if (offset < 44) return integerByte(voice.noiseState, offset - 40);
+    return 0;
+  }
+  prepareVoiceWrite(voice, offset, bytes) {
+    const staged = Uint8Array.from({ length: 48 }, (_, index) => this.voiceByte(voice, index));
+    staged.set(bytes, offset);
+    if (staged[0] !== 0 && staged[0] !== 1) return void 0;
+    if ([1, 2, 3, 44, 45, 46, 47].some((index) => staged[index] !== 0)) return void 0;
+    const view = new DataView(staged.buffer);
+    const id = view.getUint32(4, true);
+    const sound = this.assets.byId(id - 1);
+    if (id !== 0 && sound?.kind !== 'sound') return void 0;
+    const next = {
+      ...voice,
+      active: staged[0] === 1,
+      sound: sound?.name ?? '',
+      note: view.getFloat64(8, true),
+      volumeScale: view.getFloat64(16, true),
+      ageFrames: Number(view.getBigUint64(24, true)),
+      phase: view.getFloat64(32, true),
+      noiseState: view.getUint32(40, true),
+    };
+    if (
+      !isVoice(next, voice.slot, this.nextSequence) ||
+      (next.active &&
+        (sound?.kind !== 'sound' ||
+          next.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames))
+    )
+      return void 0;
+    return () => {
+      Object.assign(voice, next);
+    };
+  }
+  executeCommand(command) {
+    switch (command.name) {
+      case 'sfx': {
+        const [handle] = expectArguments$1(command, 1);
+        this.trigger(readAssetName$1(handle, 'Sound'), void 0, 1, command.sourceSpan);
+        return;
+      }
+      case 'music': {
+        const [handle] = expectArguments$1(command, 1);
+        const name = readAssetName$1(handle, 'Music');
+        this.playMusic(name);
+        return;
+      }
+      case 'music_stop':
+        expectArguments$1(command, 0);
+        this.tracker = null;
+        return;
+      default:
+        throw new TypeError(`unknown audio command '${command.name}'`);
+    }
+  }
+  trigger(
+    soundName,
+    noteOverride,
+    volumeScale = 1,
+    sourceSpan = {
+      start: 0,
+      end: 0,
+    },
+  ) {
+    const sound = this.assets.get(soundName);
+    if (sound?.kind !== 'sound') throw new TypeError(`missing Sound asset '${soundName}'`);
+    if (this.nextSequence === Number.MAX_SAFE_INTEGER)
+      throw new RuntimeFault('M019012', 'voice-allocation counter is exhausted', sourceSpan);
+    const voice =
+      this.voices.find((candidate) => !candidate.active) ??
+      this.voices.reduce((oldest, candidate) =>
+        candidate.sequence < oldest.sequence ? candidate : oldest,
+      );
+    Object.assign(voice, {
+      active: true,
+      sound: soundName,
+      note: noteOverride ?? sound.note,
+      volumeScale,
+      ageFrames: 0,
+      phase: 0,
+      noiseState: nonZeroNoiseSeed(this.frame, voice.slot, this.nextSequence),
+      sequence: this.nextSequence,
+    });
+    this.nextSequence += 1;
+  }
+  advanceTracker() {
+    const tracker = this.tracker;
+    if (tracker === null) return;
+    const music = this.assets.get(tracker.music);
+    if (music?.kind !== 'music') {
+      this.tracker = null;
+      return;
+    }
+    if (tracker.frameInRow === 0) {
+      const patternName = music.order[tracker.orderIndex];
+      (patternName === void 0 ? void 0 : music.patterns[patternName])?.rows[tracker.row]?.forEach(
+        (cell) => {
+          if (cell !== null) this.trigger(cell.sound, cell.note, cell.volume ?? 1);
+        },
+      );
+    }
+    tracker.frameInRow += 1;
+    if (tracker.frameInRow < music.framesPerRow) return;
+    tracker.frameInRow = 0;
+    tracker.row += 1;
+    const patternName = music.order[tracker.orderIndex];
+    const pattern = patternName === void 0 ? void 0 : music.patterns[patternName];
+    if (pattern !== void 0 && tracker.row < pattern.rows.length) return;
+    tracker.row = 0;
+    tracker.orderIndex += 1;
+    if (tracker.orderIndex >= music.order.length) {
+      if (music.loop) tracker.orderIndex = 0;
+      else this.tracker = null;
+    }
+  }
+  mixVoice(voice, left, right) {
+    const sound = this.assets.get(voice.sound);
+    if (sound?.kind !== 'sound') {
+      voice.active = false;
+      return;
+    }
+    const frameEnvelope = envelopeAt(sound, voice.ageFrames);
+    const pan = Math.max(-1, Math.min(1, sound.pan));
+    const leftGain = (1 - pan) / 2;
+    const rightGain = (1 + pan) / 2;
+    const phaseStep =
+      noteFrequency(
+        voice.note +
+          sound.pitch.slideSemitonesPerFrame * voice.ageFrames +
+          triangleLfo(voice.ageFrames, sound.pitch.vibratoPeriodFrames) *
+            sound.pitch.vibratoDepthSemitones,
+      ) / HARDWARE.audioSampleRate;
+    for (let index = 0; index < left.length; index += 1) {
+      const sample =
+        oscillatorValue(sound, voice) * frameEnvelope * sound.volume * voice.volumeScale * 0.24;
+      left[index] = clampSample((left[index] ?? 0) + sample * leftGain);
+      right[index] = clampSample((right[index] ?? 0) + sample * rightGain);
+      voice.phase = (voice.phase + phaseStep) % 1;
+    }
+  }
+};
+function validTrackerPosition(music, orderIndex, row, frameInRow) {
+  if (
+    !audioCounter(orderIndex) ||
+    !audioCounter(row) ||
+    !audioCounter(frameInRow) ||
+    frameInRow >= music.framesPerRow
+  )
+    return false;
+  const name = music.order[orderIndex];
+  return name !== void 0 && music.patterns[name]?.rows[row] !== void 0;
+}
+function emptyVoice(slot) {
+  return {
+    active: false,
+    slot,
+    sound: '',
+    note: 0,
+    volumeScale: 1,
+    ageFrames: 0,
+    phase: 0,
+    noiseState: 1,
+    sequence: 0,
+  };
+}
+function integerByte(value, offset) {
+  return Math.floor(value / 2 ** (offset * 8)) & 255;
+}
+function floatByte(value, offset) {
+  const view = /* @__PURE__ */ new DataView(/* @__PURE__ */ new ArrayBuffer(8));
+  view.setFloat64(0, value, true);
+  return view.getUint8(offset);
+}
+function validateAudioAsset(asset) {
+  if (!audioRecord(asset) || typeof asset.name !== 'string' || asset.name.length === 0)
+    throw new TypeError('audio assets require a nonempty name');
+  if (asset.kind === 'sound') {
+    if (
+      typeof asset.waveform !== 'string' ||
+      !['pulse', 'triangle', 'saw', 'noise', 'wavetable'].includes(asset.waveform) ||
+      !audioInteger(asset.note, 0, 127) ||
+      !audioInteger(asset.durationFrames, 1, 3600) ||
+      !audioNumber(asset.volume, 0, 1) ||
+      !audioNumber(asset.pan, -1, 1) ||
+      !validEnvelope(asset.envelope) ||
+      !validPitch(asset.pitch, asset.durationFrames + asset.envelope.releaseFrames)
+    )
+      throw new RangeError(`sound '${asset.name}' is outside MOD-01 limits`);
+    if (
+      asset.waveform === 'pulse' &&
+      (!audioNumber(asset.duty, 0, 1) || asset.duty === 0 || asset.duty === 1)
+    )
+      throw new RangeError(`pulse sound '${asset.name}' requires a duty between zero and one`);
+    if (
+      asset.waveform === 'wavetable' &&
+      (!denseAudioArray(asset.wavetable) ||
+        asset.wavetable.length < 4 ||
+        asset.wavetable.length > 32 ||
+        asset.wavetable.some((sample) => !audioNumber(sample, -1, 1)))
+    )
+      throw new RangeError(`wavetable sound '${asset.name}' requires 4-32 normalized entries`);
+    return;
+  }
+  if (
+    asset.kind !== 'music' ||
+    typeof asset.loop !== 'boolean' ||
+    !audioInteger(asset.framesPerRow, 1, 240) ||
+    !denseAudioArray(asset.order) ||
+    asset.order.length === 0 ||
+    !audioRecord(asset.patterns) ||
+    asset.order.some((name) => typeof name !== 'string' || !Object.hasOwn(asset.patterns, name))
+  )
+    throw new RangeError(`music '${asset.name}' has an invalid order list or tempo`);
+  for (const pattern of Object.values(asset.patterns)) {
+    if (
+      !audioRecord(pattern) ||
+      !denseAudioArray(pattern.rows) ||
+      pattern.rows.length === 0 ||
+      pattern.rows.length > 256
+    )
+      throw new RangeError(`music '${asset.name}' has an invalid pattern length`);
+    for (const row of pattern.rows) {
+      if (!denseAudioArray(row) || row.length !== HARDWARE.trackerChannels)
+        throw new RangeError(`music '${asset.name}' patterns must have eight channels`);
+      for (const cell of row)
+        if (
+          cell !== null &&
+          (!audioRecord(cell) ||
+            !audioInteger(cell.note, 0, 127) ||
+            typeof cell.sound !== 'string' ||
+            cell.sound.length === 0 ||
+            (cell.volume !== void 0 && !audioNumber(cell.volume, 0, 1)))
+        )
+          throw new RangeError(`music '${asset.name}' contains an invalid note`);
+    }
+  }
+}
+function denseAudioArray(value) {
+  return (
+    Array.isArray(value) &&
+    Object.keys(value).length === value.length &&
+    Array.from(value.keys()).every((index) => Object.hasOwn(value, index))
+  );
+}
+function audioInteger(value, minimum, maximum) {
+  return audioNumber(value, minimum, maximum) && Number.isSafeInteger(value);
+}
+function validEnvelope(envelope) {
+  return (
+    audioRecord(envelope) &&
+    [envelope.attackFrames, envelope.decayFrames, envelope.releaseFrames].every((value) =>
+      audioInteger(value, 0, 3600),
+    ) &&
+    audioNumber(envelope.sustainLevel, 0, 1)
+  );
+}
+function validPitch(pitch, lifetime) {
+  if (
+    !audioRecord(pitch) ||
+    typeof pitch.slideSemitonesPerFrame !== 'number' ||
+    !Number.isFinite(pitch.slideSemitonesPerFrame) ||
+    typeof pitch.vibratoDepthSemitones !== 'number' ||
+    !Number.isFinite(pitch.vibratoDepthSemitones) ||
+    !audioInteger(pitch.vibratoPeriodFrames, 0, 3600)
+  )
+    return false;
+  const excursion =
+    Math.abs(pitch.slideSemitonesPerFrame) * lifetime + Math.abs(pitch.vibratoDepthSemitones);
+  return Number.isFinite(excursion) && Number.isFinite(noteFrequency(127 + excursion));
+}
+function oscillatorValue(sound, voice) {
+  switch (sound.waveform) {
+    case 'pulse':
+      return voice.phase < (sound.duty ?? 0.5) ? 1 : -1;
+    case 'triangle':
+      return 1 - 4 * Math.abs(voice.phase - 0.5);
+    case 'saw':
+      return voice.phase * 2 - 1;
+    case 'noise':
+      voice.noiseState = xorshift(voice.noiseState);
+      return (voice.noiseState & 65535) / 32767 - 1;
+    case 'wavetable': {
+      const table = sound.wavetable ?? [0];
+      return table[Math.floor(voice.phase * table.length) % table.length] ?? 0;
+    }
+  }
+}
+function envelopeAt(sound, age) {
+  const envelope = sound.envelope;
+  if (envelope.attackFrames > 0 && age < envelope.attackFrames) return age / envelope.attackFrames;
+  const decayAge = age - envelope.attackFrames;
+  if (envelope.decayFrames > 0 && decayAge < envelope.decayFrames)
+    return 1 - (1 - envelope.sustainLevel) * (decayAge / envelope.decayFrames);
+  if (age < sound.durationFrames) return envelope.sustainLevel;
+  if (envelope.releaseFrames === 0) return 0;
+  return (
+    envelope.sustainLevel * Math.max(0, 1 - (age - sound.durationFrames) / envelope.releaseFrames)
+  );
+}
+function triangleLfo(frame, period) {
+  if (period === 0) return 0;
+  const phase = (frame % period) / period;
+  return 1 - 4 * Math.abs(phase - 0.5);
+}
+function noteFrequency(note) {
+  return 440 * 2 ** ((note - 69) / 12);
+}
+function xorshift(state) {
+  let value = state >>> 0;
+  value ^= value << 13;
+  value ^= value >>> 17;
+  value ^= value << 5;
+  return value >>> 0;
+}
+function nonZeroNoiseSeed(frame, slot, sequence) {
+  return ((frame + 1) * 2654435761 + (slot + 1) * 2246822507 + sequence) >>> 0 || 1;
+}
+function clampSample(sample) {
+  return Math.max(-1, Math.min(1, sample));
+}
+function expectArguments$1(command, count) {
+  if (command.arguments.length !== count)
+    throw new TypeError(
+      `${command.name} expected ${String(count)} arguments, received ${String(command.arguments.length)}`,
+    );
+  return [...command.arguments];
+}
+function readAssetName$1(value, kind) {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('name' in value) ||
+    typeof value.name !== 'string' ||
+    !('kind' in value) ||
+    value.kind !== kind
+  )
+    throw new TypeError(`expected a ${kind} asset handle`);
+  return value.name;
+}
+//#endregion
+//#region src/font.ts
+var BITMAP_FONT = Object.freeze({
+  glyphWidth: 5,
+  glyphHeight: 7,
+  advanceX: 6,
+  advanceY: 8,
+});
+var GLYPHS = Object.freeze({
+  ' ': [0, 0, 0, 0, 0, 0, 0],
+  '!': [4, 4, 4, 4, 4, 0, 4],
+  '"': [10, 10, 10, 0, 0, 0, 0],
+  '#': [10, 31, 10, 10, 31, 10, 0],
+  $: [4, 15, 20, 14, 5, 30, 4],
+  '%': [25, 26, 4, 4, 11, 19, 0],
+  '&': [12, 18, 20, 8, 21, 18, 13],
+  "'": [4, 4, 8, 0, 0, 0, 0],
+  '(': [2, 4, 8, 8, 8, 4, 2],
+  ')': [8, 4, 2, 2, 2, 4, 8],
+  '*': [0, 21, 14, 31, 14, 21, 0],
+  '+': [0, 4, 4, 31, 4, 4, 0],
+  ',': [0, 0, 0, 0, 4, 4, 8],
+  '-': [0, 0, 0, 31, 0, 0, 0],
+  '.': [0, 0, 0, 0, 0, 12, 12],
+  '/': [1, 2, 2, 4, 8, 8, 16],
+  0: [14, 17, 19, 21, 25, 17, 14],
+  1: [4, 12, 4, 4, 4, 4, 14],
+  2: [14, 17, 1, 2, 4, 8, 31],
+  3: [30, 1, 1, 14, 1, 1, 30],
+  4: [2, 6, 10, 18, 31, 2, 2],
+  5: [31, 16, 16, 30, 1, 1, 30],
+  6: [14, 16, 16, 30, 17, 17, 14],
+  7: [31, 1, 2, 4, 8, 8, 8],
+  8: [14, 17, 17, 14, 17, 17, 14],
+  9: [14, 17, 17, 15, 1, 1, 14],
+  ':': [0, 12, 12, 0, 12, 12, 0],
+  ';': [0, 12, 12, 0, 4, 4, 8],
+  '<': [2, 4, 8, 16, 8, 4, 2],
+  '=': [0, 0, 31, 0, 31, 0, 0],
+  '>': [8, 4, 2, 1, 2, 4, 8],
+  '?': [14, 17, 1, 2, 4, 0, 4],
+  '@': [14, 17, 23, 21, 23, 16, 14],
+  A: [14, 17, 17, 31, 17, 17, 17],
+  B: [30, 17, 17, 30, 17, 17, 30],
+  C: [14, 17, 16, 16, 16, 17, 14],
+  D: [28, 18, 17, 17, 17, 18, 28],
+  E: [31, 16, 16, 30, 16, 16, 31],
+  F: [31, 16, 16, 30, 16, 16, 16],
+  G: [14, 17, 16, 23, 17, 17, 15],
+  H: [17, 17, 17, 31, 17, 17, 17],
+  I: [14, 4, 4, 4, 4, 4, 14],
+  J: [7, 2, 2, 2, 2, 18, 12],
+  K: [17, 18, 20, 24, 20, 18, 17],
+  L: [16, 16, 16, 16, 16, 16, 31],
+  M: [17, 27, 21, 21, 17, 17, 17],
+  N: [17, 25, 25, 21, 19, 19, 17],
+  O: [14, 17, 17, 17, 17, 17, 14],
+  P: [30, 17, 17, 30, 16, 16, 16],
+  Q: [14, 17, 17, 17, 21, 18, 13],
+  R: [30, 17, 17, 30, 20, 18, 17],
+  S: [15, 16, 16, 14, 1, 1, 30],
+  T: [31, 4, 4, 4, 4, 4, 4],
+  U: [17, 17, 17, 17, 17, 17, 14],
+  V: [17, 17, 17, 17, 17, 10, 4],
+  W: [17, 17, 17, 21, 21, 21, 10],
+  X: [17, 17, 10, 4, 10, 17, 17],
+  Y: [17, 17, 10, 4, 4, 4, 4],
+  Z: [31, 1, 2, 4, 8, 16, 31],
+  '[': [14, 8, 8, 8, 8, 8, 14],
+  '\\': [16, 8, 8, 4, 2, 2, 1],
+  ']': [14, 2, 2, 2, 2, 2, 14],
+  '^': [4, 10, 17, 0, 0, 0, 0],
+  _: [0, 0, 0, 0, 0, 0, 31],
+  '`': [8, 4, 2, 0, 0, 0, 0],
+  '{': [3, 4, 4, 24, 4, 4, 3],
+  '|': [4, 4, 4, 4, 4, 4, 4],
+  '}': [24, 4, 4, 3, 4, 4, 24],
+  '~': [0, 0, 9, 22, 0, 0, 0],
+});
+var FALLBACK = GLYPHS['?'];
+/** Lowercase has a compact small-cap treatment in revision 1 of the original console font. */
+function glyphRows(character) {
+  if (character.length !== 1) return FALLBACK;
+  return GLYPHS[character] ?? GLYPHS[character.toUpperCase()] ?? FALLBACK;
+}
 //#endregion
 //#region src/visual-store.ts
 /** A single packed, little-endian visual image; all drawing views alias these bytes. */
@@ -1218,7 +1768,7 @@ function visualAssetBytes(asset) {
 function isGraphicsSnapshot(value) {
   const pixels = HARDWARE.width * HARDWARE.height;
   return (
-    isRecord$7(value) &&
+    isRecord$8(value) &&
     value.revision === 1 &&
     value.front instanceof Uint8Array &&
     value.front.length === pixels &&
@@ -1556,7 +2106,7 @@ var IndexedGraphics = class {
       case 'sprite': {
         const [handle, x, y] = command.arguments;
         this.drawSprite(
-          readAssetName$1(handle, 'Sprite'),
+          readAssetName(handle, 'Sprite'),
           expectInteger$1(x),
           expectInteger$1(y),
           state,
@@ -1566,7 +2116,7 @@ var IndexedGraphics = class {
       case 'animation': {
         const [handle, frame, x, y] = command.arguments;
         this.drawAnimation(
-          readAssetName$1(handle, 'Animation'),
+          readAssetName(handle, 'Animation'),
           expectInteger$1(frame),
           expectInteger$1(x),
           expectInteger$1(y),
@@ -1577,7 +2127,7 @@ var IndexedGraphics = class {
       case 'sprite_xform': {
         const [handle, x, y, scale, quarterTurns, flipX, flipY] = command.arguments;
         this.drawTransformedSprite(
-          readAssetName$1(handle, 'Sprite'),
+          readAssetName(handle, 'Sprite'),
           expectInteger$1(x),
           expectInteger$1(y),
           expectInteger$1(scale),
@@ -1592,7 +2142,7 @@ var IndexedGraphics = class {
         if (command.arguments.length !== 11)
           throw new TypeError('sprite_region expects eleven arguments');
         this.drawSpriteRegion(
-          readAssetName$1(command.arguments[0], 'Sprite'),
+          readAssetName(command.arguments[0], 'Sprite'),
           expectInteger$1(command.arguments[1]),
           expectInteger$1(command.arguments[2]),
           expectInteger$1(command.arguments[3]),
@@ -1610,7 +2160,7 @@ var IndexedGraphics = class {
         if (command.arguments.length !== 10)
           throw new TypeError('texture_line expects ten arguments');
         this.textureLine(
-          readAssetName$1(command.arguments[0], 'Sprite'),
+          readAssetName(command.arguments[0], 'Sprite'),
           expectInteger$1(command.arguments[1]),
           expectInteger$1(command.arguments[2]),
           expectInteger$1(command.arguments[3]),
@@ -1625,7 +2175,7 @@ var IndexedGraphics = class {
         return;
       case 'map': {
         const [handle, x, y] = command.arguments;
-        this.drawMap(readAssetName$1(handle, 'Map'), expectInteger$1(x), expectInteger$1(y), state);
+        this.drawMap(readAssetName(handle, 'Map'), expectInteger$1(x), expectInteger$1(y), state);
         return;
       }
       case 'raster_scroll':
@@ -1644,7 +2194,7 @@ var IndexedGraphics = class {
       case 'font_print': {
         const [handle, text, x, y, color] = command.arguments;
         this.printFont(
-          readAssetName$1(handle, 'Font'),
+          readAssetName(handle, 'Font'),
           expectText(text),
           expectInteger$1(x),
           expectInteger$1(y),
@@ -2111,7 +2661,7 @@ function validRemap(remap) {
     remap.every((color) => color < HARDWARE.paletteSize)
   );
 }
-function isRecord$7(value) {
+function isRecord$8(value) {
   return typeof value === 'object' && value !== null;
 }
 function identityRemap() {
@@ -2154,7 +2704,7 @@ function expectRemappableColor(value) {
     throw new RangeError('palette remap source must be between 0 and 31');
   return value;
 }
-function readAssetName$1(value, expectedKind) {
+function readAssetName(value, expectedKind) {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -2187,6 +2737,596 @@ function wrap(value, modulus) {
 function clampInt16(value) {
   return Math.max(-32768, Math.min(32767, value));
 }
+//#endregion
+//#region src/asset-codec.ts
+/** Bounded, data-only source bank sent to the console core for authoritative decoding. */
+function isRuntimeAssetSource(value) {
+  if (
+    !isRecord$7(value) ||
+    !isRecord$7(value.declarations) ||
+    !isRecord$7(value.files) ||
+    Array.isArray(value.declarations) ||
+    Array.isArray(value.files) ||
+    Object.keys(value).some((key) => !['declarations', 'files', 'displayPath'].includes(key)) ||
+    Object.keys(value.declarations).length > 4096 ||
+    Object.keys(value.files).length > 4096 ||
+    (value.displayPath !== void 0 &&
+      value.displayPath !== null &&
+      !canonicalAssetPath(value.displayPath))
+  )
+    return false;
+  let bytes = typeof value.displayPath === 'string' ? value.displayPath.length : 0;
+  for (const [path, data] of Object.entries(value.files)) {
+    if (!canonicalAssetPath(path) || !(data instanceof Uint8Array)) return false;
+    bytes += path.length + data.byteLength;
+    if (bytes > 16777216) return false;
+  }
+  for (const [name, declaration] of Object.entries(value.declarations)) {
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+      !isRecord$7(declaration) ||
+      Object.keys(declaration).length !== 2 ||
+      !canonicalAssetPath(declaration.path) ||
+      typeof declaration.kind !== 'string' ||
+      !['sprite', 'animation', 'tile_set', 'map', 'font', 'sound', 'music'].includes(
+        declaration.kind,
+      )
+    )
+      return false;
+    bytes += name.length + declaration.path.length + declaration.kind.length;
+    if (bytes > 16777216) return false;
+  }
+  return true;
+}
+function canonicalAssetPath(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 1024 &&
+    value
+      .split('/')
+      .every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..')
+  );
+}
+/** Decodes documented JSON asset files into validated hardware stores and query views. */
+function decodeRuntimeAssets(declarations, files, displayPath) {
+  const visual = [];
+  const audio = [];
+  for (const [name, declaration] of Object.entries(declarations).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  )) {
+    const bytes = files[declaration.path];
+    if (bytes === void 0) throw new TypeError(`asset '${name}' is missing '${declaration.path}'`);
+    const value = JSON.parse(new TextDecoder().decode(bytes));
+    switch (declaration.kind) {
+      case 'sprite':
+        visual.push(decodeSprite(name, value, false));
+        break;
+      case 'animation':
+        visual.push(decodeSprite(name, value, true));
+        break;
+      case 'tile_set':
+        visual.push(decodeTileSet(name, value));
+        break;
+      case 'map':
+        visual.push(decodeMap(name, value));
+        break;
+      case 'sound':
+        audio.push(decodeSound(name, value));
+        break;
+      case 'music':
+        audio.push(decodeMusic(name, value));
+        break;
+      case 'font':
+        visual.push(decodeFont(name, value));
+    }
+  }
+  const visualStore = new VisualAssetStore(visual);
+  new AudioAssetStore(audio);
+  const tileSets = new Map(
+    visual.filter((asset) => asset.kind === 'tile_set').map((asset) => [asset.name, asset]),
+  );
+  const maps = visual
+    .filter((asset) => asset.kind === 'map')
+    .map((asset) => ({
+      name: asset.name,
+      layers: asset.layers.map((layer) => {
+        const tileSet = tileSets.get(layer.tileSet);
+        if (tileSet === void 0)
+          throw new TypeError(`map '${asset.name}' references missing tile set '${layer.tileSet}'`);
+        return {
+          width: layer.width,
+          height: layer.height,
+          cells: layer.cells.slice(),
+          tileFlags: tileSet.flags.slice(),
+        };
+      }),
+    }));
+  const display = decodeDisplay(displayPath, files);
+  const visualBytes = visualStore.usedBytes + displayBytes(display);
+  if (visualBytes > HARDWARE.visualCapacityBytes)
+    throw new RangeError('visual assets exceed the 1 MiB shared capacity');
+  return {
+    visual,
+    audio,
+    maps,
+    ...(display === void 0 ? {} : { display }),
+    visualBytes,
+  };
+}
+function decodeSprite(name, value, animation) {
+  if (
+    !isRecord$7(value) ||
+    value.revision !== 2 ||
+    value.kind !== 'sprite' ||
+    !boundedInteger(value.width, 1, HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.height, 1, HARDWARE.spriteMaximumAxis) ||
+    !Array.isArray(value.frames) ||
+    value.frames.length === 0 ||
+    value.frames.length > 256
+  )
+    throw new TypeError(`sprite asset '${name}' is invalid`);
+  const pixelCount = value.width * value.height;
+  const frames = value.frames.map((frame) => {
+    if (!isNumberArray(frame, pixelCount, 0, 255))
+      throw new TypeError(`sprite asset '${name}' has invalid indexed pixels`);
+    return {
+      kind: 'sprite',
+      name,
+      width: value.width,
+      height: value.height,
+      pixels: Uint8Array.from(frame),
+    };
+  });
+  const first = frames[0];
+  if (first === void 0) throw new TypeError(`sprite asset '${name}' requires a frame`);
+  return animation
+    ? {
+        kind: 'animation',
+        name,
+        frames,
+      }
+    : {
+        ...first,
+        name,
+      };
+}
+function decodeTileSet(name, value) {
+  if (
+    !isRecord$7(value) ||
+    value.revision !== 2 ||
+    value.kind !== 'tile_set' ||
+    !Array.isArray(value.tiles) ||
+    value.tiles.length === 0 ||
+    value.tiles.length > 4096 ||
+    !isNumberArray(value.flags, value.tiles.length, 0, 255)
+  )
+    throw new TypeError(`tile-set asset '${name}' is invalid`);
+  return {
+    kind: 'tile_set',
+    name,
+    tiles: value.tiles.map((pixels, index) => {
+      if (!isNumberArray(pixels, 64, 0, 255))
+        throw new TypeError(`tile ${String(index)} in '${name}' has invalid indexed pixels`);
+      return {
+        kind: 'sprite',
+        name: `${name}:${String(index)}`,
+        width: 8,
+        height: 8,
+        pixels: Uint8Array.from(pixels),
+      };
+    }),
+    flags: Uint8Array.from(value.flags),
+  };
+}
+function decodeMap(name, value) {
+  if (
+    !isRecord$7(value) ||
+    value.revision !== 1 ||
+    value.kind !== 'map' ||
+    !Array.isArray(value.layers) ||
+    value.layers.length === 0 ||
+    value.layers.length > 8
+  )
+    throw new TypeError(`map asset '${name}' is invalid`);
+  return {
+    kind: 'map',
+    name,
+    layers: value.layers.map((layer) => {
+      if (
+        !isRecord$7(layer) ||
+        !boundedInteger(layer.width, 1, 256) ||
+        !boundedInteger(layer.height, 1, 256) ||
+        typeof layer.tileSet !== 'string' ||
+        !isNumberArray(layer.cells, layer.width * layer.height, 0, 65535)
+      )
+        throw new TypeError(`map asset '${name}' has an invalid layer`);
+      return {
+        width: layer.width,
+        height: layer.height,
+        cells: Uint16Array.from(layer.cells),
+        tileSet: layer.tileSet,
+      };
+    }),
+  };
+}
+function decodeFont(name, value) {
+  if (
+    !isRecord$7(value) ||
+    value.revision !== 1 ||
+    value.kind !== 'font' ||
+    !boundedInteger(value.glyphWidth, 1, 16) ||
+    !boundedInteger(value.glyphHeight, 1, 16) ||
+    !boundedInteger(value.baseline, 0, value.glyphHeight - 1) ||
+    !boundedInteger(value.advanceX, 1, 32) ||
+    !boundedInteger(value.advanceY, 1, 32) ||
+    !boundedInteger(value.missingGlyph, 0, 255) ||
+    !Array.isArray(value.glyphs) ||
+    value.glyphs.length === 0 ||
+    value.glyphs.length > 256
+  )
+    throw new TypeError(`font asset '${name}' is invalid`);
+  const glyphs = /* @__PURE__ */ new Map();
+  let previous = -1;
+  for (const glyph of value.glyphs) {
+    if (
+      !isRecord$7(glyph) ||
+      !boundedInteger(glyph.code, 0, 255) ||
+      glyph.code <= previous ||
+      !isNumberArray(glyph.pixels, value.glyphWidth * value.glyphHeight, 0, 1)
+    )
+      throw new TypeError(`font asset '${name}' has an invalid glyph map`);
+    previous = glyph.code;
+    glyphs.set(glyph.code, Uint8Array.from(glyph.pixels));
+  }
+  if (!glyphs.has(value.missingGlyph))
+    throw new TypeError(`font asset '${name}' is missing its fallback glyph`);
+  return {
+    kind: 'font',
+    name,
+    glyphWidth: value.glyphWidth,
+    glyphHeight: value.glyphHeight,
+    baseline: value.baseline,
+    advanceX: value.advanceX,
+    advanceY: value.advanceY,
+    missingGlyph: value.missingGlyph,
+    glyphs,
+  };
+}
+function decodeSound(name, value) {
+  if (!isRecord$7(value) || value.revision !== 1 || value.kind !== 'sound')
+    throw new TypeError(`sound asset '${name}' is invalid`);
+  const sound = {
+    ...value,
+    name,
+  };
+  new AudioAssetStore([sound]);
+  return sound;
+}
+function decodeMusic(name, value) {
+  if (!isRecord$7(value) || value.revision !== 1 || value.kind !== 'music')
+    throw new TypeError(`music asset '${name}' is invalid`);
+  return {
+    ...value,
+    name,
+  };
+}
+function decodeDisplay(path, files) {
+  if (path === void 0 || path === null) return void 0;
+  const bytes = files[path];
+  if (bytes === void 0) throw new TypeError(`display configuration is missing '${path}'`);
+  const value = JSON.parse(new TextDecoder().decode(bytes));
+  if (
+    !isRecord$7(value) ||
+    value.revision !== 2 ||
+    value.kind !== 'display' ||
+    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, 255) ||
+    !Array.isArray(value.raster) ||
+    value.raster.length > HARDWARE.height
+  )
+    throw new TypeError('display configuration is invalid');
+  let previousLine = -1;
+  const raster = value.raster.map((state) => {
+    if (
+      !isRecord$7(state) ||
+      !boundedInteger(state.line, 0, HARDWARE.height - 1) ||
+      state.line <= previousLine ||
+      !boundedInteger(state.scrollX, -32768, 32767) ||
+      !boundedInteger(state.scrollY, -32768, 32767) ||
+      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, 255)
+    )
+      throw new TypeError('display configuration has invalid raster state');
+    previousLine = state.line;
+    return {
+      line: state.line,
+      scrollX: state.scrollX,
+      scrollY: state.scrollY,
+      remap: Uint8Array.from(state.remap),
+    };
+  });
+  return {
+    remap: Uint8Array.from(value.remap),
+    raster,
+  };
+}
+function displayBytes(display) {
+  return display === void 0
+    ? 0
+    : HARDWARE.rasterPaletteSize + display.raster.length * (HARDWARE.rasterPaletteSize + 6);
+}
+function isNumberArray(value, length, minimum, maximum) {
+  return (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every((entry) => Number.isSafeInteger(entry) && entry >= minimum && entry <= maximum)
+  );
+}
+function boundedInteger(value, minimum, maximum) {
+  return (
+    Number.isSafeInteger(value) && typeof value === 'number' && value >= minimum && value <= maximum
+  );
+}
+function isRecord$7(value) {
+  return typeof value === 'object' && value !== null;
+}
+function isCartridgeAlias(value) {
+  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
+}
+function isTransferParameter(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= 1024 &&
+    value.isWellFormed() &&
+    new TextEncoder().encode(value).length <= 1024
+  );
+}
+function isCartridgeEnvironment(value) {
+  if (!record$3(value) || !Array.isArray(value.aliases)) return false;
+  const aliases = value.aliases;
+  return (
+    exact$3(value, ['alias', 'parameter', 'aliases', 'reloadCosts']) &&
+    isCartridgeAlias(value.alias) &&
+    isTransferParameter(value.parameter) &&
+    aliases.length >= 1 &&
+    aliases.length <= 32 &&
+    Object.keys(aliases).length === aliases.length &&
+    Array.from(aliases).every(isCartridgeAlias) &&
+    new Set(aliases).size === aliases.length &&
+    aliases.includes('main') &&
+    aliases.includes(value.alias) &&
+    record$3(value.reloadCosts) &&
+    Object.entries(value.reloadCosts).every(
+      ([alias, cost]) =>
+        aliases.includes(alias) &&
+        typeof cost === 'number' &&
+        Number.isSafeInteger(cost) &&
+        cost >= 1 &&
+        cost <= HARDWARE.workUnitsPerFrame,
+    )
+  );
+}
+function request(value) {
+  if (!record$3(value) || !isCartridgeAlias(value.alias)) return false;
+  return value.kind === 'load'
+    ? exact$3(value, ['kind', 'alias', 'parameter']) && isTransferParameter(value.parameter)
+    : value.kind === 'reload' && exact$3(value, ['kind', 'alias']);
+}
+function isCartridgeControlSnapshot(value) {
+  return (
+    record$3(value) &&
+    exact$3(value, ['revision', 'alias', 'parameter', 'pending']) &&
+    value.revision === 1 &&
+    isCartridgeAlias(value.alias) &&
+    isTransferParameter(value.parameter) &&
+    (value.pending === null || request(value.pending))
+  );
+}
+/** A cartridge can request a boundary operation, never a filesystem read or an immediate reset. */
+var CartridgeControl = class {
+  alias;
+  parameter;
+  aliases;
+  reloadCosts;
+  pending = null;
+  constructor(environment) {
+    if (!isCartridgeEnvironment(environment)) throw new TypeError('invalid cartridge environment');
+    this.alias = environment.alias;
+    this.parameter = environment.parameter;
+    this.aliases = new Set(environment.aliases);
+    this.reloadCosts = new Map(Object.entries(environment.reloadCosts));
+  }
+  call(name, args, span, context, charge) {
+    if (name === 'cart_parameter') {
+      if (args.length !== 0) fail('cart_parameter expects no arguments', span);
+      charge(1 + new TextEncoder().encode(this.parameter).length, span);
+      return this.parameter;
+    }
+    if (name !== 'load_cart' && name !== 'reload_assets')
+      fail('unknown cartridge control call', span);
+    if (!['start', 'update', 'draw', 'menu'].includes(context.phase))
+      fail('cartridge changes require a non-raster cartridge callback', span);
+    if (
+      args.length !== (name === 'load_cart' ? 2 : 1) ||
+      !isCartridgeAlias(args[0]) ||
+      !this.aliases.has(args[0])
+    )
+      fail('cartridge change requires a declared local alias', span);
+    if (this.pending !== null) fail('only one cartridge change can be requested per frame', span);
+    const alias = args[0];
+    if (name === 'load_cart') {
+      if (!isTransferParameter(args[1]))
+        fail('transfer parameter exceeds 1024 UTF-8 bytes or is not well-formed Text', span);
+      const parameter = args[1];
+      charge(1 + alias.length + new TextEncoder().encode(parameter).length, span);
+      this.pending = {
+        kind: 'load',
+        alias,
+        parameter,
+      };
+    } else {
+      const cost = this.reloadCosts.get(alias);
+      if (cost === void 0)
+        fail('asset bank names/kinds are incompatible with the current cartridge', span);
+      charge(cost, span);
+      this.pending = {
+        kind: 'reload',
+        alias,
+      };
+    }
+  }
+  pendingRequest() {
+    return this.pending === null ? null : { ...this.pending };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      alias: this.alias,
+      parameter: this.parameter,
+      pending: this.pendingRequest(),
+    };
+  }
+  restore(value) {
+    if (
+      !isCartridgeControlSnapshot(value) ||
+      value.alias !== this.alias ||
+      value.parameter !== this.parameter ||
+      (value.pending !== null &&
+        (!this.aliases.has(value.pending.alias) ||
+          (value.pending.kind === 'reload' && !this.reloadCosts.has(value.pending.alias))))
+    )
+      fail('invalid or mismatched cartridge-control snapshot', {
+        start: 0,
+        end: 0,
+      });
+    this.pending = value.pending === null ? null : { ...value.pending };
+  }
+};
+function fail(message, span) {
+  throw new RuntimeFault('M019017', message, span);
+}
+function record$3(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$3(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/budget.ts
+function isWorkBudgetSnapshot(value) {
+  if (
+    !isRecord$6(value) ||
+    Object.keys(value).length !== 4 ||
+    value.revision !== 1 ||
+    typeof value.limit !== 'number' ||
+    !Number.isSafeInteger(value.limit) ||
+    value.limit < 1 ||
+    value.limit > HARDWARE.workUnitsPerFrame ||
+    typeof value.used !== 'number' ||
+    !Number.isSafeInteger(value.used) ||
+    value.used < 0 ||
+    !Array.isArray(value.attribution) ||
+    value.attribution.length > HARDWARE.workUnitsPerFrame + 1
+  )
+    return false;
+  let total = 0;
+  let previousUnits = Infinity;
+  let previousStart = -1;
+  const spans = /* @__PURE__ */ new Set();
+  for (const entry of value.attribution) {
+    if (
+      !isRecord$6(entry) ||
+      Object.keys(entry).length !== 2 ||
+      typeof entry.units !== 'number' ||
+      !Number.isSafeInteger(entry.units) ||
+      entry.units < 0 ||
+      entry.units > value.used - total ||
+      !isRecord$6(entry.sourceSpan) ||
+      Object.keys(entry.sourceSpan).length !== 2 ||
+      typeof entry.sourceSpan.start !== 'number' ||
+      !Number.isSafeInteger(entry.sourceSpan.start) ||
+      entry.sourceSpan.start < 0 ||
+      typeof entry.sourceSpan.end !== 'number' ||
+      !Number.isSafeInteger(entry.sourceSpan.end) ||
+      entry.sourceSpan.end < entry.sourceSpan.start ||
+      entry.units > previousUnits ||
+      (entry.units === previousUnits && entry.sourceSpan.start < previousStart)
+    )
+      return false;
+    const key = `${String(entry.sourceSpan.start)}:${String(entry.sourceSpan.end)}`;
+    if (spans.has(key)) return false;
+    spans.add(key);
+    total += entry.units;
+    previousUnits = entry.units;
+    previousStart = entry.sourceSpan.start;
+  }
+  return total === value.used;
+}
+function isRecord$6(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+/** Per-frame synthetic execution budget and source-span attribution. */
+var WorkBudget = class {
+  frameLimit;
+  usedUnits = 0;
+  bySpan = /* @__PURE__ */ new Map();
+  constructor(frameLimit) {
+    if (
+      !Number.isSafeInteger(frameLimit) ||
+      frameLimit <= 0 ||
+      frameLimit > HARDWARE.workUnitsPerFrame
+    )
+      throw new RangeError('work-unit limit must be an integer between 1 and 50,000');
+    this.frameLimit = frameLimit;
+  }
+  get limit() {
+    return this.frameLimit;
+  }
+  get used() {
+    return this.usedUnits;
+  }
+  beginFrame() {
+    this.usedUnits = 0;
+    this.bySpan.clear();
+  }
+  snapshot() {
+    return structuredClone({
+      revision: 1,
+      limit: this.frameLimit,
+      used: this.usedUnits,
+      attribution: this.attribution(),
+    });
+  }
+  restore(value) {
+    if (!isWorkBudgetSnapshot(value) || value.limit !== this.frameLimit)
+      throw new TypeError('invalid or mismatched work-budget snapshot');
+    const entries = structuredClone(value.attribution);
+    this.usedUnits = value.used;
+    this.bySpan.clear();
+    for (const entry of entries)
+      this.bySpan.set(`${String(entry.sourceSpan.start)}:${String(entry.sourceSpan.end)}`, entry);
+  }
+  charge(units, sourceSpan) {
+    if (!Number.isInteger(units) || units < 0)
+      throw new RangeError('work-unit charge must be a non-negative finite integer');
+    const charged = Math.min(units, Number.MAX_SAFE_INTEGER - this.usedUnits);
+    this.usedUnits += charged;
+    const key = `${String(sourceSpan.start)}:${String(sourceSpan.end)}`;
+    const previous = this.bySpan.get(key);
+    this.bySpan.set(key, {
+      sourceSpan,
+      units: (previous?.units ?? 0) + charged,
+    });
+    if (charged !== units || this.usedUnits > this.frameLimit)
+      throw new BudgetExceeded(this.usedUnits, this.frameLimit, sourceSpan);
+  }
+  attribution() {
+    return [...this.bySpan.values()].sort(
+      (left, right) => right.units - left.units || left.sourceSpan.start - right.sourceSpan.start,
+    );
+  }
+};
 //#endregion
 //#region src/menu.ts
 function isMenuAction(value) {
@@ -2303,7 +3443,7 @@ function isButton(value) {
 }
 function isInputFrame(value) {
   if (
-    !isRecord$6(value) ||
+    !isRecord$5(value) ||
     !Object.hasOwn(value, 'controllers') ||
     !Object.hasOwn(value, 'pointer') ||
     !Object.keys(value).every((key) => ['controllers', 'pointer', 'menuAction'].includes(key)) ||
@@ -2315,7 +3455,7 @@ function isInputFrame(value) {
   if (
     Object.keys(value.controllers).length !== 4 ||
     !Array.from(value.controllers).every(isControllerState) ||
-    !isRecord$6(value.pointer)
+    !isRecord$5(value.pointer)
   )
     return false;
   const pointer = value.pointer;
@@ -2399,7 +3539,7 @@ Object.freeze({
   menu: 8,
 });
 function isControllerState(value) {
-  if (!isRecord$6(value) || !hasExactKeys$1(value, ['buttons']) || !isRecord$6(value.buttons))
+  if (!isRecord$5(value) || !hasExactKeys$1(value, ['buttons']) || !isRecord$5(value.buttons))
     return false;
   const buttons = value.buttons;
   return (
@@ -2407,7 +3547,7 @@ function isControllerState(value) {
     BUTTONS.every((button) => typeof buttons[button] === 'boolean')
   );
 }
-function isRecord$6(value) {
+function isRecord$5(value) {
   return typeof value === 'object' && value !== null;
 }
 function hasExactKeys$1(value, expected) {
@@ -2810,7 +3950,7 @@ function bitCall(name, args, span) {
 var EXECUTION_PHASES = ['idle', 'start', 'update', 'draw', 'raster', 'output', 'menu'];
 function isExecutionSnapshot(value, frame, rate, budget) {
   if (
-    !isRecord$5(value) ||
+    !isRecord$4(value) ||
     Object.keys(value).length !== 5 ||
     typeof value.booted !== 'boolean' ||
     typeof value.updates !== 'number' ||
@@ -2843,7 +3983,7 @@ function isExecutionSnapshot(value, frame, rate, budget) {
 }
 function isMachineFault(value) {
   return (
-    isRecord$5(value) &&
+    isRecord$4(value) &&
     Object.keys(value).length === 2 &&
     typeof value.code === 'number' &&
     Number.isInteger(value.code) &&
@@ -2854,7 +3994,7 @@ function isMachineFault(value) {
 }
 function isFaultSpan(value) {
   return (
-    isRecord$5(value) &&
+    isRecord$4(value) &&
     Object.keys(value).length === 2 &&
     typeof value.start === 'number' &&
     Number.isInteger(value.start) &&
@@ -2865,7 +4005,7 @@ function isFaultSpan(value) {
     value.end <= 4294967295
   );
 }
-function isRecord$5(value) {
+function isRecord$4(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 /** Wire encoding of current device-owned state, not a retained register image. */
@@ -3135,6 +4275,16 @@ var DeterministicMachine = class {
       },
     });
   }
+  /** Small read-only status; unlike a checkpoint this is safe during a source suspension. */
+  inspectExecution() {
+    return {
+      booted: this.booted,
+      updates: this.completedUpdates,
+      phase: this.phase,
+      rasterLine: this.rasterLine ?? null,
+      fault: this.lastFault === null ? null : structuredClone(this.lastFault),
+    };
+  }
   restore(value) {
     if (!isMachineSnapshot(value)) throw new TypeError('invalid MOD-01 machine snapshot');
     const snapshot = value;
@@ -3228,7 +4378,7 @@ var DeterministicMachine = class {
       });
     switch (name) {
       case 'menu_item':
-        expectArguments$1(name, arguments_, 2, sourceSpan);
+        expectArguments(name, arguments_, 2, sourceSpan);
         if (this.phase === 'raster')
           return this.fault(
             'M019016',
@@ -3240,10 +4390,10 @@ var DeterministicMachine = class {
         });
         return;
       case 'rng_num':
-        expectArguments$1(name, arguments_, 0, sourceSpan);
+        expectArguments(name, arguments_, 0, sourceSpan);
         return this.rng.nextNum();
       case 'rng_int': {
-        expectArguments$1(name, arguments_, 2, sourceSpan);
+        expectArguments(name, arguments_, 2, sourceSpan);
         const minimum = expectInteger(arguments_[0], sourceSpan);
         const maximum = expectInteger(arguments_[1], sourceSpan);
         try {
@@ -3257,13 +4407,13 @@ var DeterministicMachine = class {
         }
       }
       case 'Vec2':
-        expectArguments$1(name, arguments_, 2, sourceSpan);
+        expectArguments(name, arguments_, 2, sourceSpan);
         return {
           x: expectNumber(arguments_[0], sourceSpan),
           y: expectNumber(arguments_[1], sourceSpan),
         };
       case 'Rect':
-        expectArguments$1(name, arguments_, 4, sourceSpan);
+        expectArguments(name, arguments_, 4, sourceSpan);
         return {
           x: expectNumber(arguments_[0], sourceSpan),
           y: expectNumber(arguments_[1], sourceSpan),
@@ -3271,7 +4421,7 @@ var DeterministicMachine = class {
           h: expectNumber(arguments_[3], sourceSpan),
         };
       case 'dither':
-        expectArguments$1(name, arguments_, 5, sourceSpan);
+        expectArguments(name, arguments_, 5, sourceSpan);
         return orderedDither(
           expectInteger(arguments_[0], sourceSpan),
           expectInteger(arguments_[1], sourceSpan),
@@ -3281,7 +4431,7 @@ var DeterministicMachine = class {
         );
       case 'btn':
       case 'btnp': {
-        expectArguments$1(name, arguments_, 2, sourceSpan);
+        expectArguments(name, arguments_, 2, sourceSpan);
         const port = expectInteger(arguments_[0], sourceSpan);
         const button = arguments_[1];
         if (port < 0 || port >= 4 || !isButton(button))
@@ -3291,17 +4441,17 @@ var DeterministicMachine = class {
         return pressed && !(this.previousInput.controllers[port]?.buttons[button] ?? false);
       }
       case 'pointer_x':
-        expectArguments$1(name, arguments_, 0, sourceSpan);
+        expectArguments(name, arguments_, 0, sourceSpan);
         return this.input.pointer.x;
       case 'pointer_y':
-        expectArguments$1(name, arguments_, 0, sourceSpan);
+        expectArguments(name, arguments_, 0, sourceSpan);
         return this.input.pointer.y;
       case 'pointer_inside':
-        expectArguments$1(name, arguments_, 0, sourceSpan);
+        expectArguments(name, arguments_, 0, sourceSpan);
         return this.input.pointer.inside;
       case 'pointer_primary':
       case 'pointer_secondary': {
-        expectArguments$1(name, arguments_, 0, sourceSpan);
+        expectArguments(name, arguments_, 0, sourceSpan);
         const button = name === 'pointer_primary' ? 'primary' : 'secondary';
         return this.input.pointer[button] && !this.previousInput.pointer[button];
       }
@@ -3385,7 +4535,7 @@ function isMachineSnapshot(value) {
     )
   );
 }
-function expectArguments$1(name, arguments_, count, sourceSpan) {
+function expectArguments(name, arguments_, count, sourceSpan) {
   if (arguments_.length !== count)
     throw new RuntimeFault(
       'M019009',
@@ -3403,1002 +4553,6 @@ function expectInteger(value, sourceSpan) {
   if (!Number.isSafeInteger(number))
     throw new RuntimeFault('M019009', 'expected a safe integer', sourceSpan);
   return number;
-}
-//#endregion
-//#region src/audio.ts
-function isSynthSnapshot(value) {
-  if (
-    !audioRecord(value) ||
-    Object.keys(value).length !== 5 ||
-    value.revision !== 1 ||
-    !audioCounter(value.frame) ||
-    !audioCounter(value.nextSequence) ||
-    value.nextSequence < 1 ||
-    !denseAudioArray(value.voices) ||
-    value.voices.length !== HARDWARE.audioVoices
-  )
-    return false;
-  const nextSequence = value.nextSequence;
-  if (!value.voices.every((voice, slot) => isVoice(voice, slot, nextSequence))) return false;
-  return (
-    value.tracker === null ||
-    (audioRecord(value.tracker) &&
-      Object.keys(value.tracker).length === 4 &&
-      typeof value.tracker.music === 'string' &&
-      value.tracker.music.length > 0 &&
-      value.tracker.music.length <= HARDWARE.cartridgeCapacityBytes &&
-      audioCounter(value.tracker.orderIndex) &&
-      audioCounter(value.tracker.row) &&
-      audioCounter(value.tracker.frameInRow))
-  );
-}
-function isVoice(voice, slot, nextSequence) {
-  return (
-    audioRecord(voice) &&
-    Object.keys(voice).length === 9 &&
-    typeof voice.active === 'boolean' &&
-    voice.slot === slot &&
-    typeof voice.sound === 'string' &&
-    voice.sound.length <= HARDWARE.cartridgeCapacityBytes &&
-    audioNumber(voice.note, 0, 127) &&
-    audioNumber(voice.volumeScale, 0, 1) &&
-    audioCounter(voice.ageFrames) &&
-    audioNumber(voice.phase, 0, 1) &&
-    voice.phase < 1 &&
-    audioCounter(voice.noiseState) &&
-    voice.noiseState > 0 &&
-    voice.noiseState <= 4294967295 &&
-    audioCounter(voice.sequence) &&
-    voice.sequence < nextSequence
-  );
-}
-function audioCounter(value) {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-function audioNumber(value, minimum, maximum) {
-  return (
-    typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum
-  );
-}
-function audioRecord(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-/** Validated oscillator and tracker data. Arbitrary PCM samples are intentionally unrepresentable. */
-var AudioAssetStore = class {
-  entries = /* @__PURE__ */ new Map();
-  ordered;
-  ids = /* @__PURE__ */ new Map();
-  descriptors;
-  constructor(assets = []) {
-    for (const asset of assets) {
-      validateAudioAsset(asset);
-      if (this.entries.has(asset.name))
-        throw new TypeError(`duplicate audio asset '${asset.name}'`);
-      this.entries.set(asset.name, structuredClone(asset));
-    }
-    for (const asset of this.entries.values()) {
-      if (asset.kind !== 'music') continue;
-      for (const pattern of Object.values(asset.patterns))
-        for (const row of pattern.rows)
-          for (const cell of row)
-            if (cell !== null && this.entries.get(cell.sound)?.kind !== 'sound')
-              throw new TypeError(`music '${asset.name}' references missing sound '${cell.sound}'`);
-    }
-    this.ordered = [...this.entries.values()].sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-    );
-    this.descriptors = new Uint8Array(this.ordered.length * MEMORY.audioAssetStride);
-    const view = new DataView(this.descriptors.buffer);
-    for (const [id, asset] of this.ordered.entries()) {
-      this.ids.set(asset.name, id);
-      const fields =
-        asset.kind === 'sound'
-          ? [
-              1,
-              ['pulse', 'triangle', 'saw', 'noise', 'wavetable'].indexOf(asset.waveform) + 1,
-              asset.note,
-              asset.durationFrames,
-              asset.envelope.releaseFrames,
-              0,
-              0,
-              0,
-            ]
-          : [2, 0, 0, 0, 0, asset.framesPerRow, asset.order.length, Number(asset.loop)];
-      for (const [field, value] of fields.entries())
-        view.setUint32(id * MEMORY.audioAssetStride + field * 4, value, true);
-    }
-  }
-  get(name) {
-    return this.entries.get(name);
-  }
-  id(name) {
-    return this.ids.get(name) ?? -1;
-  }
-  byId(id) {
-    return this.ordered[id];
-  }
-  get count() {
-    return this.ordered.length;
-  }
-  memoryRegions() {
-    return this.descriptors.length === 0
-      ? []
-      : [
-          {
-            name: 'audio asset descriptors',
-            address: MEMORY.audioAssets,
-            bytes: this.descriptors,
-            writable: false,
-          },
-        ];
-  }
-};
-/** Eight-voice deterministic synthesizer and eight-channel order/pattern tracker. */
-var Synthesizer = class {
-  assets;
-  voices;
-  frame = 0;
-  nextSequence = 1;
-  tracker = null;
-  constructor(assets = new AudioAssetStore()) {
-    this.assets = assets;
-    this.voices = Array.from({ length: HARDWARE.audioVoices }, (_, slot) => emptyVoice(slot));
-  }
-  executeFrame(commands) {
-    for (const command of commands) this.executeCommand(command);
-    return this.finishFrame();
-  }
-  finishFrame() {
-    if (this.frame === Number.MAX_SAFE_INTEGER)
-      throw new RuntimeFault('M019012', 'audio-frame counter is exhausted', {
-        start: 0,
-        end: 0,
-      });
-    this.advanceTracker();
-    const sampleCount = HARDWARE.audioSampleRate / HARDWARE.frameRate;
-    const left = new Float32Array(sampleCount);
-    const right = new Float32Array(sampleCount);
-    for (const voice of this.voices) if (voice.active) this.mixVoice(voice, left, right);
-    for (const voice of this.voices)
-      if (voice.active) {
-        voice.ageFrames += 1;
-        const sound = this.assets.get(voice.sound);
-        if (
-          sound?.kind !== 'sound' ||
-          voice.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames
-        )
-          voice.active = false;
-      }
-    const inspection = this.inspectTracker();
-    this.frame += 1;
-    return {
-      left,
-      right,
-      activeVoices: this.voices.filter((voice) => voice.active).length,
-      tracker: inspection,
-    };
-  }
-  snapshot() {
-    return structuredClone({
-      revision: 1,
-      frame: this.frame,
-      nextSequence: this.nextSequence,
-      voices: this.voices,
-      tracker: this.tracker,
-    });
-  }
-  restore(snapshot) {
-    if (!isSynthSnapshot(snapshot)) throw new TypeError('invalid MOD-01 synthesizer snapshot');
-    for (const voice of snapshot.voices) {
-      const sound = this.assets.get(voice.sound);
-      if ((voice.active || voice.sound !== '') && sound?.kind !== 'sound')
-        throw new TypeError('snapshot references a missing sound');
-      if (
-        voice.active &&
-        sound?.kind === 'sound' &&
-        voice.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames
-      )
-        throw new TypeError('snapshot contains a voice beyond its sound lifetime');
-    }
-    if (snapshot.tracker !== null) {
-      const tracker = snapshot.tracker;
-      const music = this.assets.get(tracker.music);
-      if (
-        music?.kind !== 'music' ||
-        !validTrackerPosition(music, tracker.orderIndex, tracker.row, tracker.frameInRow)
-      )
-        throw new TypeError('snapshot references an invalid tracker position');
-    }
-    this.frame = snapshot.frame;
-    this.nextSequence = snapshot.nextSequence;
-    for (let index = 0; index < this.voices.length; index += 1)
-      Object.assign(this.voices[index], structuredClone(snapshot.voices[index]));
-    this.tracker = structuredClone(snapshot.tracker);
-  }
-  inspectVoices() {
-    return structuredClone(this.voices);
-  }
-  /** Native instrument audition uses the tracker's real note override and voice allocator. */
-  audition(soundName, note, volumeScale = 1) {
-    if (!audioInteger(note, 0, 127) || !audioNumber(volumeScale, 0, 1))
-      throw new RangeError('audition requires a note 0-127 and volume 0-1');
-    this.trigger(soundName, note, volumeScale);
-  }
-  inspectTracker() {
-    return this.tracker === null ? null : { ...this.tracker };
-  }
-  /** Start or seek the real sequencer without resetting voices or the synth clock. */
-  playMusic(name, orderIndex = 0, row = 0) {
-    const music = this.assets.get(name);
-    if (music?.kind !== 'music') throw new TypeError(`missing Music asset '${name}'`);
-    if (!validTrackerPosition(music, orderIndex, row, 0))
-      throw new RangeError('invalid tracker order or row');
-    this.tracker = {
-      music: name,
-      orderIndex,
-      row,
-      frameInRow: 0,
-    };
-  }
-  memoryRegions() {
-    return [
-      ...this.assets.memoryRegions(),
-      {
-        name: 'synth status',
-        address: MEMORY.audio,
-        length: 32,
-        writable: false,
-        readByte: (offset) => this.statusByte(offset),
-      },
-      {
-        name: 'tracker controls',
-        address: MEMORY.audioTracker,
-        length: 16,
-        writable: true,
-        readByte: (offset) => this.trackerByte(offset),
-        prepareWrite: (offset, bytes) => this.prepareTrackerWrite(offset, bytes),
-      },
-      ...this.voices.flatMap((voice) => [
-        {
-          name: `voice ${String(voice.slot)} controls`,
-          address: MEMORY.audioVoices + voice.slot * MEMORY.voiceStride,
-          length: 48,
-          writable: true,
-          readByte: (offset) => this.voiceByte(voice, offset),
-          prepareWrite: (offset, bytes) => this.prepareVoiceWrite(voice, offset, bytes),
-        },
-        {
-          name: `voice ${String(voice.slot)} allocation`,
-          address: MEMORY.audioVoices + voice.slot * MEMORY.voiceStride + 48,
-          length: 16,
-          writable: false,
-          readByte: (offset) => (offset < 8 ? integerByte(voice.sequence, offset) : 0),
-        },
-      ]),
-    ];
-  }
-  statusByte(offset) {
-    if (offset < 8) return integerByte(this.frame, offset);
-    if (offset < 16) return integerByte(this.nextSequence, offset - 8);
-    if (offset === 16) return this.voices.filter((voice) => voice.active).length;
-    if (offset === 17) return HARDWARE.audioVoices;
-    if (offset === 18) return HARDWARE.trackerChannels;
-    if (offset === 19) return Number(this.tracker !== null);
-    if (offset < 24) return integerByte(HARDWARE.audioSampleRate, offset - 20);
-    if (offset < 28) return integerByte(this.assets.count, offset - 24);
-    return integerByte(MEMORY.audioAssets, offset - 28);
-  }
-  trackerByte(offset) {
-    if (this.tracker === null) return 0;
-    return integerByte(
-      [
-        this.assets.id(this.tracker.music) + 1,
-        this.tracker.orderIndex,
-        this.tracker.row,
-        this.tracker.frameInRow,
-      ][Math.floor(offset / 4)] ?? 0,
-      offset % 4,
-    );
-  }
-  prepareTrackerWrite(offset, bytes) {
-    const staged = Uint8Array.from({ length: 16 }, (_, index) => this.trackerByte(index));
-    staged.set(bytes, offset);
-    const view = new DataView(staged.buffer);
-    const id = view.getUint32(0, true);
-    if (id === 0)
-      return () => {
-        this.tracker = null;
-      };
-    const music = this.assets.byId(id - 1);
-    if (music?.kind !== 'music') return void 0;
-    const next = {
-      music: music.name,
-      orderIndex: view.getUint32(4, true),
-      row: view.getUint32(8, true),
-      frameInRow: view.getUint32(12, true),
-    };
-    if (!validTrackerPosition(music, next.orderIndex, next.row, next.frameInRow)) return void 0;
-    return () => {
-      this.tracker = next;
-    };
-  }
-  voiceByte(voice, offset) {
-    if (offset === 0) return Number(voice.active);
-    if (offset < 4) return 0;
-    if (offset < 8) return integerByte(this.assets.id(voice.sound) + 1, offset - 4);
-    if (offset < 16) return floatByte(voice.note, offset - 8);
-    if (offset < 24) return floatByte(voice.volumeScale, offset - 16);
-    if (offset < 32) return integerByte(voice.ageFrames, offset - 24);
-    if (offset < 40) return floatByte(voice.phase, offset - 32);
-    if (offset < 44) return integerByte(voice.noiseState, offset - 40);
-    return 0;
-  }
-  prepareVoiceWrite(voice, offset, bytes) {
-    const staged = Uint8Array.from({ length: 48 }, (_, index) => this.voiceByte(voice, index));
-    staged.set(bytes, offset);
-    if (staged[0] !== 0 && staged[0] !== 1) return void 0;
-    if ([1, 2, 3, 44, 45, 46, 47].some((index) => staged[index] !== 0)) return void 0;
-    const view = new DataView(staged.buffer);
-    const id = view.getUint32(4, true);
-    const sound = this.assets.byId(id - 1);
-    if (id !== 0 && sound?.kind !== 'sound') return void 0;
-    const next = {
-      ...voice,
-      active: staged[0] === 1,
-      sound: sound?.name ?? '',
-      note: view.getFloat64(8, true),
-      volumeScale: view.getFloat64(16, true),
-      ageFrames: Number(view.getBigUint64(24, true)),
-      phase: view.getFloat64(32, true),
-      noiseState: view.getUint32(40, true),
-    };
-    if (
-      !isVoice(next, voice.slot, this.nextSequence) ||
-      (next.active &&
-        (sound?.kind !== 'sound' ||
-          next.ageFrames >= sound.durationFrames + sound.envelope.releaseFrames))
-    )
-      return void 0;
-    return () => {
-      Object.assign(voice, next);
-    };
-  }
-  executeCommand(command) {
-    switch (command.name) {
-      case 'sfx': {
-        const [handle] = expectArguments(command, 1);
-        this.trigger(readAssetName(handle, 'Sound'), void 0, 1, command.sourceSpan);
-        return;
-      }
-      case 'music': {
-        const [handle] = expectArguments(command, 1);
-        const name = readAssetName(handle, 'Music');
-        this.playMusic(name);
-        return;
-      }
-      case 'music_stop':
-        expectArguments(command, 0);
-        this.tracker = null;
-        return;
-      default:
-        throw new TypeError(`unknown audio command '${command.name}'`);
-    }
-  }
-  trigger(
-    soundName,
-    noteOverride,
-    volumeScale = 1,
-    sourceSpan = {
-      start: 0,
-      end: 0,
-    },
-  ) {
-    const sound = this.assets.get(soundName);
-    if (sound?.kind !== 'sound') throw new TypeError(`missing Sound asset '${soundName}'`);
-    if (this.nextSequence === Number.MAX_SAFE_INTEGER)
-      throw new RuntimeFault('M019012', 'voice-allocation counter is exhausted', sourceSpan);
-    const voice =
-      this.voices.find((candidate) => !candidate.active) ??
-      this.voices.reduce((oldest, candidate) =>
-        candidate.sequence < oldest.sequence ? candidate : oldest,
-      );
-    Object.assign(voice, {
-      active: true,
-      sound: soundName,
-      note: noteOverride ?? sound.note,
-      volumeScale,
-      ageFrames: 0,
-      phase: 0,
-      noiseState: nonZeroNoiseSeed(this.frame, voice.slot, this.nextSequence),
-      sequence: this.nextSequence,
-    });
-    this.nextSequence += 1;
-  }
-  advanceTracker() {
-    const tracker = this.tracker;
-    if (tracker === null) return;
-    const music = this.assets.get(tracker.music);
-    if (music?.kind !== 'music') {
-      this.tracker = null;
-      return;
-    }
-    if (tracker.frameInRow === 0) {
-      const patternName = music.order[tracker.orderIndex];
-      (patternName === void 0 ? void 0 : music.patterns[patternName])?.rows[tracker.row]?.forEach(
-        (cell) => {
-          if (cell !== null) this.trigger(cell.sound, cell.note, cell.volume ?? 1);
-        },
-      );
-    }
-    tracker.frameInRow += 1;
-    if (tracker.frameInRow < music.framesPerRow) return;
-    tracker.frameInRow = 0;
-    tracker.row += 1;
-    const patternName = music.order[tracker.orderIndex];
-    const pattern = patternName === void 0 ? void 0 : music.patterns[patternName];
-    if (pattern !== void 0 && tracker.row < pattern.rows.length) return;
-    tracker.row = 0;
-    tracker.orderIndex += 1;
-    if (tracker.orderIndex >= music.order.length) {
-      if (music.loop) tracker.orderIndex = 0;
-      else this.tracker = null;
-    }
-  }
-  mixVoice(voice, left, right) {
-    const sound = this.assets.get(voice.sound);
-    if (sound?.kind !== 'sound') {
-      voice.active = false;
-      return;
-    }
-    const frameEnvelope = envelopeAt(sound, voice.ageFrames);
-    const pan = Math.max(-1, Math.min(1, sound.pan));
-    const leftGain = (1 - pan) / 2;
-    const rightGain = (1 + pan) / 2;
-    const phaseStep =
-      noteFrequency(
-        voice.note +
-          sound.pitch.slideSemitonesPerFrame * voice.ageFrames +
-          triangleLfo(voice.ageFrames, sound.pitch.vibratoPeriodFrames) *
-            sound.pitch.vibratoDepthSemitones,
-      ) / HARDWARE.audioSampleRate;
-    for (let index = 0; index < left.length; index += 1) {
-      const sample =
-        oscillatorValue(sound, voice) * frameEnvelope * sound.volume * voice.volumeScale * 0.24;
-      left[index] = clampSample((left[index] ?? 0) + sample * leftGain);
-      right[index] = clampSample((right[index] ?? 0) + sample * rightGain);
-      voice.phase = (voice.phase + phaseStep) % 1;
-    }
-  }
-};
-function validTrackerPosition(music, orderIndex, row, frameInRow) {
-  if (
-    !audioCounter(orderIndex) ||
-    !audioCounter(row) ||
-    !audioCounter(frameInRow) ||
-    frameInRow >= music.framesPerRow
-  )
-    return false;
-  const name = music.order[orderIndex];
-  return name !== void 0 && music.patterns[name]?.rows[row] !== void 0;
-}
-function emptyVoice(slot) {
-  return {
-    active: false,
-    slot,
-    sound: '',
-    note: 0,
-    volumeScale: 1,
-    ageFrames: 0,
-    phase: 0,
-    noiseState: 1,
-    sequence: 0,
-  };
-}
-function integerByte(value, offset) {
-  return Math.floor(value / 2 ** (offset * 8)) & 255;
-}
-function floatByte(value, offset) {
-  const view = /* @__PURE__ */ new DataView(/* @__PURE__ */ new ArrayBuffer(8));
-  view.setFloat64(0, value, true);
-  return view.getUint8(offset);
-}
-function validateAudioAsset(asset) {
-  if (!audioRecord(asset) || typeof asset.name !== 'string' || asset.name.length === 0)
-    throw new TypeError('audio assets require a nonempty name');
-  if (asset.kind === 'sound') {
-    if (
-      typeof asset.waveform !== 'string' ||
-      !['pulse', 'triangle', 'saw', 'noise', 'wavetable'].includes(asset.waveform) ||
-      !audioInteger(asset.note, 0, 127) ||
-      !audioInteger(asset.durationFrames, 1, 3600) ||
-      !audioNumber(asset.volume, 0, 1) ||
-      !audioNumber(asset.pan, -1, 1) ||
-      !validEnvelope(asset.envelope) ||
-      !validPitch(asset.pitch, asset.durationFrames + asset.envelope.releaseFrames)
-    )
-      throw new RangeError(`sound '${asset.name}' is outside MOD-01 limits`);
-    if (
-      asset.waveform === 'pulse' &&
-      (!audioNumber(asset.duty, 0, 1) || asset.duty === 0 || asset.duty === 1)
-    )
-      throw new RangeError(`pulse sound '${asset.name}' requires a duty between zero and one`);
-    if (
-      asset.waveform === 'wavetable' &&
-      (!denseAudioArray(asset.wavetable) ||
-        asset.wavetable.length < 4 ||
-        asset.wavetable.length > 32 ||
-        asset.wavetable.some((sample) => !audioNumber(sample, -1, 1)))
-    )
-      throw new RangeError(`wavetable sound '${asset.name}' requires 4-32 normalized entries`);
-    return;
-  }
-  if (
-    asset.kind !== 'music' ||
-    typeof asset.loop !== 'boolean' ||
-    !audioInteger(asset.framesPerRow, 1, 240) ||
-    !denseAudioArray(asset.order) ||
-    asset.order.length === 0 ||
-    !audioRecord(asset.patterns) ||
-    asset.order.some((name) => typeof name !== 'string' || !Object.hasOwn(asset.patterns, name))
-  )
-    throw new RangeError(`music '${asset.name}' has an invalid order list or tempo`);
-  for (const pattern of Object.values(asset.patterns)) {
-    if (
-      !audioRecord(pattern) ||
-      !denseAudioArray(pattern.rows) ||
-      pattern.rows.length === 0 ||
-      pattern.rows.length > 256
-    )
-      throw new RangeError(`music '${asset.name}' has an invalid pattern length`);
-    for (const row of pattern.rows) {
-      if (!denseAudioArray(row) || row.length !== HARDWARE.trackerChannels)
-        throw new RangeError(`music '${asset.name}' patterns must have eight channels`);
-      for (const cell of row)
-        if (
-          cell !== null &&
-          (!audioRecord(cell) ||
-            !audioInteger(cell.note, 0, 127) ||
-            typeof cell.sound !== 'string' ||
-            cell.sound.length === 0 ||
-            (cell.volume !== void 0 && !audioNumber(cell.volume, 0, 1)))
-        )
-          throw new RangeError(`music '${asset.name}' contains an invalid note`);
-    }
-  }
-}
-function denseAudioArray(value) {
-  return (
-    Array.isArray(value) &&
-    Object.keys(value).length === value.length &&
-    Array.from(value.keys()).every((index) => Object.hasOwn(value, index))
-  );
-}
-function audioInteger(value, minimum, maximum) {
-  return audioNumber(value, minimum, maximum) && Number.isSafeInteger(value);
-}
-function validEnvelope(envelope) {
-  return (
-    audioRecord(envelope) &&
-    [envelope.attackFrames, envelope.decayFrames, envelope.releaseFrames].every((value) =>
-      audioInteger(value, 0, 3600),
-    ) &&
-    audioNumber(envelope.sustainLevel, 0, 1)
-  );
-}
-function validPitch(pitch, lifetime) {
-  if (
-    !audioRecord(pitch) ||
-    typeof pitch.slideSemitonesPerFrame !== 'number' ||
-    !Number.isFinite(pitch.slideSemitonesPerFrame) ||
-    typeof pitch.vibratoDepthSemitones !== 'number' ||
-    !Number.isFinite(pitch.vibratoDepthSemitones) ||
-    !audioInteger(pitch.vibratoPeriodFrames, 0, 3600)
-  )
-    return false;
-  const excursion =
-    Math.abs(pitch.slideSemitonesPerFrame) * lifetime + Math.abs(pitch.vibratoDepthSemitones);
-  return Number.isFinite(excursion) && Number.isFinite(noteFrequency(127 + excursion));
-}
-function oscillatorValue(sound, voice) {
-  switch (sound.waveform) {
-    case 'pulse':
-      return voice.phase < (sound.duty ?? 0.5) ? 1 : -1;
-    case 'triangle':
-      return 1 - 4 * Math.abs(voice.phase - 0.5);
-    case 'saw':
-      return voice.phase * 2 - 1;
-    case 'noise':
-      voice.noiseState = xorshift(voice.noiseState);
-      return (voice.noiseState & 65535) / 32767 - 1;
-    case 'wavetable': {
-      const table = sound.wavetable ?? [0];
-      return table[Math.floor(voice.phase * table.length) % table.length] ?? 0;
-    }
-  }
-}
-function envelopeAt(sound, age) {
-  const envelope = sound.envelope;
-  if (envelope.attackFrames > 0 && age < envelope.attackFrames) return age / envelope.attackFrames;
-  const decayAge = age - envelope.attackFrames;
-  if (envelope.decayFrames > 0 && decayAge < envelope.decayFrames)
-    return 1 - (1 - envelope.sustainLevel) * (decayAge / envelope.decayFrames);
-  if (age < sound.durationFrames) return envelope.sustainLevel;
-  if (envelope.releaseFrames === 0) return 0;
-  return (
-    envelope.sustainLevel * Math.max(0, 1 - (age - sound.durationFrames) / envelope.releaseFrames)
-  );
-}
-function triangleLfo(frame, period) {
-  if (period === 0) return 0;
-  const phase = (frame % period) / period;
-  return 1 - 4 * Math.abs(phase - 0.5);
-}
-function noteFrequency(note) {
-  return 440 * 2 ** ((note - 69) / 12);
-}
-function xorshift(state) {
-  let value = state >>> 0;
-  value ^= value << 13;
-  value ^= value >>> 17;
-  value ^= value << 5;
-  return value >>> 0;
-}
-function nonZeroNoiseSeed(frame, slot, sequence) {
-  return ((frame + 1) * 2654435761 + (slot + 1) * 2246822507 + sequence) >>> 0 || 1;
-}
-function clampSample(sample) {
-  return Math.max(-1, Math.min(1, sample));
-}
-function expectArguments(command, count) {
-  if (command.arguments.length !== count)
-    throw new TypeError(
-      `${command.name} expected ${String(count)} arguments, received ${String(command.arguments.length)}`,
-    );
-  return [...command.arguments];
-}
-function readAssetName(value, kind) {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !('name' in value) ||
-    typeof value.name !== 'string' ||
-    !('kind' in value) ||
-    value.kind !== kind
-  )
-    throw new TypeError(`expected a ${kind} asset handle`);
-  return value.name;
-}
-//#endregion
-//#region src/asset-codec.ts
-/** Bounded, data-only source bank sent to the console core for authoritative decoding. */
-function isRuntimeAssetSource(value) {
-  if (
-    !isRecord$4(value) ||
-    !isRecord$4(value.declarations) ||
-    !isRecord$4(value.files) ||
-    Array.isArray(value.declarations) ||
-    Array.isArray(value.files) ||
-    Object.keys(value).some((key) => !['declarations', 'files', 'displayPath'].includes(key)) ||
-    Object.keys(value.declarations).length > 4096 ||
-    Object.keys(value.files).length > 4096 ||
-    (value.displayPath !== void 0 &&
-      value.displayPath !== null &&
-      !canonicalAssetPath(value.displayPath))
-  )
-    return false;
-  let bytes = typeof value.displayPath === 'string' ? value.displayPath.length : 0;
-  for (const [path, data] of Object.entries(value.files)) {
-    if (!canonicalAssetPath(path) || !(data instanceof Uint8Array)) return false;
-    bytes += path.length + data.byteLength;
-    if (bytes > 16777216) return false;
-  }
-  for (const [name, declaration] of Object.entries(value.declarations)) {
-    if (
-      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
-      !isRecord$4(declaration) ||
-      Object.keys(declaration).length !== 2 ||
-      !canonicalAssetPath(declaration.path) ||
-      typeof declaration.kind !== 'string' ||
-      !['sprite', 'animation', 'tile_set', 'map', 'font', 'sound', 'music'].includes(
-        declaration.kind,
-      )
-    )
-      return false;
-    bytes += name.length + declaration.path.length + declaration.kind.length;
-    if (bytes > 16777216) return false;
-  }
-  return true;
-}
-function canonicalAssetPath(value) {
-  return (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value.length <= 1024 &&
-    value
-      .split('/')
-      .every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== '.' && part !== '..')
-  );
-}
-/** Decodes documented JSON asset files into validated hardware stores and query views. */
-function decodeRuntimeAssets(declarations, files, displayPath) {
-  const visual = [];
-  const audio = [];
-  for (const [name, declaration] of Object.entries(declarations).sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    const bytes = files[declaration.path];
-    if (bytes === void 0) throw new TypeError(`asset '${name}' is missing '${declaration.path}'`);
-    const value = JSON.parse(new TextDecoder().decode(bytes));
-    switch (declaration.kind) {
-      case 'sprite':
-        visual.push(decodeSprite(name, value, false));
-        break;
-      case 'animation':
-        visual.push(decodeSprite(name, value, true));
-        break;
-      case 'tile_set':
-        visual.push(decodeTileSet(name, value));
-        break;
-      case 'map':
-        visual.push(decodeMap(name, value));
-        break;
-      case 'sound':
-        audio.push(decodeSound(name, value));
-        break;
-      case 'music':
-        audio.push(decodeMusic(name, value));
-        break;
-      case 'font':
-        visual.push(decodeFont(name, value));
-    }
-  }
-  const visualStore = new VisualAssetStore(visual);
-  new AudioAssetStore(audio);
-  const tileSets = new Map(
-    visual.filter((asset) => asset.kind === 'tile_set').map((asset) => [asset.name, asset]),
-  );
-  const maps = visual
-    .filter((asset) => asset.kind === 'map')
-    .map((asset) => ({
-      name: asset.name,
-      layers: asset.layers.map((layer) => {
-        const tileSet = tileSets.get(layer.tileSet);
-        if (tileSet === void 0)
-          throw new TypeError(`map '${asset.name}' references missing tile set '${layer.tileSet}'`);
-        return {
-          width: layer.width,
-          height: layer.height,
-          cells: layer.cells.slice(),
-          tileFlags: tileSet.flags.slice(),
-        };
-      }),
-    }));
-  const display = decodeDisplay(displayPath, files);
-  const visualBytes = visualStore.usedBytes + displayBytes(display);
-  if (visualBytes > HARDWARE.visualCapacityBytes)
-    throw new RangeError('visual assets exceed the 1 MiB shared capacity');
-  return {
-    visual,
-    audio,
-    maps,
-    ...(display === void 0 ? {} : { display }),
-    visualBytes,
-  };
-}
-function decodeSprite(name, value, animation) {
-  if (
-    !isRecord$4(value) ||
-    value.revision !== 2 ||
-    value.kind !== 'sprite' ||
-    !boundedInteger(value.width, 1, HARDWARE.spriteMaximumAxis) ||
-    !boundedInteger(value.height, 1, HARDWARE.spriteMaximumAxis) ||
-    !Array.isArray(value.frames) ||
-    value.frames.length === 0 ||
-    value.frames.length > 256
-  )
-    throw new TypeError(`sprite asset '${name}' is invalid`);
-  const pixelCount = value.width * value.height;
-  const frames = value.frames.map((frame) => {
-    if (!isNumberArray(frame, pixelCount, 0, 255))
-      throw new TypeError(`sprite asset '${name}' has invalid indexed pixels`);
-    return {
-      kind: 'sprite',
-      name,
-      width: value.width,
-      height: value.height,
-      pixels: Uint8Array.from(frame),
-    };
-  });
-  const first = frames[0];
-  if (first === void 0) throw new TypeError(`sprite asset '${name}' requires a frame`);
-  return animation
-    ? {
-        kind: 'animation',
-        name,
-        frames,
-      }
-    : {
-        ...first,
-        name,
-      };
-}
-function decodeTileSet(name, value) {
-  if (
-    !isRecord$4(value) ||
-    value.revision !== 2 ||
-    value.kind !== 'tile_set' ||
-    !Array.isArray(value.tiles) ||
-    value.tiles.length === 0 ||
-    value.tiles.length > 4096 ||
-    !isNumberArray(value.flags, value.tiles.length, 0, 255)
-  )
-    throw new TypeError(`tile-set asset '${name}' is invalid`);
-  return {
-    kind: 'tile_set',
-    name,
-    tiles: value.tiles.map((pixels, index) => {
-      if (!isNumberArray(pixels, 64, 0, 255))
-        throw new TypeError(`tile ${String(index)} in '${name}' has invalid indexed pixels`);
-      return {
-        kind: 'sprite',
-        name: `${name}:${String(index)}`,
-        width: 8,
-        height: 8,
-        pixels: Uint8Array.from(pixels),
-      };
-    }),
-    flags: Uint8Array.from(value.flags),
-  };
-}
-function decodeMap(name, value) {
-  if (
-    !isRecord$4(value) ||
-    value.revision !== 1 ||
-    value.kind !== 'map' ||
-    !Array.isArray(value.layers) ||
-    value.layers.length === 0 ||
-    value.layers.length > 8
-  )
-    throw new TypeError(`map asset '${name}' is invalid`);
-  return {
-    kind: 'map',
-    name,
-    layers: value.layers.map((layer) => {
-      if (
-        !isRecord$4(layer) ||
-        !boundedInteger(layer.width, 1, 256) ||
-        !boundedInteger(layer.height, 1, 256) ||
-        typeof layer.tileSet !== 'string' ||
-        !isNumberArray(layer.cells, layer.width * layer.height, 0, 65535)
-      )
-        throw new TypeError(`map asset '${name}' has an invalid layer`);
-      return {
-        width: layer.width,
-        height: layer.height,
-        cells: Uint16Array.from(layer.cells),
-        tileSet: layer.tileSet,
-      };
-    }),
-  };
-}
-function decodeFont(name, value) {
-  if (
-    !isRecord$4(value) ||
-    value.revision !== 1 ||
-    value.kind !== 'font' ||
-    !boundedInteger(value.glyphWidth, 1, 16) ||
-    !boundedInteger(value.glyphHeight, 1, 16) ||
-    !boundedInteger(value.baseline, 0, value.glyphHeight - 1) ||
-    !boundedInteger(value.advanceX, 1, 32) ||
-    !boundedInteger(value.advanceY, 1, 32) ||
-    !boundedInteger(value.missingGlyph, 0, 255) ||
-    !Array.isArray(value.glyphs) ||
-    value.glyphs.length === 0 ||
-    value.glyphs.length > 256
-  )
-    throw new TypeError(`font asset '${name}' is invalid`);
-  const glyphs = /* @__PURE__ */ new Map();
-  let previous = -1;
-  for (const glyph of value.glyphs) {
-    if (
-      !isRecord$4(glyph) ||
-      !boundedInteger(glyph.code, 0, 255) ||
-      glyph.code <= previous ||
-      !isNumberArray(glyph.pixels, value.glyphWidth * value.glyphHeight, 0, 1)
-    )
-      throw new TypeError(`font asset '${name}' has an invalid glyph map`);
-    previous = glyph.code;
-    glyphs.set(glyph.code, Uint8Array.from(glyph.pixels));
-  }
-  if (!glyphs.has(value.missingGlyph))
-    throw new TypeError(`font asset '${name}' is missing its fallback glyph`);
-  return {
-    kind: 'font',
-    name,
-    glyphWidth: value.glyphWidth,
-    glyphHeight: value.glyphHeight,
-    baseline: value.baseline,
-    advanceX: value.advanceX,
-    advanceY: value.advanceY,
-    missingGlyph: value.missingGlyph,
-    glyphs,
-  };
-}
-function decodeSound(name, value) {
-  if (!isRecord$4(value) || value.revision !== 1 || value.kind !== 'sound')
-    throw new TypeError(`sound asset '${name}' is invalid`);
-  const sound = {
-    ...value,
-    name,
-  };
-  new AudioAssetStore([sound]);
-  return sound;
-}
-function decodeMusic(name, value) {
-  if (!isRecord$4(value) || value.revision !== 1 || value.kind !== 'music')
-    throw new TypeError(`music asset '${name}' is invalid`);
-  return {
-    ...value,
-    name,
-  };
-}
-function decodeDisplay(path, files) {
-  if (path === void 0 || path === null) return void 0;
-  const bytes = files[path];
-  if (bytes === void 0) throw new TypeError(`display configuration is missing '${path}'`);
-  const value = JSON.parse(new TextDecoder().decode(bytes));
-  if (
-    !isRecord$4(value) ||
-    value.revision !== 2 ||
-    value.kind !== 'display' ||
-    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, 255) ||
-    !Array.isArray(value.raster) ||
-    value.raster.length > HARDWARE.height
-  )
-    throw new TypeError('display configuration is invalid');
-  let previousLine = -1;
-  const raster = value.raster.map((state) => {
-    if (
-      !isRecord$4(state) ||
-      !boundedInteger(state.line, 0, HARDWARE.height - 1) ||
-      state.line <= previousLine ||
-      !boundedInteger(state.scrollX, -32768, 32767) ||
-      !boundedInteger(state.scrollY, -32768, 32767) ||
-      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, 255)
-    )
-      throw new TypeError('display configuration has invalid raster state');
-    previousLine = state.line;
-    return {
-      line: state.line,
-      scrollX: state.scrollX,
-      scrollY: state.scrollY,
-      remap: Uint8Array.from(state.remap),
-    };
-  });
-  return {
-    remap: Uint8Array.from(value.remap),
-    raster,
-  };
-}
-function displayBytes(display) {
-  return display === void 0
-    ? 0
-    : HARDWARE.rasterPaletteSize + display.raster.length * (HARDWARE.rasterPaletteSize + 6);
-}
-function isNumberArray(value, length, minimum, maximum) {
-  return (
-    Array.isArray(value) &&
-    value.length === length &&
-    value.every((entry) => Number.isSafeInteger(entry) && entry >= minimum && entry <= maximum)
-  );
-}
-function boundedInteger(value, minimum, maximum) {
-  return (
-    Number.isSafeInteger(value) && typeof value === 'number' && value >= minimum && value <= maximum
-  );
-}
-function isRecord$4(value) {
-  return typeof value === 'object' && value !== null;
 }
 //#endregion
 //#region src/map-query.ts
@@ -4559,7 +4713,7 @@ var SaveMemory = class SaveMemory {
   }
   pendingWrites() {
     return [...this.writes]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, value]) => ({
         key,
         value,
@@ -4737,7 +4891,7 @@ function isSaveValues(value) {
 }
 function sortedValues(values) {
   return Object.fromEntries(
-    Object.entries(values).sort(([left], [right]) => left.localeCompare(right)),
+    Object.entries(values).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
   );
 }
 function encodedBytes(values) {
@@ -4745,15 +4899,7 @@ function encodedBytes(values) {
 }
 function encodeValues(values) {
   if (Object.keys(values).length === 0) return /* @__PURE__ */ new Uint8Array();
-  const bytes = new TextEncoder().encode(
-    JSON.stringify(
-      Object.fromEntries(
-        Object.entries(values).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0,
-        ),
-      ),
-    ),
-  );
+  const bytes = new TextEncoder().encode(JSON.stringify(sortedValues(values)));
   if (bytes.length > HARDWARE.saveCapacityBytes)
     throw new RangeError('cartridge save exceeds the 8 KiB capacity');
   return bytes;
@@ -4813,41 +4959,6 @@ function isNonNegativeInteger(value) {
 function hasExactKeys(value, expected) {
   const actual = Object.keys(value).sort();
   return actual.length === expected.length && expected.every((key) => actual.includes(key));
-}
-function isCartridgeAlias(value) {
-  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
-}
-function isTransferParameter(value) {
-  return (
-    typeof value === 'string' &&
-    value.length <= 1024 &&
-    value.isWellFormed() &&
-    new TextEncoder().encode(value).length <= 1024
-  );
-}
-function request(value) {
-  if (!record(value) || !isCartridgeAlias(value.alias)) return false;
-  return value.kind === 'load'
-    ? exact(value, ['kind', 'alias', 'parameter']) && isTransferParameter(value.parameter)
-    : value.kind === 'reload' && exact(value, ['kind', 'alias']);
-}
-function isCartridgeControlSnapshot(value) {
-  return (
-    record(value) &&
-    exact(value, ['revision', 'alias', 'parameter', 'pending']) &&
-    value.revision === 1 &&
-    isCartridgeAlias(value.alias) &&
-    isTransferParameter(value.parameter) &&
-    (value.pending === null || request(value.pending))
-  );
-}
-function record(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-function exact(value, keys) {
-  return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
 }
 //#endregion
 //#region src/console-runtime.ts
@@ -5007,11 +5118,19 @@ function createConsoleRuntime(factory, configuration, services = {}) {
         });
       const active = requireMachine();
       active.assertRunnable();
-      drawCommands = [];
-      audioCommands = [];
-      frameOutput = void 0;
-      debugTrace = [];
-      debugTraceTruncated = false;
+      resetCapture();
+      if (!active.inspectExecution().booted) {
+        graphics.beginFrame();
+        rendering = true;
+        try {
+          active.boot();
+        } finally {
+          rendering = false;
+        }
+        graphics.finishFrame();
+        boundarySnapshot = captureSnapshot();
+        resetCapture();
+      }
       graphics.beginFrame();
       rendering = true;
       let report;
@@ -5054,11 +5173,7 @@ function createConsoleRuntime(factory, configuration, services = {}) {
           end: 0,
         });
       if (!debugFrameActive) {
-        drawCommands = [];
-        audioCommands = [];
-        frameOutput = void 0;
-        debugTrace = [];
-        debugTraceTruncated = false;
+        resetCapture();
         graphics.beginFrame();
         debugFrameActive = true;
       }
@@ -5190,7 +5305,21 @@ function createConsoleRuntime(factory, configuration, services = {}) {
     inspectMenu() {
       return requireMachine().inspectMenu();
     },
+    inspectExecution() {
+      const active = requireMachine();
+      return {
+        frame: active.frame,
+        ...active.inspectExecution(),
+      };
+    },
   };
+  function resetCapture() {
+    drawCommands = [];
+    audioCommands = [];
+    frameOutput = void 0;
+    debugTrace = [];
+    debugTraceTruncated = false;
+  }
   function captureSnapshot() {
     return {
       revision: 7,
@@ -5521,6 +5650,839 @@ var MEMORY_CALLS = /* @__PURE__ */ new Map([
   ['mem_fill', 3],
 ]);
 //#endregion
+//#region src/game-definition.ts
+/** Private scheduler-owned copies of immutable member data and initial save images. */
+var GameCatalog = class {
+  identity;
+  seed;
+  debug;
+  parameter;
+  initialSaves;
+  members = /* @__PURE__ */ new Map();
+  constructor(definition) {
+    if (
+      !record$2(definition) ||
+      !exact$2(definition, [
+        'identity',
+        'seed',
+        'members',
+        ...(definition.debug === void 0 ? [] : ['debug']),
+        ...(definition.parameter === void 0 ? [] : ['parameter']),
+        ...(definition.saves === void 0 ? [] : ['saves']),
+      ]) ||
+      typeof definition.identity !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(definition.identity) ||
+      !Number.isSafeInteger(definition.seed) ||
+      definition.seed < 0 ||
+      definition.seed > 4294967295 ||
+      (definition.debug !== void 0 && typeof definition.debug !== 'boolean') ||
+      !isTransferParameter(definition.parameter ?? '') ||
+      !Array.isArray(definition.members) ||
+      definition.members.length < 1 ||
+      definition.members.length > 32 ||
+      Object.keys(definition.members).length !== definition.members.length
+    )
+      throw new TypeError('invalid admitted game definition');
+    this.identity = definition.identity;
+    this.seed = definition.seed;
+    this.debug = definition.debug === true;
+    this.parameter = definition.parameter ?? '';
+    const ids = /* @__PURE__ */ new Set();
+    for (const raw of definition.members) {
+      if (
+        !record$2(raw) ||
+        !exact$2(raw, ['alias', 'id', 'factory', 'configuration']) ||
+        !isCartridgeAlias(raw.alias) ||
+        typeof raw.id !== 'string' ||
+        !/^[a-z0-9][a-z0-9.-]{2,63}$/.test(raw.id) ||
+        typeof raw.factory !== 'function' ||
+        !record$2(raw.configuration) ||
+        ['seed', 'debug', 'save'].some((key) => Object.hasOwn(raw.configuration, key)) ||
+        this.members.has(raw.alias) ||
+        ids.has(raw.id)
+      )
+        throw new TypeError('invalid or duplicate game member alias/save identity');
+      const configuration = structuredClone(raw.configuration);
+      if (
+        !isConsoleConfiguration({
+          ...configuration,
+          seed: this.seed,
+          debug: this.debug,
+        })
+      )
+        throw new TypeError(`invalid console configuration for '${raw.alias}'`);
+      const data = configuration;
+      const decoded =
+        data.assets === void 0
+          ? decodeRuntimeAssets({}, {})
+          : decodeRuntimeAssets(
+              data.assets.declarations,
+              data.assets.files,
+              data.assets.displayPath,
+            );
+      const names =
+        data.assets === void 0
+          ? (data.maps ?? []).map((map) => [map.name, 'map'])
+          : Object.entries(data.assets.declarations).map(([name, asset]) => [name, asset.kind]);
+      names.sort(([a = ''], [b = '']) => (a < b ? -1 : a > b ? 1 : 0));
+      const metadata =
+        HARDWARE.visualAllocations * MEMORY.allocationStride +
+        4096 * MEMORY.assetStride +
+        decoded.audio.length * MEMORY.audioAssetStride;
+      this.members.set(raw.alias, {
+        alias: raw.alias,
+        id: raw.id,
+        factory: raw.factory,
+        configuration: data,
+        signature: JSON.stringify(names),
+        reloadUnits: 1 + Math.ceil((HARDWARE.visualCapacityBytes + metadata) / 64),
+      });
+      ids.add(raw.id);
+    }
+    if (!this.members.has('main')) throw new TypeError('game requires a main entry cartridge');
+    if (
+      definition.saves !== void 0 &&
+      (!record$2(definition.saves) || Object.keys(definition.saves).some((id) => !ids.has(id)))
+    )
+      throw new TypeError('initial saves contain an undeclared cartridge identity');
+    const saves = /* @__PURE__ */ new Map();
+    for (const id of [...ids].sort()) {
+      const image =
+        definition.saves !== void 0 && Object.hasOwn(definition.saves, id)
+          ? definition.saves[id]
+          : void 0;
+      if (image !== void 0 && !isSaveImage(image))
+        throw new TypeError(`invalid save image for '${id}'`);
+      saves.set(id, new SaveMemory(image).deviceSnapshot().committed);
+    }
+    this.initialSaves = saves;
+  }
+  member(alias) {
+    const member = this.members.get(alias);
+    if (member === void 0) throw new TypeError(`unknown local cartridge '${alias}'`);
+    return member;
+  }
+  ids() {
+    return [...this.members.values()].map((member) => member.id).sort();
+  }
+  compatible(alias, bank) {
+    const a = this.members.get(alias),
+      b = this.members.get(bank);
+    return (
+      a !== void 0 &&
+      b !== void 0 &&
+      a.signature === b.signature &&
+      (a.configuration.assets === void 0) === (b.configuration.assets === void 0) &&
+      isConsoleConfiguration({
+        ...(alias === bank
+          ? a.configuration
+          : reloadConfiguration(a.configuration, b.configuration)),
+        seed: this.seed,
+        debug: this.debug,
+      })
+    );
+  }
+  prepare(alias, parameter, bank, save, deferBoot) {
+    if (!isTransferParameter(parameter) || !this.compatible(alias, bank))
+      throw new TypeError('incompatible game cartridge context/bank');
+    const member = this.member(alias),
+      donor = this.member(bank);
+    const aliases = [...this.members.keys()].sort();
+    const control = new CartridgeControl({
+      alias,
+      parameter,
+      aliases,
+      reloadCosts: Object.fromEntries(
+        aliases
+          .filter((name) => this.compatible(alias, name))
+          .map((name) => [name, this.member(name).reloadUnits]),
+      ),
+    });
+    const configuration =
+      alias === bank
+        ? member.configuration
+        : reloadConfiguration(member.configuration, donor.configuration);
+    return {
+      runtime: createConsoleRuntime(
+        member.factory,
+        {
+          ...configuration,
+          seed: this.seed,
+          debug: this.debug,
+          save,
+        },
+        {
+          cartridge: control,
+          deferBoot,
+        },
+      ),
+      control,
+    };
+  }
+};
+function reloadConfiguration(active, donor) {
+  const base = {
+    updateRate: active.updateRate,
+    workUnitsPerFrame: active.workUnitsPerFrame,
+    ...(active.hardwareRevision === void 0 ? {} : { hardwareRevision: active.hardwareRevision }),
+    ...(active.rom === void 0 ? {} : { rom: active.rom }),
+  };
+  const bank = donor.assets;
+  if (bank === void 0)
+    return {
+      ...base,
+      ...(donor.maps === void 0 ? {} : { maps: donor.maps }),
+    };
+  const files = Object.fromEntries(
+    Object.values(bank.declarations).map(({ path }) => [path, bank.files[path]]),
+  );
+  const ownDisplay = active.assets?.displayPath;
+  let displayPath = null;
+  if (typeof ownDisplay === 'string') {
+    let suffix = 0;
+    do displayPath = `__mod01__/retained-display-${String(suffix++)}.json`;
+    while (Object.hasOwn(files, displayPath));
+    const display = active.assets?.files[ownDisplay];
+    if (display === void 0) throw new TypeError('active display source missing');
+    files[displayPath] = display;
+  }
+  const assets = {
+    declarations: bank.declarations,
+    files,
+    displayPath,
+  };
+  return {
+    ...base,
+    assets,
+  };
+}
+function record$2(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$2(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/input-barrier.ts
+function isInputBarrierSnapshot(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const object = value;
+  return (
+    Object.keys(object).length === 3 &&
+    ['revision', 'controllers', 'pointer'].every((key) => Object.hasOwn(object, key)) &&
+    object.revision === 1 &&
+    Array.isArray(object.controllers) &&
+    object.controllers.length === 4 &&
+    Object.keys(object.controllers).length === 4 &&
+    Array.from(object.controllers).every(
+      (mask) =>
+        typeof mask === 'number' &&
+        Number.isInteger(mask) &&
+        mask >= 0 &&
+        mask < 1 << BUTTONS.length,
+    ) &&
+    typeof object.pointer === 'number' &&
+    Number.isInteger(object.pointer) &&
+    object.pointer >= 0 &&
+    object.pointer <= 3
+  );
+}
+/** Loads quarantine already-held controls until release; data reloads retain this owner unchanged. */
+var InputBarrier = class {
+  controllers = [0, 0, 0, 0];
+  pointer = 0;
+  quarantine(input) {
+    validate(input);
+    this.controllers = input.controllers.map(buttonMask);
+    this.pointer = Number(input.pointer.primary) | (Number(input.pointer.secondary) << 1);
+  }
+  apply(input) {
+    validate(input);
+    const controllers = input.controllers.map((controller, port) => {
+      const held = buttonMask(controller);
+      const blocked = (this.controllers[port] ?? 0) & held;
+      this.controllers[port] = blocked;
+      return {
+        buttons: Object.fromEntries(
+          BUTTONS.map((button, index) => [
+            button,
+            controller.buttons[button] && (blocked & (1 << index)) === 0,
+          ]),
+        ),
+      };
+    });
+    this.pointer &= Number(input.pointer.primary) | (Number(input.pointer.secondary) << 1);
+    return {
+      controllers,
+      pointer: {
+        ...input.pointer,
+        primary: input.pointer.primary && (this.pointer & 1) === 0,
+        secondary: input.pointer.secondary && (this.pointer & 2) === 0,
+      },
+      ...(input.menuAction === void 0 ? {} : { menuAction: input.menuAction }),
+    };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      controllers: [...this.controllers],
+      pointer: this.pointer,
+    };
+  }
+  restore(value) {
+    if (!isInputBarrierSnapshot(value))
+      throw new RuntimeFault('M019103', 'invalid input-owner snapshot', {
+        start: 0,
+        end: 0,
+      });
+    this.controllers = [...value.controllers];
+    this.pointer = value.pointer;
+  }
+};
+function buttonMask(controller) {
+  return BUTTONS.reduce(
+    (mask, button, index) => mask | (Number(controller.buttons[button]) << index),
+    0,
+  );
+}
+function validate(input) {
+  if (!isInputFrame(input))
+    throw new RuntimeFault('M019008', 'invalid controller input frame', {
+      start: 0,
+      end: 0,
+    });
+}
+//#endregion
+//#region src/game-runtime.ts
+/** One pre-admitted game, one global input/replay timeline, no host I/O at a transition. */
+var GameRuntime = class {
+  catalog;
+  binding;
+  alias = 'main';
+  parameter;
+  bankAlias = 'main';
+  frame = 0;
+  saves;
+  barrier = new InputBarrier();
+  input;
+  constructor(definition) {
+    this.catalog = new GameCatalog(definition);
+    this.parameter = this.catalog.parameter;
+    this.saves = new Map([...this.catalog.initialSaves].map(([id, bytes]) => [id, bytes.slice()]));
+    this.binding = this.catalog.prepare(
+      this.alias,
+      this.parameter,
+      this.bankAlias,
+      this.saved(this.alias),
+      false,
+    );
+  }
+  runFrame(input) {
+    this.validateInput(input);
+    this.assertExecution(false);
+    const effective = this.frameInput(input);
+    return this.complete(this.binding.runtime.runFrame(effective));
+  }
+  stepDebug(input) {
+    this.validateInput(input);
+    if (!this.catalog.debug)
+      throw new RuntimeFault('M019104', 'statement stepping requires a debug cartridge', {
+        start: 0,
+        end: 0,
+      });
+    this.assertExecution(true);
+    const effective = this.binding.runtime.inspectExecution().booted
+      ? this.frameInput(input)
+      : input;
+    const result = this.binding.runtime.stepDebug(effective);
+    if ('frame' in result) return { frame: this.complete(result.frame) };
+    return {
+      ...result,
+      ...this.location(),
+    };
+  }
+  inspect() {
+    const execution = this.binding.runtime.inspectExecution();
+    return {
+      ...execution,
+      ...this.location(),
+      frame: this.frame,
+      cartridgeFrame: execution.frame,
+      parameter: this.parameter,
+      bankAlias: this.bankAlias,
+      pending: this.binding.control.pendingRequest(),
+    };
+  }
+  snapshot() {
+    return {
+      revision: 1,
+      identity: this.catalog.identity,
+      seed: this.catalog.seed,
+      debug: this.catalog.debug,
+      frame: this.frame,
+      alias: this.alias,
+      parameter: this.parameter,
+      bankAlias: this.bankAlias,
+      saves: Object.fromEntries([...this.saves].map(([id, bytes]) => [id, bytes.slice()])),
+      inputBarrier: this.barrier.snapshot(),
+      console: this.binding.runtime.snapshot(),
+    };
+  }
+  restore(value) {
+    try {
+      if (
+        !record$1(value) ||
+        !exact$1(value, [
+          'revision',
+          'identity',
+          'seed',
+          'debug',
+          'frame',
+          'alias',
+          'parameter',
+          'bankAlias',
+          'saves',
+          'inputBarrier',
+          'console',
+        ]) ||
+        value.revision !== 1 ||
+        value.identity !== this.catalog.identity ||
+        value.seed !== this.catalog.seed ||
+        value.debug !== this.catalog.debug ||
+        typeof value.frame !== 'number' ||
+        !Number.isSafeInteger(value.frame) ||
+        value.frame < 0 ||
+        !isCartridgeAlias(value.alias) ||
+        !isTransferParameter(value.parameter) ||
+        !isCartridgeAlias(value.bankAlias) ||
+        !this.catalog.compatible(value.alias, value.bankAlias) ||
+        !isConsoleRuntimeSnapshot(value.console) ||
+        value.console.machine.frame > value.frame ||
+        value.console.cartridgeControl === null ||
+        value.console.cartridgeControl.alias !== value.alias ||
+        value.console.cartridgeControl.parameter !== value.parameter ||
+        !isInputBarrierSnapshot(value.inputBarrier) ||
+        !record$1(value.saves) ||
+        !exact$1(value.saves, this.catalog.ids())
+      )
+        throw new TypeError('invalid game checkpoint context');
+      const saves = /* @__PURE__ */ new Map();
+      for (const [id, bytes] of Object.entries(value.saves)) {
+        if (!(bytes instanceof Uint8Array) || bytes.length !== HARDWARE.saveCapacityBytes)
+          throw new TypeError('invalid committed game save image');
+        saves.set(id, bytes.slice());
+      }
+      const binding = this.catalog.prepare(
+        value.alias,
+        value.parameter,
+        value.bankAlias,
+        value.console.save.committed,
+        true,
+      );
+      binding.runtime.restore(value.console);
+      const barrier = new InputBarrier();
+      barrier.restore(value.inputBarrier);
+      this.binding = binding;
+      this.barrier = barrier;
+      this.saves = saves;
+      this.frame = value.frame;
+      this.alias = value.alias;
+      this.parameter = value.parameter;
+      this.bankAlias = value.bankAlias;
+      this.input = void 0;
+    } catch (error) {
+      throw new RuntimeFault(
+        'M019103',
+        error instanceof Error ? error.message : 'invalid game checkpoint',
+        {
+          start: 0,
+          end: 0,
+        },
+      );
+    }
+  }
+  inspectMemory(address, length) {
+    return this.binding.runtime.inspectMemory(address, length);
+  }
+  editMemory(address, bytes) {
+    this.binding.runtime.editMemory(address, bytes);
+  }
+  memoryRegions() {
+    return this.binding.runtime.memoryRegions();
+  }
+  inspectMenu() {
+    return this.binding.runtime.inspectMenu();
+  }
+  location() {
+    return {
+      cartridgeAlias: this.alias,
+      cartridgeId: this.catalog.member(this.alias).id,
+    };
+  }
+  saved(alias) {
+    const bytes = this.saves.get(this.catalog.member(alias).id);
+    if (bytes === void 0) throw new TypeError('missing admitted save identity');
+    return bytes;
+  }
+  validateInput(input) {
+    if (!isInputFrame(input))
+      throw new RuntimeFault('M019008', 'invalid controller input frame', {
+        start: 0,
+        end: 0,
+      });
+    if (this.frame === Number.MAX_SAFE_INTEGER)
+      throw new RuntimeFault('M019012', 'game display-frame counter is exhausted', {
+        start: 0,
+        end: 0,
+      });
+  }
+  frameInput(raw) {
+    this.input ??= {
+      raw: structuredClone(raw),
+      effective: this.barrier.apply(raw),
+    };
+    return this.input.effective;
+  }
+  assertExecution(allowSuspended) {
+    const status = this.binding.runtime.inspectExecution();
+    if (status.fault !== null)
+      throw new RuntimeFault(
+        'M019014',
+        'cartridge faulted; restart or restore a healthy checkpoint',
+        status.fault.sourceSpan,
+      );
+    if (!allowSuspended && status.phase !== 'idle')
+      throw new RuntimeFault('M019014', 'cartridge is already executing', {
+        start: 0,
+        end: 0,
+      });
+  }
+  complete(output) {
+    const frame = {
+      ...output,
+      ...this.location(),
+      cartridgeFrame: output.frame,
+      frame: this.frame,
+    };
+    const request = this.binding.control.pendingRequest();
+    if (output.saveCommit !== void 0) this.saves.set(frame.cartridgeId, output.saveCommit.slice());
+    if (request?.kind === 'load') {
+      const next = this.catalog.prepare(
+        request.alias,
+        request.parameter,
+        request.alias,
+        this.saved(request.alias),
+        true,
+      );
+      if (this.input === void 0) throw new TypeError('missing completed game input');
+      this.barrier.quarantine(this.input.raw);
+      this.binding = next;
+      this.alias = request.alias;
+      this.parameter = request.parameter;
+      this.bankAlias = request.alias;
+    } else if (request?.kind === 'reload') {
+      const before = this.binding.runtime.snapshot();
+      const next = this.catalog.prepare(
+        this.alias,
+        this.parameter,
+        request.alias,
+        this.saved(this.alias),
+        true,
+      );
+      const fresh = next.runtime.snapshot();
+      const retained = /* @__PURE__ */ new Set([
+        MEMORY.ram,
+        MEMORY.front,
+        MEMORY.back,
+        MEMORY.display,
+        MEMORY.draw,
+        MEMORY.transparency,
+        MEMORY.pattern,
+        MEMORY.rasterLive,
+        MEMORY.raster,
+      ]);
+      const oldRegions = new Map(before.memory.regions.map((region) => [region.address, region]));
+      next.runtime.restore({
+        ...before,
+        audio: fresh.audio,
+        cartridgeControl: {
+          ...before.cartridgeControl,
+          pending: null,
+        },
+        memory: {
+          ...fresh.memory,
+          regions: fresh.memory.regions.map((region) =>
+            retained.has(region.address) ? (oldRegions.get(region.address) ?? region) : region,
+          ),
+        },
+      });
+      this.binding = next;
+      this.bankAlias = request.alias;
+    }
+    this.frame++;
+    this.input = void 0;
+    return frame;
+  }
+};
+function createGameRuntime(definition) {
+  return new GameRuntime(definition);
+}
+function record$1(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact$1(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/game-loader.ts
+/** Validates every member's data before importing any Rust-admitted compiled module. */
+async function loadRuntimeGame(payload, options) {
+  if (
+    !record(payload) ||
+    !exact(payload, ['revision', 'identity', 'debug', 'members']) ||
+    payload.revision !== 1 ||
+    typeof payload.identity !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(payload.identity) ||
+    typeof payload.debug !== 'boolean' ||
+    !record(payload.members) ||
+    Object.keys(payload.members).length < 1 ||
+    Object.keys(payload.members).length > 32 ||
+    !Object.hasOwn(payload.members, 'main')
+  )
+    throw new TypeError('invalid current runtime game payload');
+  const members = [];
+  const metadata = /* @__PURE__ */ new Map();
+  let transportBytes = 0;
+  for (const [alias, raw] of Object.entries(payload.members)) {
+    if (
+      !isCartridgeAlias(alias) ||
+      !record(raw) ||
+      !exact(raw, ['javascript', 'sourceMap', 'symbolNames', 'manifest', 'files', 'rom']) ||
+      typeof raw.javascript !== 'string' ||
+      !raw.javascript.isWellFormed() ||
+      raw.javascript.length === 0 ||
+      Buffer.byteLength(raw.javascript, 'utf8') > 2097152 ||
+      typeof raw.sourceMap !== 'string' ||
+      !raw.sourceMap.isWellFormed() ||
+      Buffer.byteLength(raw.sourceMap, 'utf8') > 134217728 ||
+      !record(raw.symbolNames) ||
+      Object.entries(raw.symbolNames).some(
+        ([key, value]) =>
+          !/^s[0-9]{1,10}$/.test(key) ||
+          typeof value !== 'string' ||
+          value.length < 1 ||
+          value.length > 1024 ||
+          !value.isWellFormed(),
+      ) ||
+      !record(raw.manifest) ||
+      !exact(raw.manifest, ['id', 'hardwareRevision', 'updateRate', 'display', 'assets']) ||
+      typeof raw.manifest.id !== 'string' ||
+      raw.manifest.hardwareRevision !== 2 ||
+      (raw.manifest.updateRate !== 30 && raw.manifest.updateRate !== 60) ||
+      (raw.manifest.display !== null && typeof raw.manifest.display !== 'string') ||
+      !record(raw.files) ||
+      Object.keys(raw.files).length > 4096
+    )
+      throw new TypeError(`invalid runtime member '${alias}'`);
+    let fileBytes = 0;
+    for (const [path, value] of Object.entries(raw.files)) {
+      fileBytes += path.length + runtimeByteLength(value, 16777216);
+      if (fileBytes > 16777216)
+        throw new RangeError(`runtime member '${alias}' asset byte transport exceeds 16 MiB`);
+    }
+    transportBytes +=
+      Buffer.byteLength(raw.javascript, 'utf8') +
+      Buffer.byteLength(raw.sourceMap, 'utf8') +
+      runtimeByteLength(raw.rom, HARDWARE.cartridgeCapacityBytes) +
+      fileBytes;
+    if (transportBytes > 536870912) throw new RangeError('runtime game transport exceeds 512 MiB');
+    validateSourceMap(raw.sourceMap);
+    const files = Object.fromEntries(
+      Object.entries(raw.files).map(([path, value]) => [path, decodeRuntimeBytes(value, 16777216)]),
+    );
+    const assets = {
+      declarations: raw.manifest.assets,
+      files,
+      displayPath: raw.manifest.display,
+    };
+    if (!isRuntimeAssetSource(assets))
+      throw new TypeError(`invalid runtime asset source '${alias}'`);
+    const rom = decodeRuntimeBytes(raw.rom, HARDWARE.cartridgeCapacityBytes);
+    const manifest = {
+      id: raw.manifest.id,
+      hardwareRevision: raw.manifest.hardwareRevision,
+      updateRate: raw.manifest.updateRate,
+      display: raw.manifest.display,
+      assets: structuredClone(assets.declarations),
+    };
+    const symbolNames = Object.fromEntries(
+      Object.entries(raw.symbolNames).map(([key, value]) => [key, String(value)]),
+    );
+    const encodedFiles = Object.fromEntries(
+      Object.entries(raw.files).map(([key, value]) => [key, String(value)]),
+    );
+    metadata.set(alias, {
+      javascript: raw.javascript,
+      sourceMap: raw.sourceMap,
+      symbolNames,
+      manifest,
+      files: encodedFiles,
+      rom: String(raw.rom),
+    });
+    members.push({
+      alias,
+      id: manifest.id,
+      factory: () => {
+        throw new Error('compiled module has not been admitted');
+      },
+      configuration: {
+        updateRate: manifest.updateRate,
+        workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
+        hardwareRevision: manifest.hardwareRevision,
+        assets,
+        rom,
+      },
+    });
+  }
+  const definition = {
+    ...options,
+    identity: payload.identity,
+    debug: payload.debug,
+    members,
+  };
+  new GameCatalog(definition);
+  const compiled = [];
+  for (const member of members) {
+    const data = metadata.get(member.alias);
+    if (data === void 0) throw new TypeError('missing admitted runtime metadata');
+    const module = await import(
+      `data:text/javascript;base64,${Buffer.from(data.javascript).toString('base64')}`
+    );
+    if (!record(module) || typeof module.default !== 'function')
+      throw new TypeError(`compiled runtime member '${member.alias}' has no factory`);
+    compiled.push({
+      ...member,
+      factory: module.default,
+    });
+  }
+  return {
+    runtime: createGameRuntime({
+      ...definition,
+      members: compiled,
+    }),
+    metadata,
+  };
+}
+/** Canonical base64 only: Buffer's permissive decoder must not silently repair host data. */
+function decodeRuntimeBytes(value, maximum) {
+  runtimeByteLength(value, maximum);
+  if (typeof value !== 'string') throw new TypeError('invalid runtime byte transport');
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.byteLength > maximum || bytes.toString('base64') !== value)
+    throw new TypeError('noncanonical runtime byte transport');
+  return Uint8Array.from(bytes);
+}
+function runtimeByteLength(value, maximum) {
+  if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 0 ||
+    typeof value !== 'string' ||
+    value.length > Math.ceil(maximum / 3) * 4 ||
+    value.length % 4 !== 0
+  )
+    throw new TypeError('invalid bounded runtime byte transport');
+  const length = (value.length / 4) * 3 - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+  if (length > maximum) throw new RangeError('runtime byte transport exceeds decoded bound');
+  return length;
+}
+function validateSourceMap(source) {
+  const map = JSON.parse(source);
+  if (
+    !record(map) ||
+    !exact(map, ['version', 'file', 'sources', 'sourcesContent', 'names', 'mappings']) ||
+    map.version !== 3 ||
+    map.file !== 'cartridge.js' ||
+    typeof map.mappings !== 'string' ||
+    !strings(map.sources) ||
+    map.sources.length < 1 ||
+    map.sources.length > 4096 ||
+    !strings(map.sourcesContent) ||
+    map.sourcesContent.length !== map.sources.length ||
+    !strings(map.names)
+  )
+    throw new TypeError('invalid compiler source map');
+}
+function strings(value) {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === 'string' && item.isWellFormed())
+  );
+}
+function record(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+//#endregion
+//#region src/execution-hashes.ts
+/** Shared CLI/native evidence encoding, not a restorable checkpoint format. */
+function pcmBytes(frame) {
+  const samples = frame.output.audio.left.length;
+  const bytes = new Uint8Array(samples * 8);
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < samples; index += 1) {
+    view.setFloat32(index * 8, frame.output.audio.left[index] ?? 0, true);
+    view.setFloat32(index * 8 + 4, frame.output.audio.right[index] ?? 0, true);
+  }
+  return bytes;
+}
+function canonicalBytes(value) {
+  return new TextEncoder().encode(JSON.stringify(canonicalValue(value)));
+}
+function stateBytes(snapshot) {
+  return canonicalBytes(
+    Object.fromEntries(
+      Object.entries(snapshot).filter(([key]) => key !== 'identity' && key !== 'debug'),
+    ),
+  );
+}
+function saveHashes(snapshot) {
+  return Object.fromEntries(
+    Object.entries(snapshot.saves).map(([id, image]) => [id, sha256(image)]),
+  );
+}
+function canonicalValue(value) {
+  if (value instanceof Uint8Array)
+    return {
+      $bytes: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('hex'),
+    };
+  if (value instanceof Float32Array) {
+    const bytes = new Uint8Array(value.length * 4);
+    const view = new DataView(bytes.buffer);
+    value.forEach((sample, index) => {
+      view.setFloat32(index * 4, sample, true);
+    });
+    return { $float32le: Buffer.from(bytes).toString('hex') };
+  }
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (typeof value === 'object' && value !== null)
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, item]) => [key, canonicalValue(item)]),
+    );
+  return value;
+}
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+//#endregion
 //#region src/wav.ts
 var span = {
   start: 0,
@@ -5555,27 +6517,38 @@ function encodeAudioFramesWav(frames) {
   }
   return output;
 }
-function renderSoundWav(sound) {
-  const synth = new Synthesizer(new AudioAssetStore([sound]));
+function renderSoundWav(sound, maximumBytes = Number.MAX_SAFE_INTEGER) {
+  const assets = new AudioAssetStore([sound]);
   const frames = sound.durationFrames + sound.envelope.releaseFrames;
+  admitWavSize(frames, maximumBytes);
+  const synth = new Synthesizer(assets);
   return encodeAudioFramesWav(
     Array.from({ length: frames }, (_, frame) =>
       synth.executeFrame(frame === 0 ? [audioCommand('sfx', sound.name, 'Sound')] : []),
     ),
   );
 }
-function renderMusicWav(music, sounds) {
+function renderMusicWav(music, sounds, maximumBytes = Number.MAX_SAFE_INTEGER) {
   const frames =
     music.framesPerRow *
     music.order.reduce((total, name) => total + (music.patterns[name]?.rows.length ?? 0), 0);
-  if (frames < 1 || frames > HARDWARE.frameRate * 60 * 10)
+  if (!Number.isSafeInteger(frames) || frames < 1 || frames > HARDWARE.frameRate * 60 * 10)
     throw new RangeError('music WAV duration must be between one frame and ten minutes');
+  admitWavSize(frames, maximumBytes);
   const synth = new Synthesizer(new AudioAssetStore([...sounds, music]));
   return encodeAudioFramesWav(
     Array.from({ length: frames }, (_, frame) =>
       synth.executeFrame(frame === 0 ? [audioCommand('music', music.name, 'Music')] : []),
     ),
   );
+}
+/** Preflight the exact fixed-rate stereo PCM16 size before synth frame allocation. */
+function admitWavSize(frames, maximumBytes) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 44)
+    throw new RangeError('maximum WAV bytes must be a safe integer of at least 44');
+  const bytes = 44 + frames * (HARDWARE.audioSampleRate / HARDWARE.frameRate) * 4;
+  if (!Number.isSafeInteger(bytes) || bytes > maximumBytes)
+    throw new RangeError(`WAV output exceeds ${String(maximumBytes)}-byte limit`);
 }
 function audioCommand(name, asset, kind) {
   return {
@@ -5816,20 +6789,29 @@ function truthy(value) {
 //#endregion
 //#region src/native-host.ts
 var runtime;
+var metadata = /* @__PURE__ */ new Map();
 var audioPreview;
 var scratchFresh = false;
-var cartridgeId;
-var symbolNames = {};
 var input = createInterface({
   input: process.stdin,
   crlfDelay: Infinity,
 });
-function bytes(encoded) {
-  if (typeof encoded !== 'string' || encoded.length > 25165824)
-    throw new TypeError('invalid native host byte payload');
-  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
-  if (decoded.length > 16777216) throw new RangeError('native host byte payload exceeds 16 MiB');
-  return decoded;
+var DebugRequestRejected = class extends Error {
+  failure;
+  constructor(failure) {
+    super('debug request rejected');
+    this.failure = failure;
+  }
+};
+/** Only read-only operations and proven transactional validation can recover. */
+function debugRequest(operation, codes) {
+  try {
+    return operation();
+  } catch (error) {
+    if (codes !== void 0 && !(error instanceof RuntimeFault && codes.includes(error.code)))
+      throw error;
+    throw new DebugRequestRejected(error);
+  }
 }
 function encoded(value) {
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64');
@@ -5837,18 +6819,19 @@ function encoded(value) {
 function respond(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
-function namedValues(value) {
+function namedValues(value, alias) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const symbolNames = metadata.get(alias)?.symbolNames ?? {};
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [symbolNames[key] ?? key, entry]),
   );
 }
-function evaluateExpressions(expressions, state, locals, booleanOnly = false) {
+function evaluateExpressions(expressions, state, locals, alias, booleanOnly = false) {
   if (expressions === void 0) return [];
   if (expressions.length > 32) throw new RangeError('too many native debugger expressions');
   const environment = {
-    ...namedValues(state),
-    ...namedValues(locals),
+    ...namedValues(state, alias),
+    ...namedValues(locals, alias),
   };
   return expressions.map((expression) => {
     if (expression.length > 256) return { error: 'expression exceeds 256 characters' };
@@ -5863,14 +6846,34 @@ function evaluateExpressions(expressions, state, locals, booleanOnly = false) {
     }
   });
 }
+function frameResponse(result) {
+  return {
+    frame: result.frame,
+    cartridgeAlias: result.cartridgeAlias,
+    cartridgeId: result.cartridgeId,
+    cartridgeFrame: result.cartridgeFrame,
+    workUnits: result.workUnits,
+    checks: {
+      framebufferSha256: sha256(result.output.indexedPixels),
+      pcmSha256: sha256(pcmBytes(result)),
+      audioCommandSha256: sha256(canonicalBytes(result.audioCommands)),
+    },
+    pixels: encoded(result.output.indexedPixels),
+    left: encoded(result.output.audio.left),
+    right: encoded(result.output.audio.right),
+    saveCommit: result.saveCommit === void 0 ? null : encoded(result.saveCommit),
+    debug: result.debug ?? null,
+    menuItems: runtime?.inspectMenu(),
+    active: runtime?.inspect(),
+  };
+}
 async function handle(command) {
   switch (command.type) {
     case 'audio-preview-load':
       runtime = void 0;
       audioPreview = void 0;
       scratchFresh = false;
-      cartridgeId = void 0;
-      symbolNames = {};
+      metadata = /* @__PURE__ */ new Map();
       if (
         !Array.isArray(command.assets) ||
         command.assets.length > 4096 ||
@@ -5911,8 +6914,8 @@ async function handle(command) {
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
-          ? renderSoundWav(command.asset)
-          : renderMusicWav(command.asset, command.sounds);
+          ? renderSoundWav(command.asset, 8388608)
+          : renderMusicWav(command.asset, command.sounds, 8388608);
       if (wav.byteLength > 8388608) throw new RangeError('native WAV preview exceeds 8 MiB');
       return {
         type: 'wav',
@@ -5920,62 +6923,50 @@ async function handle(command) {
       };
     }
     case 'load': {
-      if (typeof command.javascript !== 'string' || command.javascript.length > 2097152)
-        throw new TypeError('invalid compiled cartridge');
+      const saves = command.saves;
       runtime = void 0;
+      metadata = /* @__PURE__ */ new Map();
       audioPreview = void 0;
       scratchFresh = false;
-      const module = await import(
-        `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
-      );
-      if (typeof module !== 'object' || module === null || !('default' in module))
-        throw new TypeError('compiled cartridge has no factory');
-      const factory = module.default;
-      if (typeof factory !== 'function')
-        throw new TypeError('compiled cartridge factory is invalid');
-      const files = Object.fromEntries(
-        Object.entries(command.files).map(([path, value]) => [path, bytes(value)]),
-      );
-      const manifestAssets = command.manifest.assets;
-      runtime = createConsoleRuntime(factory, {
+      if (
+        Object.keys(command).some(
+          (key) => !['type', 'game', 'parameter', 'saves', 'seed'].includes(key),
+        ) ||
+        typeof command.parameter !== 'string' ||
+        typeof saves !== 'object' ||
+        saves === null ||
+        Array.isArray(saves) ||
+        Object.keys(saves).length > 32
+      )
+        throw new TypeError('invalid current native game load command');
+      const loaded = await loadRuntimeGame(command.game, {
         seed: command.seed === void 0 ? DEFAULT_SEED : command.seed,
-        workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
-        updateRate: command.manifest.updateRate,
-        hardwareRevision: command.manifest.hardwareRevision ?? 2,
-        debug: command.debug === true,
-        assets: {
-          declarations: manifestAssets,
-          files,
-          displayPath: command.manifest.display,
-        },
-        rom: bytes(command.rom),
-        save: bytes(command.save),
+        parameter: command.parameter,
+        saves: Object.fromEntries(
+          Object.entries(command.saves).map(([id, value]) => [
+            id,
+            decodeRuntimeBytes(value, HARDWARE.saveCapacityBytes),
+          ]),
+        ),
       });
-      cartridgeId = command.manifest.id;
-      symbolNames = command.symbolNames ?? {};
-      scratchFresh = command.debug === true;
+      runtime = loaded.runtime;
+      metadata = loaded.metadata;
+      scratchFresh = command.game.debug;
       return {
         type: 'loaded',
-        cartridgeId,
+        identity: command.game.identity,
+        ...runtime.inspect(),
+        active: runtime.inspect(),
         menuItems: runtime.inspectMenu(),
       };
     }
-    case 'frame': {
+    case 'frame':
       if (runtime === void 0) throw new Error('no cartridge is loaded');
       scratchFresh = false;
-      const result = runtime.runFrame(command.input);
       return {
         type: 'frame',
-        frame: result.frame,
-        workUnits: result.workUnits,
-        pixels: encoded(result.output.indexedPixels),
-        left: encoded(result.output.audio.left),
-        right: encoded(result.output.audio.right),
-        saveCommit: result.saveCommit === void 0 ? null : encoded(result.saveCommit),
-        debug: result.debug ?? null,
-        menuItems: runtime.inspectMenu(),
+        ...frameResponse(runtime.runFrame(command.input)),
       };
-    }
     case 'scratch': {
       if (runtime === void 0) throw new Error('no scratchpad program is loaded');
       if (!scratchFresh) throw new TypeError('scratchpad requires a freshly loaded debug program');
@@ -5986,8 +6977,8 @@ async function handle(command) {
       for (let step = 0; step < 65536; step++) {
         const result = runtime.stepDebug(command.input);
         if ('event' in result) {
-          locals = namedValues(result.event.locals);
-          state = namedValues(result.inspection.state);
+          locals = namedValues(result.event.locals, result.cartridgeAlias);
+          state = namedValues(result.inspection.state, result.cartridgeAlias);
         } else if ('booted' in result) {
           booted = true;
           break;
@@ -6006,7 +6997,10 @@ async function handle(command) {
       return {
         type: 'scratch',
         locals,
-        state: frame.debug === void 0 ? state : namedValues(frame.debug.inspection.state),
+        state:
+          frame.debug === void 0
+            ? state
+            : namedValues(frame.debug.inspection.state, frame.cartridgeAlias),
         bootWorkUnits,
         workUnits: frame.workUnits,
         pixels: encoded(frame.output.indexedPixels),
@@ -6021,63 +7015,80 @@ async function handle(command) {
       if ('frame' in result)
         return {
           type: 'step',
-          frame: {
-            frame: result.frame.frame,
-            workUnits: result.frame.workUnits,
-            pixels: encoded(result.frame.output.indexedPixels),
-            left: encoded(result.frame.output.audio.left),
-            right: encoded(result.frame.output.audio.right),
-            saveCommit:
-              result.frame.saveCommit === void 0 ? null : encoded(result.frame.saveCommit),
-            menuItems: runtime.inspectMenu(),
-          },
+          frame: frameResponse(result.frame),
         };
       if ('booted' in result)
         return {
           type: 'step',
           ...result,
+          active: runtime.inspect(),
           menuItems: runtime.inspectMenu(),
         };
       return {
         type: 'step',
         ...result,
+        active: runtime.inspect(),
         menuItems: runtime.inspectMenu(),
-        watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
+        watches: evaluateExpressions(
+          command.watches,
+          result.inspection.state,
+          result.event.locals,
+          result.cartridgeAlias,
+        ),
         conditions: evaluateExpressions(
           command.conditions,
           result.inspection.state,
           result.event.locals,
+          result.cartridgeAlias,
           true,
         ),
       };
     }
-    case 'snapshot':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
+    case 'snapshot': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = debugRequest(() => current.snapshot());
         return {
           type: 'snapshot',
           snapshot: serialize(snapshot).toString('base64'),
-          frame: snapshot.machine.frame,
-          booted: snapshot.machine.execution.booted,
+          checks: {
+            stateSha256: sha256(stateBytes(snapshot)),
+            snapshotSha256: sha256(canonicalBytes(snapshot)),
+            saveSha256: sha256(canonicalBytes(snapshot.saves)),
+            saves: saveHashes(snapshot),
+          },
+          frame: snapshot.frame,
+          booted: snapshot.console.machine.execution.booted,
+          active: current.inspect(),
         };
       }
-    case 'restore':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
+    }
+    case 'restore': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest(() =>
+        deserialize(decodeRuntimeBytes(command.snapshot, 16777216)),
+      );
+      debugRequest(() => {
+        current.restore(candidate);
+      }, ['M019103']);
       scratchFresh = false;
-      runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = current.snapshot();
         return {
           type: 'restored',
-          frame: snapshot.machine.frame,
-          booted: snapshot.machine.execution.booted,
-          menuItems: runtime.inspectMenu(),
+          frame: snapshot.frame,
+          booted: snapshot.console.machine.execution.booted,
+          active: current.inspect(),
+          menuItems: current.inspectMenu(),
         };
       }
+    }
     case 'memory': {
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
-      const result = runtime.inspectMemory(command.address, command.length);
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const result = debugRequest(() => current.inspectMemory(command.address, command.length));
       return {
         type: 'memory',
         address: result.address,
@@ -6085,15 +7096,20 @@ async function handle(command) {
         regions: result.regions,
       };
     }
-    case 'memory-edit':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
-      runtime.editMemory(command.address, bytes(command.bytes));
+    case 'memory-edit': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest(() => decodeRuntimeBytes(command.bytes, 256));
+      debugRequest(() => {
+        current.editMemory(command.address, candidate);
+      }, ['M019020', 'M019021', 'M019022', 'M019104']);
       return { type: 'memory-edited' };
+    }
     case 'stop':
       runtime = void 0;
       audioPreview = void 0;
       scratchFresh = false;
-      cartridgeId = void 0;
+      metadata = /* @__PURE__ */ new Map();
       return { type: 'stopped' };
   }
 }
@@ -6103,11 +7119,15 @@ input.on('line', (line) => {
     try {
       respond(await handle(JSON.parse(line)));
     } catch (error) {
+      const rejected = error instanceof DebugRequestRejected;
+      const failure = rejected ? error.failure : error;
       respond({
         type: 'error',
-        code: error instanceof RuntimeFault ? error.code : 'M019100',
-        message: error instanceof Error ? error.message : 'native host failure',
-        ...(error instanceof RuntimeFault ? { sourceSpan: error.sourceSpan } : {}),
+        code: failure instanceof RuntimeFault ? failure.code : 'M019100',
+        message: failure instanceof Error ? failure.message : 'native host failure',
+        ...(rejected ? { recoverable: true } : {}),
+        ...(runtime === void 0 ? {} : { active: runtime.inspect() }),
+        ...(failure instanceof RuntimeFault ? { sourceSpan: failure.sourceSpan } : {}),
       });
     }
   });

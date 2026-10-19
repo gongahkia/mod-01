@@ -615,8 +615,11 @@ mod tests {
             Some(&context),
         )
         .unwrap();
-        assert_eq!(prepared.command["manifest"]["id"], "local.scratchpad");
-        assert_eq!(prepared.command["save"], "");
+        assert_eq!(
+            prepared.command["game"]["members"]["main"]["manifest"]["id"],
+            "local.scratchpad"
+        );
+        assert_eq!(prepared.command["saves"]["local.scratchpad"], "");
         let result = evaluate_native(prepared);
         assert_eq!(result["type"], "scratch", "{result}");
         assert_eq!(

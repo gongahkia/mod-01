@@ -9,6 +9,7 @@ const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(PartialEq)]
 struct Key {
+    member: String,
     name: String,
     path: String,
     kind: Option<AssetKind>,
@@ -45,6 +46,46 @@ impl AssetSessions {
         self.generation
     }
 
+    pub fn text_id(&self, project: &NativeProject, name: &str, path: &str) -> eframe::egui::Id {
+        eframe::egui::Id::unique((
+            "asset-json",
+            self.generation(),
+            project.member_alias(),
+            &project.manifest.id,
+            name,
+            path,
+        ))
+    }
+
+    pub fn discard_asset(
+        &mut self,
+        context: &eframe::egui::Context,
+        project: &NativeProject,
+        name: &str,
+        path: &str,
+    ) {
+        for index in (0..self.sessions.len()).rev() {
+            if self.sessions[index].key.member == project.member_alias()
+                && self.sessions[index].key.name == name
+            {
+                self.remove(index);
+            }
+        }
+        let id = self.text_id(project, name, path);
+        if let Some(mut state) = eframe::egui::TextEdit::load_state(context, id) {
+            state.clear_undoer();
+            state.store(context, id);
+        }
+    }
+
+    pub fn discard_member(&mut self, alias: &str) {
+        for index in (0..self.sessions.len()).rev() {
+            if self.sessions[index].key.member == alias {
+                self.remove(index);
+            }
+        }
+    }
+
     pub fn stash_structured(
         &mut self,
         project: &NativeProject,
@@ -60,6 +101,7 @@ impl AssetSessions {
         self.stash(
             project,
             Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: path.to_owned(),
                 kind,
@@ -77,6 +119,7 @@ impl AssetSessions {
         self.stash(
             project,
             Key {
+                member: project.member_alias().to_owned(),
                 name: editor.name.clone(),
                 path: editor.asset_path.clone(),
                 kind,
@@ -106,6 +149,7 @@ impl AssetSessions {
             .saturating_add(source.capacity())
             .saturating_add(layered.as_ref().map_or(0, Vec::capacity))
             .saturating_add(key.name.capacity())
+            .saturating_add(key.member.capacity())
             .saturating_add(key.path.capacity())
             .saturating_add(size_of::<Session>());
         if bytes > MAX_RETAINED_BYTES {
@@ -163,6 +207,7 @@ impl AssetSessions {
         let editor = self.take(
             project,
             &Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: path.to_owned(),
                 kind,
@@ -180,6 +225,7 @@ impl AssetSessions {
         let editor = self.take(
             project,
             &Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: declaration.path.clone(),
                 kind: Some(declaration.kind),

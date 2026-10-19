@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { HARDWARE } from './hardware';
 import { MEMORY, MemoryBus } from './bus';
@@ -16,6 +16,39 @@ function device(initial: Uint8Array = new Uint8Array()) {
 }
 
 describe('worker save memory', () => {
+  it('orders exposed values and pending writes by ASCII without consulting host collation', () => {
+    const names = ['a_', 'z', '_a', 'a0', 'a', 'A'];
+    const expected = ['A', '_a', 'a', 'a0', 'a_', 'z'];
+    const collation = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+      throw new Error('locale collation must not affect save state');
+    });
+    try {
+      const images: Uint8Array[] = [];
+      for (const order of [names, [...names].reverse()]) {
+        const save = new SaveMemory();
+        for (const name of order) save.set(name, 7);
+        expect(Object.keys(save.snapshot())).toEqual(expected);
+        expect(save.pendingWrites().map((write) => write.key)).toEqual(expected);
+        const snapshot = save.deviceSnapshot();
+        const pending = save.pendingWrites();
+        save.restoreDevice(snapshot, pending);
+        expect(save.pendingWrites()).toEqual(pending);
+        images.push(save.takeCommit() ?? new Uint8Array());
+      }
+      expect(images[0]).toEqual(images[1]);
+      expect(decodeSaveValues(images[0] ?? new Uint8Array())).toEqual({
+        A: 7,
+        _a: 7,
+        a: 7,
+        a0: 7,
+        a_: 7,
+        z: 7,
+      });
+    } finally {
+      collation.mockRestore();
+    }
+  });
+
   it('maps zero-reset working bytes, a read-only commit latch, and live status without retained mirrors', () => {
     const { save, bus } = device();
     expect(save.deviceSnapshot().bytes.every((byte) => byte === 0)).toBe(true);

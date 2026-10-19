@@ -1,11 +1,17 @@
 import { createInterface } from 'node:readline';
 import { deserialize, serialize } from 'node:v8';
 
-import { createConsoleRuntime, type ConsoleRuntime } from './console-runtime';
+import {
+  decodeRuntimeBytes,
+  loadRuntimeGame,
+  type RuntimeGameMember,
+  type RuntimeGamePayload,
+} from './game-loader';
+import type { GameFrame, GameRuntime } from './game-runtime';
 import { DEFAULT_SEED, HARDWARE } from './hardware';
 import type { InputFrame } from './input';
-import type { CartridgeFactory } from './machine';
 import { RuntimeFault } from './errors';
+import { canonicalBytes, pcmBytes, saveHashes, sha256, stateBytes } from './execution-hashes';
 import { renderMusicWav, renderSoundWav } from './wav';
 import {
   AudioAssetStore,
@@ -20,20 +26,10 @@ import { MEMORY } from './bus';
 type Command =
   | {
       type: 'load';
-      javascript: string;
-      manifest: {
-        id: string;
-        hardwareRevision?: 2;
-        updateRate: 30 | 60;
-        display: string | null;
-        assets: Record<string, { kind: string; path: string }>;
-      };
-      files: Record<string, string>;
-      rom: string;
-      save: string;
-      debug?: boolean;
+      game: RuntimeGamePayload;
+      parameter: string;
+      saves: Record<string, string>;
       seed?: number;
-      symbolNames?: Record<string, string>;
     }
   | { type: 'frame'; input: InputFrame }
   | { type: 'scratch'; input: InputFrame }
@@ -54,20 +50,27 @@ type Command =
     }
   | { type: 'stop' };
 
-let runtime: ConsoleRuntime | undefined;
+let runtime: GameRuntime | undefined;
+let metadata: ReadonlyMap<string, RuntimeGameMember> = new Map();
 let audioPreview: Synthesizer | undefined;
 let scratchFresh = false;
-let cartridgeId: string | undefined;
-let symbolNames: Readonly<Record<string, string>> = {};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
-function bytes(encoded: string): Uint8Array {
-  if (typeof encoded !== 'string' || encoded.length > 24 * 1024 * 1024)
-    throw new TypeError('invalid native host byte payload');
-  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
-  if (decoded.length > 16 * 1024 * 1024)
-    throw new RangeError('native host byte payload exceeds 16 MiB');
-  return decoded;
+class DebugRequestRejected extends Error {
+  public constructor(public readonly failure: unknown) {
+    super('debug request rejected');
+  }
+}
+
+/** Only read-only operations and proven transactional validation can recover. */
+function debugRequest<T>(operation: () => T, codes?: readonly string[]): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (codes !== undefined && !(error instanceof RuntimeFault && codes.includes(error.code)))
+      throw error;
+    throw new DebugRequestRejected(error);
+  }
 }
 
 function encoded(value: Uint8Array | Float32Array): string {
@@ -78,8 +81,9 @@ function respond(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function namedValues(value: unknown): Record<string, unknown> {
+function namedValues(value: unknown, alias: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const symbolNames = metadata.get(alias)?.symbolNames ?? {};
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [symbolNames[key] ?? key, entry]),
   );
@@ -89,11 +93,12 @@ function evaluateExpressions(
   expressions: readonly string[] | undefined,
   state: unknown,
   locals: unknown,
+  alias: string,
   booleanOnly = false,
 ): { value?: unknown; error?: string }[] {
   if (expressions === undefined) return [];
   if (expressions.length > 32) throw new RangeError('too many native debugger expressions');
-  const environment = { ...namedValues(state), ...namedValues(locals) };
+  const environment = { ...namedValues(state, alias), ...namedValues(locals, alias) };
   return expressions.map((expression) => {
     if (expression.length > 256) return { error: 'expression exceeds 256 characters' };
     if (expression.length === 0) return { value: true };
@@ -108,14 +113,35 @@ function evaluateExpressions(
   });
 }
 
+function frameResponse(result: GameFrame) {
+  return {
+    frame: result.frame,
+    cartridgeAlias: result.cartridgeAlias,
+    cartridgeId: result.cartridgeId,
+    cartridgeFrame: result.cartridgeFrame,
+    workUnits: result.workUnits,
+    checks: {
+      framebufferSha256: sha256(result.output.indexedPixels),
+      pcmSha256: sha256(pcmBytes(result)),
+      audioCommandSha256: sha256(canonicalBytes(result.audioCommands)),
+    },
+    pixels: encoded(result.output.indexedPixels),
+    left: encoded(result.output.audio.left),
+    right: encoded(result.output.audio.right),
+    saveCommit: result.saveCommit === undefined ? null : encoded(result.saveCommit),
+    debug: result.debug ?? null,
+    menuItems: runtime?.inspectMenu(),
+    active: runtime?.inspect(),
+  };
+}
+
 async function handle(command: Command): Promise<unknown> {
   switch (command.type) {
     case 'audio-preview-load': {
       runtime = undefined;
       audioPreview = undefined;
       scratchFresh = false;
-      cartridgeId = undefined;
-      symbolNames = {};
+      metadata = new Map();
       if (
         !Array.isArray(command.assets) ||
         command.assets.length > 4096 ||
@@ -154,66 +180,55 @@ async function handle(command: Command): Promise<unknown> {
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
-          ? renderSoundWav(command.asset as SoundAsset)
-          : renderMusicWav(command.asset as MusicAsset, command.sounds);
+          ? renderSoundWav(command.asset as SoundAsset, 8 * 1024 * 1024)
+          : renderMusicWav(command.asset as MusicAsset, command.sounds, 8 * 1024 * 1024);
       if (wav.byteLength > 8 * 1024 * 1024)
         throw new RangeError('native WAV preview exceeds 8 MiB');
       return { type: 'wav', bytes: encoded(wav) };
     }
     case 'load': {
-      if (typeof command.javascript !== 'string' || command.javascript.length > 2 * 1024 * 1024)
-        throw new TypeError('invalid compiled cartridge');
+      const saves: unknown = command.saves;
       runtime = undefined;
+      metadata = new Map();
       audioPreview = undefined;
       scratchFresh = false;
-      const module: unknown = await import(
-        `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
-      );
-      if (typeof module !== 'object' || module === null || !('default' in module))
-        throw new TypeError('compiled cartridge has no factory');
-      const factory = module.default;
-      if (typeof factory !== 'function')
-        throw new TypeError('compiled cartridge factory is invalid');
-      const files = Object.fromEntries(
-        Object.entries(command.files).map(([path, value]) => [path, bytes(value)]),
-      );
-      const manifestAssets = command.manifest.assets as Record<
-        string,
-        {
-          kind: 'sprite' | 'animation' | 'tile_set' | 'map' | 'font' | 'sound' | 'music';
-          path: string;
-        }
-      >;
-      runtime = createConsoleRuntime(factory as CartridgeFactory, {
+      if (
+        Object.keys(command).some(
+          (key) => !['type', 'game', 'parameter', 'saves', 'seed'].includes(key),
+        ) ||
+        typeof command.parameter !== 'string' ||
+        typeof saves !== 'object' ||
+        saves === null ||
+        Array.isArray(saves) ||
+        Object.keys(saves).length > 32
+      )
+        throw new TypeError('invalid current native game load command');
+      const loaded = await loadRuntimeGame(command.game, {
         seed: command.seed === undefined ? DEFAULT_SEED : command.seed,
-        workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
-        updateRate: command.manifest.updateRate,
-        hardwareRevision: command.manifest.hardwareRevision ?? 2,
-        debug: command.debug === true,
-        assets: { declarations: manifestAssets, files, displayPath: command.manifest.display },
-        rom: bytes(command.rom),
-        save: bytes(command.save),
+        parameter: command.parameter,
+        saves: Object.fromEntries(
+          Object.entries(command.saves).map(([id, value]) => [
+            id,
+            decodeRuntimeBytes(value, HARDWARE.saveCapacityBytes),
+          ]),
+        ),
       });
-      cartridgeId = command.manifest.id;
-      symbolNames = command.symbolNames ?? {};
-      scratchFresh = command.debug === true;
-      return { type: 'loaded', cartridgeId, menuItems: runtime.inspectMenu() };
+      runtime = loaded.runtime;
+      metadata = loaded.metadata;
+      scratchFresh = command.game.debug;
+      return {
+        type: 'loaded',
+        identity: command.game.identity,
+        ...runtime.inspect(),
+        active: runtime.inspect(),
+        menuItems: runtime.inspectMenu(),
+      };
     }
     case 'frame': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
       scratchFresh = false;
       const result = runtime.runFrame(command.input);
-      return {
-        type: 'frame',
-        frame: result.frame,
-        workUnits: result.workUnits,
-        pixels: encoded(result.output.indexedPixels),
-        left: encoded(result.output.audio.left),
-        right: encoded(result.output.audio.right),
-        saveCommit: result.saveCommit === undefined ? null : encoded(result.saveCommit),
-        debug: result.debug ?? null,
-        menuItems: runtime.inspectMenu(),
-      };
+      return { type: 'frame', ...frameResponse(result) };
     }
     case 'scratch': {
       if (runtime === undefined) throw new Error('no scratchpad program is loaded');
@@ -225,8 +240,8 @@ async function handle(command: Command): Promise<unknown> {
       for (let step = 0; step < 65_536; step++) {
         const result = runtime.stepDebug(command.input);
         if ('event' in result) {
-          locals = namedValues(result.event.locals);
-          state = namedValues(result.inspection.state);
+          locals = namedValues(result.event.locals, result.cartridgeAlias);
+          state = namedValues(result.inspection.state, result.cartridgeAlias);
         } else if ('booted' in result) {
           booted = true;
           break;
@@ -245,7 +260,10 @@ async function handle(command: Command): Promise<unknown> {
       return {
         type: 'scratch',
         locals,
-        state: frame.debug === undefined ? state : namedValues(frame.debug.inspection.state),
+        state:
+          frame.debug === undefined
+            ? state
+            : namedValues(frame.debug.inspection.state, frame.cartridgeAlias),
         bootWorkUnits,
         workUnits: frame.workUnits,
         pixels: encoded(frame.output.indexedPixels),
@@ -260,59 +278,81 @@ async function handle(command: Command): Promise<unknown> {
       if ('frame' in result) {
         return {
           type: 'step',
-          frame: {
-            frame: result.frame.frame,
-            workUnits: result.frame.workUnits,
-            pixels: encoded(result.frame.output.indexedPixels),
-            left: encoded(result.frame.output.audio.left),
-            right: encoded(result.frame.output.audio.right),
-            saveCommit:
-              result.frame.saveCommit === undefined ? null : encoded(result.frame.saveCommit),
-            menuItems: runtime.inspectMenu(),
-          },
+          frame: frameResponse(result.frame),
         };
       }
-      if ('booted' in result) return { type: 'step', ...result, menuItems: runtime.inspectMenu() };
+      if ('booted' in result)
+        return {
+          type: 'step',
+          ...result,
+          active: runtime.inspect(),
+          menuItems: runtime.inspectMenu(),
+        };
       return {
         type: 'step',
         ...result,
+        active: runtime.inspect(),
         menuItems: runtime.inspectMenu(),
-        watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
+        watches: evaluateExpressions(
+          command.watches,
+          result.inspection.state,
+          result.event.locals,
+          result.cartridgeAlias,
+        ),
         conditions: evaluateExpressions(
           command.conditions,
           result.inspection.state,
           result.event.locals,
+          result.cartridgeAlias,
           true,
         ),
       };
     }
-    case 'snapshot':
-      if (runtime === undefined) throw new Error('no cartridge is loaded');
+    case 'snapshot': {
+      const current = runtime;
+      if (current === undefined) throw new Error('no cartridge is loaded');
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = debugRequest(() => current.snapshot());
         return {
           type: 'snapshot',
           snapshot: serialize(snapshot).toString('base64'),
-          frame: snapshot.machine.frame,
-          booted: snapshot.machine.execution.booted,
+          checks: {
+            stateSha256: sha256(stateBytes(snapshot)),
+            snapshotSha256: sha256(canonicalBytes(snapshot)),
+            saveSha256: sha256(canonicalBytes(snapshot.saves)),
+            saves: saveHashes(snapshot),
+          },
+          frame: snapshot.frame,
+          booted: snapshot.console.machine.execution.booted,
+          active: current.inspect(),
         };
       }
-    case 'restore':
-      if (runtime === undefined) throw new Error('no cartridge is loaded');
+    }
+    case 'restore': {
+      const current = runtime;
+      if (current === undefined) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest((): unknown =>
+        deserialize(decodeRuntimeBytes(command.snapshot, 16 * 1024 * 1024)),
+      );
+      debugRequest(() => {
+        current.restore(candidate);
+      }, ['M019103']);
       scratchFresh = false;
-      runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = current.snapshot();
         return {
           type: 'restored',
-          frame: snapshot.machine.frame,
-          booted: snapshot.machine.execution.booted,
-          menuItems: runtime.inspectMenu(),
+          frame: snapshot.frame,
+          booted: snapshot.console.machine.execution.booted,
+          active: current.inspect(),
+          menuItems: current.inspectMenu(),
         };
       }
+    }
     case 'memory': {
-      if (runtime === undefined) throw new Error('no cartridge is loaded');
-      const result = runtime.inspectMemory(command.address, command.length);
+      const current = runtime;
+      if (current === undefined) throw new Error('no cartridge is loaded');
+      const result = debugRequest(() => current.inspectMemory(command.address, command.length));
       return {
         type: 'memory',
         address: result.address,
@@ -320,15 +360,20 @@ async function handle(command: Command): Promise<unknown> {
         regions: result.regions,
       };
     }
-    case 'memory-edit':
-      if (runtime === undefined) throw new Error('no cartridge is loaded');
-      runtime.editMemory(command.address, bytes(command.bytes));
+    case 'memory-edit': {
+      const current = runtime;
+      if (current === undefined) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest(() => decodeRuntimeBytes(command.bytes, 256));
+      debugRequest(() => {
+        current.editMemory(command.address, candidate);
+      }, ['M019020', 'M019021', 'M019022', 'M019104']);
       return { type: 'memory-edited' };
+    }
     case 'stop':
       runtime = undefined;
       audioPreview = undefined;
       scratchFresh = false;
-      cartridgeId = undefined;
+      metadata = new Map();
       return { type: 'stopped' };
   }
 }
@@ -340,11 +385,15 @@ input.on('line', (line) => {
       const command = JSON.parse(line) as Command;
       respond(await handle(command));
     } catch (error: unknown) {
+      const rejected = error instanceof DebugRequestRejected;
+      const failure = rejected ? error.failure : error;
       respond({
         type: 'error',
-        code: error instanceof RuntimeFault ? error.code : 'M019100',
-        message: error instanceof Error ? error.message : 'native host failure',
-        ...(error instanceof RuntimeFault ? { sourceSpan: error.sourceSpan } : {}),
+        code: failure instanceof RuntimeFault ? failure.code : 'M019100',
+        message: failure instanceof Error ? failure.message : 'native host failure',
+        ...(rejected ? { recoverable: true } : {}),
+        ...(runtime === undefined ? {} : { active: runtime.inspect() }),
+        ...(failure instanceof RuntimeFault ? { sourceSpan: failure.sourceSpan } : {}),
       });
     }
   });

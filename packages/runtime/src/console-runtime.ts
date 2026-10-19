@@ -28,6 +28,7 @@ import {
 import { isInputFrame, type InputFrame } from './input';
 import type { MenuItem } from './menu';
 import { isConsoleConfiguration } from './protocol';
+import type { ExecutionSnapshot } from './system';
 import {
   isCartridgeControlSnapshot,
   type CartridgeControl,
@@ -72,6 +73,7 @@ export interface ConsoleRuntime {
   editMemory(address: number, bytes: Uint8Array): void;
   memoryRegions(): readonly MemoryRegionDescriptor[];
   inspectMenu(): readonly MenuItem[];
+  inspectExecution(): ExecutionSnapshot & { readonly frame: number };
 }
 
 export interface ConsoleRuntimeSnapshot {
@@ -240,11 +242,22 @@ export function createConsoleRuntime(
         throw new RuntimeFault('M019008', 'invalid controller input frame', { start: 0, end: 0 });
       const active = requireMachine();
       active.assertRunnable();
-      drawCommands = [];
-      audioCommands = [];
-      frameOutput = undefined;
-      debugTrace = [];
-      debugTraceTruncated = false;
+      resetCapture();
+      // A prepared target (or an unstepped debug build) still owns a separate
+      // boot boundary. Publish its start pixels to front before ordinary draw,
+      // and do not count start commands/charges as this display frame's work.
+      if (!active.inspectExecution().booted) {
+        graphics.beginFrame();
+        rendering = true;
+        try {
+          active.boot();
+        } finally {
+          rendering = false;
+        }
+        graphics.finishFrame();
+        boundarySnapshot = captureSnapshot();
+        resetCapture();
+      }
       graphics.beginFrame();
       rendering = true;
       let report;
@@ -284,11 +297,7 @@ export function createConsoleRuntime(
       if (!isInputFrame(input))
         throw new RuntimeFault('M019008', 'invalid controller input frame', { start: 0, end: 0 });
       if (!debugFrameActive) {
-        drawCommands = [];
-        audioCommands = [];
-        frameOutput = undefined;
-        debugTrace = [];
-        debugTraceTruncated = false;
+        resetCapture();
         graphics.beginFrame();
         debugFrameActive = true;
       }
@@ -405,7 +414,19 @@ export function createConsoleRuntime(
     inspectMenu() {
       return requireMachine().inspectMenu();
     },
+    inspectExecution() {
+      const active = requireMachine();
+      return { frame: active.frame, ...active.inspectExecution() };
+    },
   };
+
+  function resetCapture(): void {
+    drawCommands = [];
+    audioCommands = [];
+    frameOutput = undefined;
+    debugTrace = [];
+    debugTraceTruncated = false;
+  }
 
   function captureSnapshot(): ConsoleRuntimeSnapshot {
     return {

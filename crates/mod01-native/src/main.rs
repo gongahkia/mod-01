@@ -20,9 +20,11 @@
 )]
 
 mod asset_meter;
+mod asset_removal;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
+mod export_names;
 mod gamepad_controller;
 mod keyboard_controller;
 mod launch;
@@ -41,6 +43,8 @@ mod source_editor;
 mod sprite;
 #[cfg(test)]
 mod studio_asset_tests;
+#[cfg(test)]
+mod studio_game_tests;
 #[cfg(test)]
 mod studio_menu_tests;
 #[cfg(test)]
@@ -123,9 +127,43 @@ enum DebugTab {
 }
 
 struct SourceBreakpoint {
+    member: String,
     source: String,
     line: usize,
     condition: String,
+}
+
+struct RunningMember {
+    id: String,
+    title: String,
+    entry: String,
+    sources: BTreeMap<String, Vec<u8>>,
+}
+
+impl RunningMember {
+    fn catalog(game: &modl_core::game::PackedGame) -> Result<BTreeMap<String, Self>, String> {
+        game.catalog()
+            .cartridges()
+            .iter()
+            .map(|(alias, cart)| {
+                let view = modl_core::unpack_cartridge_project(&cart.bytes)
+                    .map_err(|error| error.to_string())?;
+                Ok((
+                    alias.clone(),
+                    Self {
+                        id: cart.manifest.id.clone(),
+                        title: cart.manifest.title.clone(),
+                        entry: cart.manifest.entry.clone(),
+                        sources: view
+                            .files
+                            .into_iter()
+                            .filter(|(path, _)| path.ends_with(".modl"))
+                            .collect(),
+                    },
+                ))
+            })
+            .collect()
+    }
 }
 
 struct StudioApp {
@@ -143,6 +181,7 @@ struct StudioApp {
     playground: playground::Playground,
     show_playground: bool,
     audio: Option<AudioOutput>,
+    audio_notice: Option<String>,
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
     sprite: Option<SpriteEditor>,
@@ -163,6 +202,7 @@ struct StudioApp {
     selection_anchor: Option<(usize, usize)>,
     running: bool,
     player_mode: bool,
+    viewport_mode: Option<(bool, bool)>,
     player_paused: bool,
     touch_controller: touch_controller::TouchController,
     keyboard_controller: keyboard_controller::KeyboardController,
@@ -174,6 +214,7 @@ struct StudioApp {
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
+    debug_source: Option<(String, String, usize)>,
     debug_inspection: Value,
     debug_trace: Vec<Value>,
     debug_tab: DebugTab,
@@ -199,6 +240,8 @@ struct StudioApp {
     preview_cancelling: bool,
     preview_name: String,
     loaded: bool,
+    running_members: BTreeMap<String, RunningMember>,
+    active_alias: String,
     pending: bool,
     frame: u32,
     input_frame: u32,
@@ -213,6 +256,11 @@ struct StudioApp {
     new_id: String,
     show_new: bool,
     show_new_asset: bool,
+    show_members: bool,
+    member_alias_input: String,
+    member_id_input: String,
+    member_remove: Option<String>,
+    asset_remove: Option<asset_removal::Removal>,
     new_asset_name: String,
     new_asset_kind: modl_core::AssetKind,
     show_manual: bool,
@@ -232,6 +280,14 @@ impl StudioApp {
 
     fn new_with_devices(start: Option<PathBuf>, context: &egui::Context, devices: bool) -> Self {
         let host_path = native_host_path();
+        let (audio, audio_notice) = if devices {
+            match AudioOutput::new() {
+                Ok(audio) => (Some(audio), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
             cursors: PixelCursors::new(context),
             library: library::Library::new(
@@ -254,7 +310,8 @@ impl StudioApp {
             live_audio: live_audio::AudioPreview::new(),
             playground: playground::Playground::new(),
             show_playground: false,
-            audio: devices.then(|| AudioOutput::new().ok()).flatten(),
+            audio,
+            audio_notice,
             gamepads: devices.then(|| Gilrs::new().ok()).flatten(),
             texture: None,
             sprite: None,
@@ -275,6 +332,7 @@ impl StudioApp {
             selection_anchor: None,
             running: false,
             player_mode: false,
+            viewport_mode: None,
             player_paused: false,
             touch_controller: touch_controller::TouchController::default(),
             keyboard_controller: keyboard_controller::KeyboardController::default(),
@@ -286,6 +344,7 @@ impl StudioApp {
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
+            debug_source: None,
             debug_inspection: Value::Null,
             debug_trace: Vec::new(),
             debug_tab: DebugTab::Source,
@@ -311,6 +370,8 @@ impl StudioApp {
             preview_cancelling: false,
             preview_name: String::new(),
             loaded: false,
+            running_members: BTreeMap::new(),
+            active_alias: String::new(),
             pending: false,
             frame: 0,
             input_frame: 0,
@@ -325,6 +386,11 @@ impl StudioApp {
             new_id: "new-cart".to_owned(),
             show_new: false,
             show_new_asset: false,
+            show_members: false,
+            member_alias_input: "level-1".to_owned(),
+            member_id_input: "new-level".to_owned(),
+            member_remove: None,
+            asset_remove: None,
             new_asset_name: "new_asset".to_owned(),
             new_asset_kind: modl_core::AssetKind::TileSet,
             show_manual: false,
@@ -388,6 +454,49 @@ impl StudioApp {
         }
     }
 
+    fn poll_audio_output(&mut self) {
+        let failure = self.audio.as_ref().and_then(AudioOutput::failure);
+        if let Some(error) = failure {
+            self.disable_audio_output(error);
+        } else if let Some(warning) = self.audio.as_ref().and_then(AudioOutput::take_warning) {
+            self.audio_notice = Some(warning);
+        }
+    }
+
+    fn disable_audio_output(&mut self, error: String) {
+        if let Some(audio) = self.audio.take() {
+            audio.clear();
+        }
+        self.audio_notice = Some(error);
+        self.status = "AUDIO OUTPUT FAILED / SILENT".to_owned();
+    }
+
+    fn audio_indicator(&self, ui: &mut egui::Ui) {
+        ui.scope(|ui| {
+            ui_theme::led(
+                ui,
+                self.audio.is_some(),
+                if self.audio.is_some() {
+                    "AUD"
+                } else {
+                    "SILENT"
+                },
+            )
+        })
+        .response
+        .on_hover_text(self.audio_message());
+    }
+
+    fn audio_message(&self) -> &str {
+        self.audio_notice
+            .as_deref()
+            .unwrap_or(if self.audio.is_some() {
+                "Native audio output available."
+            } else {
+                "No audio output device. Synth, playback and replay continue silently."
+            })
+    }
+
     fn apply_manifest(&mut self) {
         let requested_manifest = self.manifest_text.clone();
         if let Err(error) = self.sync_asset() {
@@ -416,6 +525,216 @@ impl StudioApp {
                 self.status = "MANIFEST APPLIED".to_owned();
             }
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn select_member(&mut self, alias: &str) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        if alias == project.member_alias() {
+            return;
+        }
+        if self.manifest_text != project.manifest_source {
+            self.status = "APPLY OR REVERT MANIFEST DRAFT BEFORE SWITCHING CARTRIDGES".to_owned();
+            return;
+        }
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
+        }
+        let Some(project) = &self.project else {
+            return;
+        };
+        let mut candidate = project.clone();
+        if let Err(error) = candidate.select_member(alias) {
+            self.status = error;
+            return;
+        }
+        self.cache_asset_editors();
+        self.asset_meter = asset_meter::AssetMeter::default();
+        self.source_editor.dismiss_completion();
+        self.manifest_text = candidate.manifest_source.clone();
+        self.project = Some(candidate);
+        self.live_audio.stop();
+        self.view = View::Code;
+        self.status = format!("EDITING {alias} / SAVE AND RUN KEEP THE WHOLE GAME");
+    }
+
+    fn member_picker(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let selected = project.member_alias().to_owned();
+        let members = project.members();
+        let mut next = selected.clone();
+        ui_theme::legend(ui, format!("GAME / {} CARTRIDGE(S)", members.len()));
+        egui::ComboBox::from_id_salt("game-member")
+            .selected_text(&selected)
+            .width(ui.available_width() - 12.0)
+            .show_ui(ui, |ui| {
+                for (alias, id) in members {
+                    ui.selectable_value(&mut next, alias.clone(), alias)
+                        .on_hover_text(id);
+                }
+            });
+        if next != selected {
+            self.select_member(&next);
+        }
+        if ui.small_button("MANAGE MEMBERS").clicked() {
+            self.show_members = true;
+        }
+    }
+
+    fn composition_ready(&mut self) -> bool {
+        if self.running {
+            self.status = "STOP THE GAME BEFORE CHANGING ITS COMPOSITION".to_owned();
+            return false;
+        }
+        let Some(project) = &self.project else {
+            return false;
+        };
+        if self.manifest_text != project.manifest_source {
+            self.status = "APPLY OR REVERT MANIFEST DRAFT BEFORE CHANGING COMPOSITION".to_owned();
+            return false;
+        }
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return false;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return false;
+        }
+        true
+    }
+
+    fn install_composition(&mut self, project: NativeProject) {
+        self.cache_asset_editors();
+        self.asset_meter = asset_meter::AssetMeter::default();
+        self.source_editor.dismiss_completion();
+        self.manifest_text = project.manifest_source.clone();
+        self.project = Some(project);
+        self.live_audio.stop();
+        self.view = View::Code;
+    }
+
+    fn add_member_source(&mut self, alias: &str, source: &str) {
+        if !self.composition_ready() {
+            return;
+        }
+        let Some(mut candidate) = self.project.clone() else {
+            return;
+        };
+        match candidate.add_member(alias, source) {
+            Ok(()) => {
+                self.install_composition(candidate);
+                self.status = format!("ADDED {alias} / SAVE KEEPS THE WHOLE GAME");
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn import_member_path(&mut self, alias: &str, path: &std::path::Path) {
+        let source = NativeProject::open(path).and_then(|project| project.source());
+        match source {
+            Ok(source) => self.add_member_source(alias, &source),
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn add_blank_member(&mut self) {
+        let source = (|| {
+            let mut project =
+                modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                    .map_err(|error| error.to_string())?;
+            project.manifest.id = self.member_id_input.clone();
+            project.manifest.title = "NEW MEMBER".to_owned();
+            modl_core::encode_workcart(&project.manifest, &project.files, &[], &[])
+                .map_err(|error| error.to_string())
+        })();
+        match source {
+            Ok(source) => self.add_member_source(&self.member_alias_input.clone(), &source),
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn remove_member(&mut self, alias: &str, context: &egui::Context) {
+        if !self.composition_ready() {
+            return;
+        }
+        let Some(mut candidate) = self.project.clone() else {
+            return;
+        };
+        let mut removed = candidate.clone();
+        if let Err(error) = removed
+            .select_member(alias)
+            .and_then(|()| candidate.remove_member(alias))
+        {
+            self.status = error;
+            return;
+        }
+        self.install_composition(candidate);
+        self.asset_sessions.discard_member(alias);
+        self.source_editor.forget_member(context, &removed);
+        self.breakpoints.retain(|point| point.member != alias);
+        self.member_remove = None;
+        self.status = format!("REMOVED {alias} FROM GAME / PLAYER SAVES UNCHANGED");
+    }
+
+    fn members_window(&mut self, context: &egui::Context) {
+        if !self.show_members {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("GAME CARTRIDGES").open(&mut open).default_size([580.0, 480.0])
+            .max_height((context.content_rect().height() - 80.0).max(220.0)).vscroll(true).show(context, |ui| {
+            ui.label("Local aliases are embedded source, never filesystem paths or downloads.");
+            if self.running { ui.colored_label(ui_theme::AMBER, "STOP THE GAME TO ADD OR REMOVE MEMBERS"); }
+            let members = self.project.as_ref().map_or_else(Vec::new, NativeProject::members);
+            egui::ScrollArea::vertical().id_salt("member-roster").max_height(180.0).show(ui, |ui| {
+                for (alias, id) in &members {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(alias).color(ui_theme::AMBER)); ui.label(id);
+                        if ui.small_button("EDIT").clicked() { self.select_member(alias); }
+                        if ui.add_enabled(!self.running && alias != "main", egui::Button::new("REMOVE")).clicked() { self.member_remove = Some(alias.clone()); }
+                    });
+                }
+            });
+            ui.separator();
+            ui.label(format!("{}/32 CARTRIDGES INCLUDING MAIN", members.len()));
+            ui.add_enabled_ui(!self.running && members.len() < 32, |ui| {
+                ui.horizontal_wrapped(|ui| { ui.label("NEW LOCAL ALIAS"); ui.add(egui::TextEdit::singleline(&mut self.member_alias_input).char_limit(32).desired_width(190.0)); });
+                ui.label("Import preserves the cartridge's ID; duplicate IDs and nested games are refused.");
+                if ui.button("IMPORT LOCAL WORKCART / CARTRIDGE").clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Single MOD-01 cartridge", &["m01w", "m01c", "png"]).pick_file() {
+                    self.import_member_path(&self.member_alias_input.clone(), &path);
+                }
+                ui.horizontal_wrapped(|ui| { ui.label("BLANK MEMBER ID"); ui.add(egui::TextEdit::singleline(&mut self.member_id_input).char_limit(64).desired_width(190.0)); });
+                if ui.button("ADD BLANK MEMBER").clicked() { self.add_blank_member(); }
+            });
+            if let Some(alias) = self.member_remove.clone() {
+                ui.separator();
+                ui.colored_label(ui_theme::CORAL, format!("REMOVE {alias} FROM THIS GAME?"));
+                ui.label("Unsaved source in this member is removed too. No input file or player save is deleted. References/computed request targets may block removal.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!self.running, egui::Button::new("CONFIRM REMOVE")).clicked() { self.remove_member(&alias, context); }
+                    if ui.button("CANCEL").clicked() { self.member_remove = None; }
+                });
+            }
+            ui.separator();
+            ui.label(&self.status);
+        });
+        self.show_members = open;
+        if !open {
+            self.member_remove = None;
         }
     }
 
@@ -647,7 +966,7 @@ impl StudioApp {
                 match (&bytes, &schema) {
                     (Ok(bytes), Ok(schema)) => {
                         ui.label(format!("SCHEMA {schema} / {} OF 8192 BYTES", bytes.len()));
-                        ui.label("Browser-compatible .m01save export / checksum verified import");
+                        ui.label("Current .m01save export / checksum verified import");
                     }
                     (Err(error), _) | (_, Err(error)) => {
                         ui.label(error);
@@ -694,12 +1013,14 @@ impl StudioApp {
             "export" => {
                 let result = read_save(id).and_then(|bytes| {
                     let schema = read_save_schema(id)?;
-                    save_manager::export(id, schema, &bytes)
+                    let stem = modl_core::cartridge::cartridge_file_stem(id)
+                        .map_err(|error| error.to_string())?;
+                    save_manager::export(id, schema, &bytes).map(|bytes| (stem, bytes))
                 });
                 match result {
-                    Ok(bytes) => {
+                    Ok((stem, bytes)) => {
                         if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("{id}.m01save"))
+                            .set_file_name(format!("{stem}.m01save"))
                             .add_filter("MOD-01 save", &["m01save"])
                             .save_file()
                         {
@@ -717,9 +1038,7 @@ impl StudioApp {
                     .add_filter("MOD-01 save", &["m01save"])
                     .pick_file()
                 {
-                    let result = fs::read(path)
-                        .map_err(|error| error.to_string())
-                        .and_then(|encoded| save_manager::import(id, &encoded));
+                    let result = save_manager::import_file(id, &path);
                     self.status = match result.and_then(|(schema, bytes)| {
                         self.stop();
                         backup_save(id)?;
@@ -785,15 +1104,15 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        match project.pack() {
-            Ok(bytes) => {
+        match project.game() {
+            Ok(game) => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(format!("{}.m01c", project.manifest.id))
+                    .set_file_name(format!("{}.m01c", game.file_stem()))
                     .add_filter("MOD-01 cartridge", &["m01c"])
                     .save_file()
                 {
-                    self.status = match fs::write(path, &bytes) {
-                        Ok(()) => format!("PACKED {} BYTES", bytes.len()),
+                    self.status = match fs::write(path, game.bytes()) {
+                        Ok(()) => format!("PACKED {} BYTES", game.bytes().len()),
                         Err(error) => error.to_string(),
                     };
                 }
@@ -832,9 +1151,7 @@ impl StudioApp {
                 None,
             )
             .map_err(|error| error.to_string())?;
-            let output = parent.join(format!("{}-native", project.manifest.id));
-            modl_core::export_native_game(&output, &project.pack()?, &tools)
-                .map_err(|error| error.to_string())
+            project.export_native(&parent, &tools)
         })();
         self.status = match result {
             Ok(path) => format!("EXPORTED {}", path.display()),
@@ -857,48 +1174,15 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let packed = match project.pack() {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.status = error;
-                return;
-            }
-        };
-        let identity = project
-            .files
-            .get("presentation/cartridge.json")
-            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
-        let metadata = modl_core::CartridgePngMetadata {
-            title: project.manifest.title.clone(),
-            author: project.manifest.author.clone(),
-            year: identity
-                .as_ref()
-                .and_then(|value| value["year"].as_u64())
-                .and_then(|value| u16::try_from(value).ok())
-                .filter(|year| (1970..=9999).contains(year))
-                .unwrap_or(1999),
-            players: identity
-                .as_ref()
-                .and_then(|value| value["players"].as_u64())
-                .and_then(|value| u8::try_from(value).ok())
-                .filter(|players| (1..=4).contains(players))
-                .unwrap_or(1),
-            controls: identity
-                .as_ref()
-                .and_then(|value| value["controls"].as_str())
-                .filter(|value| value.len() <= 64)
-                .unwrap_or("PAD")
-                .to_owned(),
-        };
-        let png = match modl_core::encode_cartridge_png(&packed, &metadata) {
-            Ok(bytes) => bytes,
+        let (stem, png) = match project.cartridge_png() {
+            Ok(png) => png,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.m01c.png", project.manifest.id))
+            .set_file_name(format!("{stem}.m01c.png"))
             .save_file()
         {
             self.status = match fs::write(path, png) {
@@ -1013,10 +1297,7 @@ impl StudioApp {
         else {
             return;
         };
-        self.status = match fs::read(path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| replay::decode(&bytes))
-        {
+        self.status = match replay::read(&path) {
             Ok(frames) => {
                 self.replay_playback = Some(frames);
                 self.recording_replay = false;
@@ -1165,7 +1446,7 @@ impl StudioApp {
                         continue;
                     }
                     if let Some(path) = rfd::FileDialog::new()
-                        .set_file_name(format!("{}.wav", self.preview_name))
+                        .set_file_name(export_names::asset(&self.preview_name, "wav"))
                         .save_file()
                     {
                         self.status = match fs::write(path, bytes) {
@@ -1211,14 +1492,32 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let save = match read_save(&project.manifest.id) {
-            Ok(save) => save,
+        let game = match project.game() {
+            Ok(game) => game,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
-        let command = match project.load_command(debug, &save) {
+        let members = match RunningMember::catalog(&game) {
+            Ok(members) => members,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let saves = members
+            .values()
+            .map(|member| read_save(&member.id).map(|save| (member.id.clone(), save)))
+            .collect::<Result<BTreeMap<_, _>, _>>();
+        let saves = match saves {
+            Ok(saves) => saves,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let command = match NativeProject::game_command(&game, debug, &saves) {
             Ok(command) => command,
             Err(error) => {
                 self.status = error;
@@ -1232,6 +1531,8 @@ impl StudioApp {
         self.screen_rect = None;
         match self.runtime.send(command) {
             Ok(()) => {
+                self.running_members = members;
+                self.active_alias = "main".to_owned();
                 self.running = true;
                 self.keyboard_controller.quarantine();
                 self.gamepad_controller.quarantine();
@@ -1242,6 +1543,7 @@ impl StudioApp {
                 self.debugging = debug;
                 self.snapshot = None;
                 self.debug_event.clear();
+                self.debug_source = None;
                 self.debug_inspection = Value::Null;
                 self.debug_trace.clear();
                 self.watch_results.clear();
@@ -1324,6 +1626,7 @@ impl StudioApp {
             }
             match event["type"].as_str() {
                 Some("loaded") => {
+                    self.accept_active(&event);
                     self.loaded = true;
                     self.status = format!(
                         "RUNNING {}",
@@ -1339,21 +1642,39 @@ impl StudioApp {
                         self.accept_frame(&event["frame"], context);
                         self.status = format!("DEBUG FRAME {} COMPLETE", self.frame);
                     } else if event["booted"] == true {
+                        self.accept_active(&event);
                         self.debug_booted = true;
                         self.debug_frame_boundary = true;
                         self.status = "DEBUG BOOT COMPLETE".to_owned();
                     } else if event["event"].is_object() {
+                        self.accept_active(&event);
                         self.debug_inspection = event["inspection"].clone();
                         self.watch_results =
                             event["watches"].as_array().cloned().unwrap_or_default();
-                        self.debug_trace.push(event["event"].clone());
+                        let mut source_event = event["event"].clone();
+                        source_event["cartridgeAlias"] = event["cartridgeAlias"].clone();
+                        source_event["cartridgeId"] = event["cartridgeId"].clone();
+                        let alias = event["cartridgeAlias"].as_str().unwrap_or("").to_owned();
+                        let path = event["event"]["sourceSpan"]["source"]
+                            .as_str()
+                            .or_else(|| {
+                                self.running_members
+                                    .get(&alias)
+                                    .map(|member| member.entry.as_str())
+                            })
+                            .unwrap_or("")
+                            .to_owned();
+                        let offset =
+                            event["event"]["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
+                        self.debug_source = Some((alias, path, offset));
+                        self.debug_event = serde_json::to_string_pretty(&source_event)
+                            .unwrap_or_else(|_| "debug event".to_owned());
+                        self.debug_trace.push(source_event);
                         if self.debug_trace.len() > 4096 {
                             self.debug_trace.remove(0);
                         }
-                        self.debug_event = serde_json::to_string_pretty(&event["event"])
-                            .unwrap_or_else(|_| "debug event".to_owned());
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
-                        if self.hit_breakpoint(&event["event"], &event["conditions"]) {
+                        if self.hit_breakpoint(&event, &event["conditions"]) {
                             self.debug_running = false;
                             self.resume_debug = false;
                             self.status = "BREAKPOINT".to_owned();
@@ -1377,6 +1698,11 @@ impl StudioApp {
                     self.status = "DEBUG SNAPSHOT CAPTURED".to_owned();
                 }
                 Some("restored") => {
+                    self.accept_active(&event);
+                    self.debug_source = None;
+                    self.debug_event.clear();
+                    self.debug_inspection = Value::Null;
+                    self.watch_results.clear();
                     self.touch_controller.clear();
                     self.keyboard_controller.quarantine();
                     self.gamepad_controller.quarantine();
@@ -1424,6 +1750,34 @@ impl StudioApp {
                 }
                 Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
+                    if event["recoverable"] == true && self.running && self.loaded {
+                        // Rejected debugger operations did not mutate the VM. Keep the
+                        // suspended source/input/replay/menu state; pause auto-stepping
+                        // so the user can inspect the diagnostic before resuming.
+                        self.debug_running = false;
+                        self.resume_debug = false;
+                        self.status = format!(
+                            "DEBUG REQUEST REJECTED: {}",
+                            event["message"]
+                                .as_str()
+                                .unwrap_or("invalid debugger request")
+                        );
+                        continue;
+                    }
+                    if let Some(alias) = event["active"]["cartridgeAlias"].as_str()
+                        && let Some(member) = self.running_members.get(alias)
+                        && event["sourceSpan"].is_object()
+                    {
+                        let path = event["sourceSpan"]["source"]
+                            .as_str()
+                            .unwrap_or(&member.entry)
+                            .to_owned();
+                        self.debug_source = Some((
+                            alias.to_owned(),
+                            path,
+                            event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize,
+                        ));
+                    }
                     self.set_player_paused(false);
                     self.debug_running = false;
                     self.resume_debug = false;
@@ -1442,14 +1796,16 @@ impl StudioApp {
     }
 
     fn hit_breakpoint(&self, event: &Value, conditions: &Value) -> bool {
-        let Some(project) = &self.project else {
+        let alias = event["cartridgeAlias"].as_str().unwrap_or("");
+        let Some(member) = self.running_members.get(alias) else {
             return false;
         };
-        let source = event["sourceSpan"]["source"]
+        let source_event = &event["event"];
+        let source = source_event["sourceSpan"]["source"]
             .as_str()
-            .unwrap_or(&project.manifest.entry);
-        let offset = event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
-        let Some(bytes) = project.files.get(source) else {
+            .unwrap_or(&member.entry);
+        let offset = source_event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
+        let Some(bytes) = member.sources.get(source) else {
             return false;
         };
         let line = 1 + bytes
@@ -1458,7 +1814,8 @@ impl StudioApp {
             .filter(|byte| **byte == b'\n')
             .count();
         self.breakpoints.iter().enumerate().any(|(index, point)| {
-            point.source == source
+            point.member == alias
+                && point.source == source
                 && point.line == line
                 && (point.condition.is_empty()
                     || conditions[index]["value"] == true
@@ -1466,7 +1823,57 @@ impl StudioApp {
         })
     }
 
+    fn reveal_debug_source(&mut self) {
+        let Some((alias, path, offset)) = self.debug_source.clone() else {
+            return;
+        };
+        self.debug_running = false;
+        self.resume_debug = false;
+        let previous_view = self.view;
+        self.select_member(&alias);
+        let Some(project) = self
+            .project
+            .as_mut()
+            .filter(|project| project.member_alias() == alias)
+        else {
+            return;
+        };
+        project.sync_editor();
+        let frozen = self
+            .running_members
+            .get(&alias)
+            .and_then(|member| member.sources.get(&path));
+        if frozen.is_none() || project.files.get(&path) != frozen {
+            self.view = previous_view;
+            self.status =
+                "EDITED SOURCE DIFFERS FROM RUNNING BUILD / READ-ONLY SOURCE SHOWN IN DEBUGGER"
+                    .to_owned();
+            return;
+        }
+        match self.source_editor.reveal(project, &path, offset) {
+            Ok(()) => {
+                self.view = View::Code;
+                self.status = format!("RUNNING SOURCE {alias}/{path}");
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
+        let alias = event["cartridgeAlias"].as_str().unwrap_or("");
+        let id = event["cartridgeId"].as_str().unwrap_or("");
+        if self
+            .running_members
+            .get(alias)
+            .map(|member| member.id.as_str())
+            != Some(id)
+        {
+            self.status = "INVALID RUNTIME FRAME OWNER".to_owned();
+            self.running = false;
+            self.loaded = false;
+            return;
+        }
+        self.accept_active(event);
         if let Some(items) = event.get("menuItems") {
             if let Err(error) = self.pause_menu.update_items(items) {
                 self.status = error;
@@ -1519,15 +1926,49 @@ impl StudioApp {
         }
         if !self.debugging
             && self.replay_playback.is_none()
-            && let (Some(project), Some(encoded)) =
-                (self.project.as_ref(), event["saveCommit"].as_str())
+            && let Some(encoded) = event["saveCommit"].as_str()
         {
             if let Ok(bytes) = STANDARD.decode(encoded) {
-                if let Err(error) = write_save(&project.manifest.id, &bytes) {
+                if let Err(error) = write_save(id, &bytes) {
                     self.status = error;
                 }
             }
         }
+    }
+
+    fn accept_active(&mut self, event: &Value) {
+        let active = &event["active"];
+        let alias = active["cartridgeAlias"].as_str().unwrap_or("");
+        let id = active["cartridgeId"].as_str().unwrap_or("");
+        if self
+            .running_members
+            .get(alias)
+            .map(|member| member.id.as_str())
+            == Some(id)
+        {
+            if self.active_alias != alias && !self.debugging {
+                self.status = format!("RUNNING {alias} / {id}");
+            }
+            self.active_alias = alias.to_owned();
+            self.debug_booted = active["booted"] == true;
+        }
+    }
+
+    fn runtime_title(&self) -> String {
+        self.running
+            .then(|| {
+                self.running_members
+                    .get(&self.active_alias)
+                    .map(|member| &member.title)
+            })
+            .flatten()
+            .cloned()
+            .or_else(|| {
+                self.project
+                    .as_ref()
+                    .map(|project| project.manifest.title.clone())
+            })
+            .unwrap_or_else(|| "MOD-01".to_owned())
     }
 
     fn send_frame(&mut self, context: &egui::Context) {
@@ -1572,24 +2013,38 @@ impl StudioApp {
         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| match self.debug_tab {
             DebugTab::Source => {
                 let source = self.project.as_ref().map_or("", |project| project.selected_file.as_str()).to_owned();
-                ui.horizontal(|ui| {
-                    ui.label(format!("BREAKPOINT {source}:"));
+                let member = self.project.as_ref().map_or("", |project| project.member_alias()).to_owned();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("BREAKPOINT {member}/{source}:"));
                     ui.add(egui::DragValue::new(&mut self.breakpoint_line).range(1..=100_000));
                     ui.add_sized([150.0, 22.0], egui::TextEdit::singleline(&mut self.breakpoint_condition).hint_text("CONDITION"));
                     if ui.button("ADD").clicked() && !source.is_empty() && self.breakpoints.len() < 32
-                        && !self.breakpoints.iter().any(|point| point.source == source && point.line == self.breakpoint_line) {
-                        self.breakpoints.push(SourceBreakpoint { source: source.clone(), line: self.breakpoint_line, condition: self.breakpoint_condition.trim().chars().take(256).collect() });
+                        && !self.breakpoints.iter().any(|point| point.member == member && point.source == source && point.line == self.breakpoint_line) {
+                        self.breakpoints.push(SourceBreakpoint { member: member.clone(), source: source.clone(), line: self.breakpoint_line, condition: self.breakpoint_condition.trim().chars().take(256).collect() });
                     }
                 });
                 let mut remove = None;
                 for (index, point) in self.breakpoints.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}:{}{}", point.source, point.line,
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{}/{}:{}{}", point.member, point.source, point.line,
                             if point.condition.is_empty() { String::new() } else { format!(" IF {}", point.condition) }));
                         if ui.button("REMOVE").clicked() { remove = Some(index); }
                     });
                 }
                 if let Some(index) = remove { self.breakpoints.remove(index); }
+                if let Some((alias, path, offset)) = self.debug_source.clone() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("RUNNING SOURCE {alias}/{path}"));
+                        if ui.button("OPEN EDITABLE SOURCE").clicked() { self.reveal_debug_source(); }
+                    });
+                    if let Some(bytes) = self.running_members.get(&alias).and_then(|member| member.sources.get(&path)) {
+                        let line = bytes.iter().take(offset).filter(|byte| **byte == b'\n').count();
+                        let text = String::from_utf8_lossy(bytes);
+                        for (index, text) in text.lines().enumerate().skip(line.saturating_sub(2)).take(5) {
+                            ui.label(RichText::new(format!("{} {:05} {text}", if index == line { ">" } else { " " }, index + 1)).monospace().color(if index == line { ui_theme::AMBER } else { ui_theme::CREAM }));
+                        }
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.label("WATCH");
                     ui.add_sized([190.0, 22.0], egui::TextEdit::singleline(&mut self.watch_input).hint_text("EXPRESSION"));
@@ -1718,7 +2173,7 @@ impl StudioApp {
         });
         let command = if kind == "step" {
             json!({"type":kind,"input":input,"watches":self.watches,
-                "conditions":self.breakpoints.iter().map(|point| point.condition.as_str()).collect::<Vec<_>>()})
+                "conditions":self.breakpoints.iter().map(|point| if point.member == self.active_alias { point.condition.as_str() } else { "" }).collect::<Vec<_>>()})
         } else {
             json!({"type":kind,"input":input})
         };
@@ -2008,7 +2463,10 @@ impl StudioApp {
 
     // Discard project-local UI state when replacing the current cartridge.
     fn reset_asset_editors(&mut self) {
+        self.show_members = false;
+        self.member_remove = None;
         self.asset_sessions.clear();
+        self.asset_remove = None;
         self.asset_meter = asset_meter::AssetMeter::default();
         self.asset_workbench = None;
         self.sprite = None;
@@ -2165,11 +2623,7 @@ impl StudioApp {
             },
             None => self.asset_text.clone(),
         };
-        let name = PathBuf::from(&self.asset_path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset.json")
-            .to_owned();
+        let name = export_names::source(&self.asset_name, &self.asset_path);
         if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
             self.status = match fs::write(&path, source) {
                 Ok(()) => format!("EXPORTED {}", path.display()),
@@ -2216,7 +2670,7 @@ impl StudioApp {
             }
         };
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.png", self.asset_name))
+            .set_file_name(export_names::asset(&self.asset_name, "png"))
             .add_filter("PNG atlas", &["png"])
             .save_file()
         {
@@ -2804,7 +3258,7 @@ impl StudioApp {
                             }
                             if ui.button("PNG OUT").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
-                                    .set_file_name(format!("{}.png", editor.name))
+                                    .set_file_name(export_names::asset(&editor.name, "png"))
                                     .save_file()
                                 {
                                     self.status = match editor.export_png().and_then(|bytes| {
@@ -2950,6 +3404,8 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
+        self.sync_viewport_mode(&context);
+        self.poll_audio_output();
         self.capture_keyboard(&context);
         self.handle_system_menu_toggle(&context);
         self.process_events(&context);
@@ -2964,6 +3420,7 @@ impl eframe::App for StudioApp {
         }
         if self.player_mode {
             self.player_ui(root);
+            self.sync_viewport_mode(&context);
             return;
         }
         egui::Panel::top("toolbar")
@@ -2975,6 +3432,7 @@ impl eframe::App for StudioApp {
                 ui.horizontal(|ui| {
                     ui_theme::led(ui, true, "PWR");
                     ui_theme::led(ui, self.running && self.loaded, "EXEC");
+                    self.audio_indicator(ui);
                     ui.separator();
                     let status_color =
                         if self.status.contains("ERROR") || self.status.contains("FAILED") {
@@ -3057,6 +3515,7 @@ impl eframe::App for StudioApp {
             self.show_new_asset &= open;
         }
         self.help_windows(&context);
+        self.members_window(&context);
         if self.show_playground {
             self.playground
                 .ui(&context, &mut self.show_playground, self.project.as_ref());
@@ -3088,6 +3547,7 @@ impl eframe::App for StudioApp {
                     .show(ui, |ui| {
                         ui_theme::legend(ui, "01 / WORKSPACE");
                         ui.heading("PROJECT");
+                        self.member_picker(ui);
                         ui.separator();
                         for (view, title) in [
                             (View::Code, "01  CODE"),
@@ -3173,9 +3633,10 @@ impl eframe::App for StudioApp {
                             .show(ui, project, &mut self.modl_highlighter);
                     }
                 }
-                View::Sprites => { self.asset_meter_ui(ui); self.sprite_ui(ui); }
+                View::Sprites => { self.asset_meter_ui(ui); self.asset_delete_button(ui); self.sprite_ui(ui); }
                 View::Assets => {
                     self.asset_meter_ui(ui);
+                    self.asset_delete_button(ui);
                     egui::ScrollArea::vertical().id_salt("asset-workspace").show(ui, |ui| {
                     if self.asset_name.is_empty() {
                         ui.heading("ASSETS");
@@ -3274,6 +3735,7 @@ impl eframe::App for StudioApp {
                                         !self.preview_pending && !self.preview_cancelling,
                                         egui::Button::new("EXPORT WAV"),
                                     )
+                                    .on_hover_text("Offline stereo PCM16, at most 8 MiB (about 43.7 seconds, including a sound's release). Longer exports are rejected, never truncated; shorten the patch or music order.")
                                     .clicked()
                                 {
                                     self.render_asset_wav();
@@ -3290,7 +3752,7 @@ impl eframe::App for StudioApp {
                             if ui
                                 .add(
                                     egui::TextEdit::multiline(&mut self.asset_text)
-                                        .id_salt(("asset-json", self.asset_sessions.generation(), &self.asset_name, &self.asset_path))
+                                        .id(self.project.as_ref().map_or_else(|| egui::Id::unique("no-asset-json"), |project| self.asset_sessions.text_id(project, &self.asset_name, &self.asset_path)))
                                         .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace)
                                         .code_editor()
@@ -3404,8 +3866,10 @@ impl eframe::App for StudioApp {
                 }
             });
         self.system_menu_ui(&context);
+        self.asset_removal_ui(&context);
         self.advance_runtime(&context);
         self.cursors.paint(&context);
+        self.sync_viewport_mode(&context);
         if self.running {
             context.request_repaint_after(Duration::from_millis(4));
         }
@@ -3668,89 +4132,34 @@ fn indexed_image(pixels: &[u8]) -> Option<image::RgbaImage> {
 fn save_path(id: &str) -> Result<PathBuf, String> {
     let directories = ProjectDirs::from("", "MOD-01", "Native Studio")
         .ok_or("cannot find application data directory")?;
-    Ok(directories
-        .data_dir()
-        .join("saves")
-        .join(format!("{id}.bin")))
+    save_manager::storage_path(directories.data_dir(), id)
 }
 
 fn read_save(id: &str) -> Result<Vec<u8>, String> {
-    let path = save_path(id)?;
-    match fs::read(path) {
-        Ok(bytes) => Ok(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::read_image(&save_path(id)?).map_err(|error| format!("save for '{id}': {error}"))
 }
 
 fn read_save_schema(id: &str) -> Result<u16, String> {
-    let path = save_path(id)?.with_extension("schema");
-    match fs::read_to_string(path) {
-        Ok(value) => value
-            .trim()
-            .parse::<u16>()
-            .map_err(|error| error.to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(1),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::read_schema(&save_path(id)?)
 }
 
 fn write_save_schema(id: &str, schema: u16) -> Result<(), String> {
-    let path = save_path(id)?.with_extension("schema");
-    fs::write(path, schema.to_string()).map_err(|error| error.to_string())
+    save_manager::write_schema(&save_path(id)?, schema)
 }
 
 fn clear_save_schema(id: &str) -> Result<(), String> {
-    let path = save_path(id)?.with_extension("schema");
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::clear_schema(&save_path(id)?)
 }
 
 fn backup_save(id: &str) -> Result<(), String> {
     let bytes = read_save(id)?;
     let schema = read_save_schema(id)?;
-    let exported = save_manager::export(id, schema, &bytes)?;
     let saves = save_path(id)?;
-    let directory = saves.parent().ok_or("invalid save path")?.join("recovery");
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    fs::write(
-        directory.join(format!("{id}-{stamp:020}.m01save")),
-        exported,
-    )
-    .map_err(|error| error.to_string())?;
-    let mut revisions = fs::read_dir(&directory)
-        .map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(&format!("{id}-")) && name.ends_with(".m01save")
-                })
-        })
-        .collect::<Vec<_>>();
-    revisions.sort_by(|left, right| right.cmp(left));
-    for old in revisions.iter().skip(10) {
-        fs::remove_file(old).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    save_manager::backup(&saves, id, schema, &bytes).map(|_| ())
 }
 
 fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
-    let path = save_path(id)?;
-    let parent = path.parent().ok_or("invalid save path")?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, &path).map_err(|error| error.to_string())
+    save_manager::write_image(&save_path(id)?, bytes)
 }
 
 fn main() -> eframe::Result {
@@ -3767,8 +4176,12 @@ fn main() -> eframe::Result {
         }
     };
     let (start, player_mode) = match launch {
-        launch::Launch::Verify { path, frames } => {
-            match player::verify(&path, frames) {
+        launch::Launch::Verify {
+            path,
+            frames,
+            input,
+        } => {
+            match player::verify(&path, frames, input.as_deref()) {
                 Ok(result) => println!("{result}"),
                 Err(error) => {
                     eprintln!("{error}");
@@ -3779,7 +4192,7 @@ fn main() -> eframe::Result {
         }
         launch::Launch::Help => {
             println!(
-                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N]]"
+                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N] [--input REPLAY]]"
             );
             return Ok(());
         }
@@ -3794,11 +4207,7 @@ fn main() -> eframe::Result {
             } else {
                 [1280.0, 800.0]
             })
-            .with_min_inner_size(if player_mode {
-                [480.0, 320.0]
-            } else {
-                [900.0, 600.0]
-            }),
+            .with_min_inner_size(player::minimum_size(player_mode, false)),
         ..Default::default()
     };
     eframe::run_native(

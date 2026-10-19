@@ -123,7 +123,7 @@ fn pending_source_step_and_loaded_replay_cannot_accept_a_live_menu_action() {
     let files = app.project.as_ref().unwrap().files.clone();
     app.system_menu_action(Action::Source);
     assert!(!app.running && !app.player_mode && app.view == View::Code);
-    assert_eq!(app.status, "SOURCE INSPECTION / STOPPED");
+    assert_eq!(app.status, "SOURCE INSPECTION / main / STOPPED");
     assert_eq!(app.project.as_ref().unwrap().files, files);
 }
 
@@ -176,6 +176,7 @@ fn a_breakpoint_in_an_already_submitted_step_cannot_be_resumed_by_closing_the_me
         .unwrap()
         + 1;
     app.breakpoints.push(SourceBreakpoint {
+        member: "main".to_owned(),
         source: project.manifest.entry.clone(),
         line,
         condition: String::new(),

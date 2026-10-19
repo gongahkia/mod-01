@@ -242,6 +242,10 @@ pub fn export_native_game(
             "Kenney.txt",
             include_str!("../../mod01-native/assets/kenney/License.txt"),
         ),
+        (
+            "Library-renderer.txt",
+            include_str!("../../mod01-native/assets/LIBRARY-LICENSES.txt"),
+        ),
     ] {
         fs::write(credits.join(name), contents).map_err(export_error)?;
     }

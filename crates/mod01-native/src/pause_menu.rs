@@ -166,6 +166,10 @@ impl PauseMenu {
 
 impl crate::StudioApp {
     pub(super) fn handle_system_menu_toggle(&mut self, context: &egui::Context) {
+        if self.show_library && !self.player_mode {
+            self.pause_navigation = Navigation::default();
+            return;
+        }
         let navigation = self.gamepad_controller.take_navigation();
         self.pause_navigation = if self.player_paused {
             navigation

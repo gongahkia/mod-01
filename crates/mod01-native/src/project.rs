@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -35,14 +35,21 @@ impl NativeProject {
         } else {
             path.to_path_buf()
         };
-        if fs::metadata(&path)
-            .map_err(|error| error.to_string())?
-            .len()
-            > MAX_PROJECT_TOTAL
-        {
+        if !path.is_file() {
+            return Err("cartridge is missing or is not an ordinary file".to_owned());
+        }
+        let file = fs::File::open(&path).map_err(|error| error.to_string())?;
+        let metadata = file.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_file() || metadata.len() > MAX_PROJECT_TOTAL {
             return Err("cartridge source exceeds 16 MiB".to_owned());
         }
-        let source = fs::read(&path).map_err(|error| error.to_string())?;
+        let mut source = Vec::new();
+        file.take(MAX_PROJECT_TOTAL + 1)
+            .read_to_end(&mut source)
+            .map_err(|error| error.to_string())?;
+        if source.len() as u64 > MAX_PROJECT_TOTAL {
+            return Err("cartridge source exceeds 16 MiB".to_owned());
+        }
         if path
             .extension()
             .is_some_and(|extension| extension == "m01w")

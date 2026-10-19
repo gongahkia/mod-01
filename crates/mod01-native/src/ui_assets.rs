@@ -5,7 +5,7 @@ use eframe::egui::{
     Order, Rect, TextStyle, TextureHandle, TextureOptions,
 };
 
-const BIG_BLUE: &[u8] = include_bytes!("../assets/bigblue/BigBlue_TerminalPlus.ttf");
+pub(crate) const BIG_BLUE: &[u8] = include_bytes!("../assets/bigblue/BigBlue_TerminalPlus.ttf");
 const POINTER: &[u8] = include_bytes!("../assets/kenney/tile_0028.png");
 const ACTION: &[u8] = include_bytes!("../assets/kenney/tile_0134.png");
 const TEXT: &[u8] = include_bytes!("../assets/kenney/tile_0120.png");

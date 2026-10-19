@@ -12,7 +12,8 @@ target/debug/mod01-studio PATH
 target/debug/mod01-studio --play PATH
 ```
 
-The sample picker opens bundled cartridges for editing or play. The workspace
+The [offline library](LIBRARY.md) opens bundled and user cartridges for editing or
+play, with cover art, search, labels, favourites and controller navigation. The workspace
 contains code, layered sprites, structured assets, player and manifest views.
 PROJECT opens/creates/saves projects and cartridges and exposes recovery.
 BUILD checks, runs, debugs and packs. TOOLS provides compiler/source inspection

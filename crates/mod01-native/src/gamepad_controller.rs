@@ -11,6 +11,8 @@ pub struct Navigation {
     pub confirm: bool,
     pub cancel: bool,
     pub menu: bool,
+    pub inspect: bool,
+    pub favourite: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -101,6 +103,8 @@ impl GamepadController {
             self.navigation.confirm |= rising & ((1 << 4) | (1 << 10)) != 0;
             self.navigation.cancel |= rising & (1 << 5) != 0;
             self.navigation.menu |= rising & (1 << 11) != 0;
+            self.navigation.inspect |= rising & (1 << 6) != 0;
+            self.navigation.favourite |= rising & (1 << 7) != 0;
         }
         pad.blocked &= held;
         if enabled {

@@ -26,7 +26,8 @@ mod audio;
 mod gamepad_controller;
 mod keyboard_controller;
 mod launch;
-#[cfg(test)]
+mod library;
+mod library_preview;
 mod library_store;
 mod live_audio;
 mod pause_menu;
@@ -77,7 +78,7 @@ enum AudioPreviewMode {
     Pattern,
     Note,
 }
-const fn manual_topics() -> [(&'static str, &'static str); 14] {
+const fn manual_topics() -> [(&'static str, &'static str); 15] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
         ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
@@ -94,6 +95,7 @@ const fn manual_topics() -> [(&'static str, &'static str); 14] {
         ("LIMITS", include_str!("../../../docs/LIMITS.md")),
         ("DEBUGGING", include_str!("../../../docs/DEBUGGING.md")),
         ("PAUSE ACTIONS", include_str!("../../../docs/MENU.md")),
+        ("LOCAL LIBRARY", include_str!("../../../docs/LIBRARY.md")),
         (
             "CARTRIDGES",
             include_str!("../../../docs/CARTRIDGE_FORMAT.md"),
@@ -128,6 +130,10 @@ struct SourceBreakpoint {
 
 struct StudioApp {
     cursors: PixelCursors,
+    library: library::Library,
+    show_library: bool,
+    library_was_paused: bool,
+    pending_library_open: Option<library::OpenRequest>,
     project: Option<NativeProject>,
     manifest_text: String,
     view: View,
@@ -228,6 +234,18 @@ impl StudioApp {
         let host_path = native_host_path();
         let mut app = Self {
             cursors: PixelCursors::new(context),
+            library: library::Library::new(
+                devices
+                    .then(|| {
+                        ProjectDirs::from("", "MOD-01", "Native Studio")
+                            .map(|directories| directories.data_dir().join("library.json"))
+                    })
+                    .flatten(),
+                bundled_samples(),
+            ),
+            show_library: true,
+            library_was_paused: false,
+            pending_library_open: None,
             project: None,
             manifest_text: String::new(),
             view: View::Code,
@@ -325,36 +343,11 @@ impl StudioApp {
     }
 
     fn open(&mut self, path: PathBuf) {
-        match NativeProject::open(&path) {
-            Ok(project) => {
-                self.stop();
-                self.manifest_text = project.manifest_source.clone();
-                self.status = format!("OPENED {}", project.manifest.title);
-                self.project = Some(project);
-                self.reset_asset_editors();
-                self.view = View::Code;
-            }
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn open_sample(&mut self, path: PathBuf, play: bool) {
-        match NativeProject::open(&path) {
-            Ok(mut project) => {
-                project.root = None;
-                project.workcart_path = None;
-                self.stop();
-                self.manifest_text = project.manifest_source.clone();
-                self.status = format!("OPENED SAMPLE {}", project.manifest.title);
-                self.project = Some(project);
-                self.reset_asset_editors();
-                self.view = View::Code;
-                if play {
-                    self.run();
-                }
-            }
-            Err(error) => self.status = error,
-        }
+        self.request_library_open(library::OpenRequest {
+            path,
+            bundled: false,
+            play: false,
+        });
     }
 
     fn recover_revision(&mut self, path: PathBuf) {
@@ -388,6 +381,7 @@ impl StudioApp {
                 self.project = Some(project);
                 self.reset_asset_editors();
                 self.show_new = false;
+                self.show_library = false;
                 self.view = View::Code;
             }
             Err(error) => self.status = error,
@@ -1201,6 +1195,7 @@ impl StudioApp {
     }
 
     fn run_mode(&mut self, debug: bool) {
+        self.show_library = false;
         self.touch_controller.clear();
         if let Err(error) = self.sync_asset() {
             self.status = error;
@@ -1673,6 +1668,7 @@ impl StudioApp {
     fn capture_keyboard(&mut self, context: &egui::Context) {
         let enabled = self.running
             && self.loaded
+            && !self.show_library
             && !self.player_paused
             && (self.player_mode || self.view == View::Player)
             && self.replay_playback.is_none();
@@ -1755,6 +1751,9 @@ impl StudioApp {
         });
         ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
+            if ui.button("LIBRARY").clicked() {
+                self.enter_library();
+            }
             ui.menu_button("PROJECT", |ui| {
                 if ui.button("OPEN PROJECT").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
@@ -3062,45 +3061,20 @@ impl eframe::App for StudioApp {
             self.playground
                 .ui(&context, &mut self.show_playground, self.project.as_ref());
         }
-        if self.project.is_none() {
+        if self.show_library || self.project.is_none() {
+            let mut action = None;
+            let navigation = self.gamepad_controller.take_navigation();
             egui::CentralPanel::default()
                 .frame(ui_theme::screen_frame())
                 .show(root, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(34.0);
-                        ui_theme::legend(ui, "MOD-01 / SYSTEM ROM / REVISION 02");
-                        ui.add_space(15.0);
-                        ui.heading(RichText::new("COLOR DEVELOPMENT UNIT").color(ui_theme::CREAM));
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("INSERT A CARTRIDGE OR OPEN A PROJECT")
-                                .color(ui_theme::CYAN),
-                        );
-                        ui.add_space(29.0);
-                        ui_theme::legend(ui, "--- CARTRIDGE LIBRARY ---");
-                        ui.add_space(10.0);
-                        egui::Grid::new("sample-cartridges")
-                            .spacing([20.0, 10.0])
-                            .show(ui, |ui| {
-                                for path in bundled_samples() {
-                                    let title = path
-                                        .file_name()
-                                        .and_then(|value| value.to_str())
-                                        .unwrap_or("CARTRIDGE")
-                                        .replace('-', " ")
-                                        .to_uppercase();
-                                    ui.label(RichText::new(title).color(ui_theme::CREAM));
-                                    if ui.button("EDIT").clicked() {
-                                        self.open_sample(path.clone(), false);
-                                    }
-                                    if ui.button("PLAY").clicked() {
-                                        self.open_sample(path, true);
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                    ui.add_enabled_ui(self.pending_library_open.is_none(), |ui| {
+                        action = self.library.ui(ui, navigation, self.project.is_some());
                     });
                 });
+            if let Some(action) = action {
+                self.library_action(action);
+            }
+            self.library_confirmation(&context);
             self.cursors.paint(&context);
             return;
         }

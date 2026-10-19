@@ -142,6 +142,13 @@ fn studio_switches_music_sound_sprite_and_display_without_losing_asset_undo_or_w
     assert_eq!(fs::read(example()).unwrap(), original_disk);
     let generation = app.asset_sessions.generation();
     app.open(example());
+    assert_eq!(
+        app.asset_sessions.generation(),
+        generation,
+        "dirty sprite undo must be confirmed before replacing the project"
+    );
+    assert!(app.pending_library_open.is_some());
+    app.confirm_library_open(library::ConfirmOpen::Discard);
     assert_ne!(app.asset_sessions.generation(), generation);
     app.open_asset("loop");
     let editor = app.asset_workbench.as_mut().unwrap();

@@ -91,6 +91,10 @@ copyFileSync(
   join(root, 'crates', 'mod01-native', 'assets', 'kenney', 'License.txt'),
   join(visualCredits, 'Kenney-LICENSE.txt'),
 );
+copyFileSync(
+  join(root, 'crates', 'mod01-native', 'assets', 'LIBRARY-LICENSES.txt'),
+  join(visualCredits, 'Library-renderer-LICENSES.txt'),
+);
 rmSync(archive, { force: true });
 execFileSync('tar', ['-czf', archive, '-C', join(root, 'dist'), basename(output)]);
 console.log(`Packaged native Studio: ${output}`);

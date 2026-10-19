@@ -51,6 +51,26 @@ choices remain outstanding.
 
 ## Progress
 
+- Native Assets/Sprites now expose confirmed, stopped-session, member-bound
+  deletion through the shared reference checker. Alias, cartridge ID, asset name,
+  kind and path are rechecked before changing the selected member; other members
+  retain exact source. Only the deleted asset's structured/sprite/raw-text history
+  is discarded, and raw JSON widget IDs now include member/save-ID scope. Modal
+  details scroll while Cancel/Confirm remain visible at 900×600. Five native
+  regressions cover real pointer cancellation/reference errors/confirmation,
+  stale/running targets, source/tests/auxiliary preservation, unsaved sprite
+  flushing/sidecar retention, member isolation and non-resurrecting undo/redo.
+  Inspected `output/native-asset-delete-qa-4hZHn8` captures demonstrate actual
+  creation of a tile set/map, reference-blocked tile deletion, then map/tile
+  removal with the live bank falling 3→2→0 slots. The file hash stays unchanged
+  until Save; recovery retains the previous tile source exactly. The final saved
+  workcart equals the initial blank QA workcart, passes CLI check/pack and five
+  actual native packed frames. The GUI session closes normally with status zero.
+  The full gate passes 278 runtime, 130 core, 131 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, nine
+  unchanged raw/PNG pairs and both real 120-frame Linux package verifications.
+  Multi-cartridge example/conformance and the final cross-host/platform audit
+  remain open.
 - Shared reference-safe deletion now validates other map/music documents with
   the same per-document schema as asset admission. Schema-invalid dependency
   records cannot be silently treated as unreferenced; the diagnostic names the

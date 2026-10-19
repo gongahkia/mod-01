@@ -90,6 +90,21 @@ format: opening/recovering/creating another cartridge clears it. Changed asset
 kind/path/bytes or layered source invalidate cached state. Raw JSON text widgets
 also use separate asset/project identities so their text undo cannot cross assets.
 
+`DELETE ASSET` in Assets/Sprites opens a confirmation for the selected member's
+exact cartridge ID, asset name, kind and path. Stop the game and apply/revert a
+manifest draft first. The shared workcart checker refuses module, stored MODL
+test, map/music and generation-recipe references; schema-invalid dependency
+records must be repaired or removed first. Capacity overages do not prevent
+deleting an otherwise unreferenced asset. Cancellation and rejection preserve
+authored contents and editor history. Successful deletion removes the declaration and
+unshared runtime payload in memory, discards only that asset's structured/sprite/
+raw-text undo, and retains other members, their asset histories and player saves.
+Auxiliary authoring files, including sprite sidecars, are retained. This is not
+an asset-edit undo operation: before saving, reopening the workcart discards
+ALL unsaved edits, not only the deletion; after saving, use the ordinary recovery
+revisions. No disk file changes
+until SAVE. Raw JSON widgets are also scoped by member alias and cartridge ID.
+
 ASSET BANK shows the shared Rust validator's live visual-byte/allocation-slot
 usage in Assets and Sprites, including unsaved JSON, structured edits and sprite
 frame changes. It refreshes at most four times per second; REFRESH requests the

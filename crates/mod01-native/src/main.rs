@@ -20,6 +20,7 @@
 )]
 
 mod asset_meter;
+mod asset_removal;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
@@ -258,6 +259,7 @@ struct StudioApp {
     member_alias_input: String,
     member_id_input: String,
     member_remove: Option<String>,
+    asset_remove: Option<asset_removal::Removal>,
     new_asset_name: String,
     new_asset_kind: modl_core::AssetKind,
     show_manual: bool,
@@ -386,6 +388,7 @@ impl StudioApp {
             member_alias_input: "level-1".to_owned(),
             member_id_input: "new-level".to_owned(),
             member_remove: None,
+            asset_remove: None,
             new_asset_name: "new_asset".to_owned(),
             new_asset_kind: modl_core::AssetKind::TileSet,
             show_manual: false,
@@ -2466,6 +2469,7 @@ impl StudioApp {
         self.show_members = false;
         self.member_remove = None;
         self.asset_sessions.clear();
+        self.asset_remove = None;
         self.asset_meter = asset_meter::AssetMeter::default();
         self.asset_workbench = None;
         self.sprite = None;
@@ -3630,9 +3634,10 @@ impl eframe::App for StudioApp {
                             .show(ui, project, &mut self.modl_highlighter);
                     }
                 }
-                View::Sprites => { self.asset_meter_ui(ui); self.sprite_ui(ui); }
+                View::Sprites => { self.asset_meter_ui(ui); self.asset_delete_button(ui); self.sprite_ui(ui); }
                 View::Assets => {
                     self.asset_meter_ui(ui);
+                    self.asset_delete_button(ui);
                     egui::ScrollArea::vertical().id_salt("asset-workspace").show(ui, |ui| {
                     if self.asset_name.is_empty() {
                         ui.heading("ASSETS");
@@ -3748,7 +3753,7 @@ impl eframe::App for StudioApp {
                             if ui
                                 .add(
                                     egui::TextEdit::multiline(&mut self.asset_text)
-                                        .id_salt(("asset-json", self.asset_sessions.generation(), &self.asset_name, &self.asset_path))
+                                        .id(self.project.as_ref().map_or_else(|| egui::Id::unique("no-asset-json"), |project| self.asset_sessions.text_id(project, &self.asset_name, &self.asset_path)))
                                         .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace)
                                         .code_editor()
@@ -3862,6 +3867,7 @@ impl eframe::App for StudioApp {
                 }
             });
         self.system_menu_ui(&context);
+        self.asset_removal_ui(&context);
         self.advance_runtime(&context);
         self.cursors.paint(&context);
         if self.running {

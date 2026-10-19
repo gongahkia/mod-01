@@ -46,6 +46,38 @@ impl AssetSessions {
         self.generation
     }
 
+    pub fn text_id(&self, project: &NativeProject, name: &str, path: &str) -> eframe::egui::Id {
+        eframe::egui::Id::unique((
+            "asset-json",
+            self.generation(),
+            project.member_alias(),
+            &project.manifest.id,
+            name,
+            path,
+        ))
+    }
+
+    pub fn discard_asset(
+        &mut self,
+        context: &eframe::egui::Context,
+        project: &NativeProject,
+        name: &str,
+        path: &str,
+    ) {
+        for index in (0..self.sessions.len()).rev() {
+            if self.sessions[index].key.member == project.member_alias()
+                && self.sessions[index].key.name == name
+            {
+                self.remove(index);
+            }
+        }
+        let id = self.text_id(project, name, path);
+        if let Some(mut state) = eframe::egui::TextEdit::load_state(context, id) {
+            state.clear_undoer();
+            state.store(context, id);
+        }
+    }
+
     pub fn discard_member(&mut self, alias: &str) {
         for index in (0..self.sessions.len()).rev() {
             if self.sessions[index].key.member == alias {

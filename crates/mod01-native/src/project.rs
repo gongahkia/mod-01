@@ -294,6 +294,35 @@ impl NativeProject {
         self.replace_composition(source, &selected)
     }
 
+    /// Delete only in the selected member, through the shared reference checker.
+    /// Other members, recipes, tests and auxiliary source remain in the game.
+    pub fn delete_asset(&mut self, name: &str) -> Result<(), String> {
+        let source = self.source()?;
+        let selected = self.member_alias.clone();
+        let source = if selected == "main" {
+            modl_core::delete_workcart_asset(&source, name).map_err(|error| error.to_string())?
+        } else {
+            let mut whole =
+                modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+            let member = whole
+                .bundle
+                .iter_mut()
+                .find(|member| member.alias == selected)
+                .ok_or("selected cartridge is missing")?;
+            member.source = modl_core::delete_workcart_asset(&member.source, name)
+                .map_err(|error| error.to_string())?;
+            modl_core::workcart::encode_workcart_with_bundle(
+                &whole.manifest,
+                &whole.files,
+                &whole.recipes,
+                &whole.tests,
+                &whole.bundle,
+            )
+            .map_err(|error| error.to_string())?
+        };
+        self.replace_composition(source, &selected)
+    }
+
     fn replace_composition(&mut self, source: String, selected: &str) -> Result<(), String> {
         let mut candidate = Self::from_source(source, self.workcart_path.clone())?;
         candidate.root.clone_from(&self.root);

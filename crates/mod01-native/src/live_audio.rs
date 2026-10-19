@@ -114,10 +114,10 @@ impl AudioPreview {
         }
         self.clear_audio = true;
         self.ticking = false;
-        if self.phase != Phase::Idle {
-            self.close(Phase::Stopping);
-        } else {
+        if self.phase == Phase::Idle {
             self.status = "LIVE SYNTH / STOPPED".to_owned();
+        } else {
+            self.close(Phase::Stopping);
         }
     }
 
@@ -160,7 +160,8 @@ impl AudioPreview {
         while let Some(event) = self.runtime.poll() {
             match event["type"].as_str() {
                 Some("audio-preview-loaded") if self.phase == Phase::Loading => {
-                    self.phase = Phase::Ready
+                    self.phase = Phase::Ready;
+                    self.next_tick = now;
                 }
                 Some("audio-preview-playing" | "audio-preview-auditioned")
                     if self.phase == Phase::Control =>
@@ -239,10 +240,17 @@ impl AudioPreview {
             return;
         }
         let position = &self.packet["position"];
-        ui.label(format!(
-            "SYNTH FRAME {} / ORDER {} / ROW {} / TICK {}",
-            self.packet["frame"], position["orderIndex"], position["row"], position["frameInRow"]
-        ));
+        ui.label(if position.is_null() {
+            format!("SYNTH FRAME {} / PATCH AUDITION", self.packet["frame"])
+        } else {
+            format!(
+                "SYNTH FRAME {} / ORDER {} / ROW {} / TICK {}",
+                self.packet["frame"],
+                position["orderIndex"],
+                position["row"],
+                position["frameInRow"]
+            )
+        });
         ui.horizontal_wrapped(|ui| {
             for slot in 0..8 {
                 let voice = &self.packet["voices"][slot];
@@ -328,9 +336,9 @@ pub fn project_bank(
         let mut music = selected.clone();
         music["name"] = json!(selected_name);
         if let Some(pattern) = pattern_only {
-            if !music["patterns"][pattern]["rows"]
+            if music["patterns"][pattern]["rows"]
                 .as_array()
-                .is_some_and(|rows| !rows.is_empty())
+                .is_none_or(Vec::is_empty)
             {
                 return Err("select an existing non-empty pattern".to_owned());
             }

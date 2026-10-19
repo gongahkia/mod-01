@@ -175,3 +175,11 @@ choices remain outstanding.
   PRISM CORRIDOR also independently passes its own 120-frame native package
   check without PATH. This is a checkpoint, not completion of the still-open
   tracker, touch, menus, bundles, library or cross-platform/input/audio QA rows.
+
+- Live native synth preview uses the production eight-voice engine, read-only
+  unsaved asset copies and a disposable child, with clock-paced PCM and actual
+  order/row/tick/voice/peak telemetry. Cancellation/replacement and repaint-rate
+  tests pass; all 36 native tests and warning-free workspace Clippy pass.
+  Song playback, stop controls and wrapped 900×600 controls were visually checked
+  under Xvfb (`live-audio-song.png`, `live-audio-small.png`). This does not claim
+  physical speaker QA or completion of the full tracker grid.

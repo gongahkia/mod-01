@@ -3013,7 +3013,7 @@ impl eframe::App for StudioApp {
                                 )
                             })
                         {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 let music = self
                                     .project
                                     .as_ref()

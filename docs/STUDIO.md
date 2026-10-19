@@ -38,6 +38,18 @@ edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
 raw asset text remains visible. The full tracker enhancements are
 tracked in the acceptance ledger rather than claimed complete here.
 
+Sound/music previews run the production synth in a separate, disposable native
+runtime: LIVE SONG starts the order list; PATTERN FROM CURSOR plays a non-looping
+copy of the selected pattern; AUDITION CELL/PREVIEW PATCH triggers the actual
+patch and eight-voice allocator. Frames are paced at 60 Hz, not per UI repaint.
+Telemetry reports real order/row/tick, voice notes and stereo PCM peaks. Unsaved
+edits are copied into previews, never written to the cartridge or save memory.
+Restart playback to hear later edits; successive auditions can overlap while
+their patch bank is unchanged. STOP AUDIO, leaving Assets, opening another
+project or running the cartridge stops and discards queued preview audio.
+Without an audio device the same preview runs silently. EXPORT WAV is a separate
+offline render and never starts playback.
+
 Saving keeps bounded local recovery revisions. The save manager exports/imports
 checksummed cartridge-bound save containers and retains recovery before
 replacement. Local saves are keyed by validated cartridge identity.

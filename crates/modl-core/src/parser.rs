@@ -259,6 +259,7 @@ impl<'tokens> Parser<'tokens> {
         let name = self.expect_name("record name")?;
         self.expect(&TokenKind::Colon, "record header");
         self.expect_line_break();
+        self.skip_empty_lines();
         if self.consume(&TokenKind::Indent).is_none() {
             self.expected_indented_block();
             return Some(Record {
@@ -311,6 +312,7 @@ impl<'tokens> Parser<'tokens> {
         let name = self.expect_name("enum name")?;
         self.expect(&TokenKind::Colon, "enum header");
         self.expect_line_break();
+        self.skip_empty_lines();
         if self.consume(&TokenKind::Indent).is_none() {
             self.expected_indented_block();
             return Some(Enum {
@@ -459,6 +461,7 @@ impl<'tokens> Parser<'tokens> {
 
     fn parse_block(&mut self) -> (Block, Span) {
         let line_end = self.expect_line_break();
+        self.skip_empty_lines();
         if self.consume(&TokenKind::Indent).is_none() {
             self.expected_indented_block();
             return (Vec::new(), line_end);
@@ -647,6 +650,7 @@ impl<'tokens> Parser<'tokens> {
         let subject = self.parse_expression()?;
         self.expect(&TokenKind::Colon, "match subject");
         self.expect_line_break();
+        self.skip_empty_lines();
         if self.consume(&TokenKind::Indent).is_none() {
             self.expected_indented_block();
             return None;
@@ -1133,6 +1137,59 @@ mod tests {
         ast::{Item, Visibility},
         parse,
     };
+
+    #[test]
+    fn comments_before_the_first_indented_statement_are_valid_in_every_block_form() {
+        let source = SourceFile::new(
+            FileId(0),
+            "commented.modl",
+            r"record Counter:
+  // First field documentation.
+
+  value: Int
+enum Mode:
+  // First variant documentation.
+  Idle
+fn value() -> Int:
+  // Function documentation, before any statement.
+  return 1
+task pulse():
+  // Task documentation.
+  wait 1f
+on draw:
+  // Callback documentation.
+  if true:
+    // Nested block documentation.
+    for index in 0..1:
+      // Loop documentation.
+      clear(index)
+  match Mode.Idle:
+    // Match arm documentation.
+    case Mode.Idle:
+      // Arm body documentation.
+      clear(1)
+",
+        );
+        let output = parse(&source);
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        assert_eq!(output.module.items.len(), 5);
+    }
+
+    #[test]
+    fn comments_alone_do_not_satisfy_a_required_indented_body() {
+        for text in [
+            "on draw:\n  // no statement\n",
+            "on draw:\n  // no statement\non update:\n  clear(0)\n",
+        ] {
+            let output = parse(&SourceFile::new(FileId(0), "empty.modl", text));
+            assert!(
+                output
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "M012004")
+            );
+        }
+    }
 
     #[test]
     fn parses_explicit_public_and_private_declarations() {

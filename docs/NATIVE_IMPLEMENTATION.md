@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Authoring the maintained bundle example exposed a real block-parser gap:
+  leading comments were accepted by the lexer but rejected before a block's
+  first indent. Records, enums, functions/tasks/callbacks, nested loops and match
+  arms now skip comment/blank lines consistently before consuming that indent.
+  Regressions first reproduced the failure and still reject comment-only empty
+  bodies. All 102 core library tests and workspace Clippy pass; the new game
+  checks and formats through the public CLI after this fix.
 - Native display-free verification now accepts bounded current replay input via
   `--input REPLAY`, with ordinary Studio sharing the same ≤8 MiB file reader.
   Unknown/repeated/missing options and inputs beyond the requested 1–36,000 frames

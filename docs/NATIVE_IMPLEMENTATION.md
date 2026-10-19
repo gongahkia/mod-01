@@ -146,3 +146,12 @@ choices remain outstanding.
   tests and 38 focused graphics/hardware tests pass, with lint/types/Clippy.
   Real visual-cart assertions run in release/debug, native/headless and full
   snapshot replay. Final cross-platform packaging/input/audio QA remains open.
+
+- Textured-line API implementation: typed `texture_line` samples Sprite assets
+  with bounded affine coordinates, exact 16-fractional-bit accumulation,
+  inclusive Bresenham coverage, explicit wrap/skip and shared mask/remap/clip.
+  Tests cover all octants, reversed endpoints, fractional/negative inputs,
+  clipping phase, extreme camera coordinates, bounds, work and real MODL/native/
+  headless replay. All 178 runtime tests, lint/types/formatting and workspace
+  Clippy pass; four compiler drawing tests pass. The textured-line acceptance
+  row remains open until a running source-visible pseudo-3D example uses it.

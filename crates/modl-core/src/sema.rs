@@ -350,6 +350,11 @@ impl<'syntax> Analyzer<'syntax> {
     }
 
     fn install_display_builtins(&mut self) {
+        self.install_image_builtins();
+        self.install_mapping_builtins();
+    }
+
+    fn install_image_builtins(&mut self) {
         self.builtin(
             "sprite",
             vec![Type::Asset(AssetKind::Sprite), Type::Int, Type::Int],
@@ -398,6 +403,25 @@ impl<'syntax> Analyzer<'syntax> {
         self.builtin(
             "map",
             vec![Type::Asset(AssetKind::Map), Type::Int, Type::Int],
+            Type::Unit,
+        );
+    }
+
+    fn install_mapping_builtins(&mut self) {
+        self.builtin(
+            "texture_line",
+            vec![
+                Type::Asset(AssetKind::Sprite),
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Num,
+                Type::Num,
+                Type::Num,
+                Type::Num,
+                Type::Bool,
+            ],
             Type::Unit,
         );
         self.builtin(

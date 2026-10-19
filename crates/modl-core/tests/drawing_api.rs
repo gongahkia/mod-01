@@ -41,6 +41,50 @@ fn region_blits_require_a_sprite_integer_rectangles_and_explicit_boolean_flips()
 }
 
 #[test]
+fn texture_lines_require_a_sprite_integer_endpoints_numeric_sampling_and_explicit_wrap() {
+    let mut assets = AssetCatalog::default();
+    assets.insert("image", AssetKind::Sprite);
+    assets.insert("level", AssetKind::Map);
+    for (statement, valid) in [
+        (
+            "texture_line(#image, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            true,
+        ),
+        (
+            "texture_line(#level, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0.5, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0, 0, 8, 4, false, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, 1)",
+            false,
+        ),
+    ] {
+        for mode in [CompileMode::Release, CompileMode::Debug] {
+            let source = SourceFile::new(
+                FileId(0),
+                "texture.modl",
+                format!("on draw:\n  {statement}\n"),
+            );
+            let result = compile(&source, &assets, mode);
+            assert_eq!(
+                result.generated.is_some(),
+                valid,
+                "{statement}: {:?}",
+                result.analysis.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
 fn transparency_and_patterns_are_typed_in_both_compiler_modes() {
     let source = SourceFile::new(
         FileId(0),

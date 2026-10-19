@@ -56,6 +56,28 @@ geometry/types fault with `M019009` at the source call. Visible iteration is
 clipped to the screen, and all sampling products fit exact integer arithmetic.
 Each call consumes one draw command and is forbidden in `on raster`.
 
+`texture_line(asset, x0, y0, x1, y1, u, v, du, dv, repeat)` draws an inclusive
+Bresenham line using a typed `Sprite` texture. Endpoints are `Int`; texture
+coordinates and deltas are `Num` measured in **pixels**, not tiles. Every raster
+sample takes `floor(u), floor(v)` and then advances by `du,dv`, including clipped
+and transparent samples. With `repeat = true`, positive modulo wraps both axes
+to the sprite's actual dimensions. Otherwise out-of-source samples are skipped,
+even if colour zero is opaque. Camera, clip, blit mask and palette remap apply;
+primitive fill patterns do not.
+
+Starts and deltas must be finite and within ±32768. Each is converted once by
+`trunc(value*65536)`; integer accumulation then retains exactly 16 fractional
+bits without repeated floating-point rounding. Negative samples use floor, not
+truncation. At most 4096 raster samples are allowed per call, keeping coordinates
+and the accumulated values within exact integer arithmetic. The sample count is
+`max(abs(x1-x0), abs(y1-y0)) + 1`; device work is `2 + ceil(samples/2)` for the
+complete requested line, regardless of clipping. The work charge happens before
+drawing. Invalid inputs fault with `M019009` at the source span; budget exhaustion
+is `M019001`. Each call consumes one draw command and is forbidden in `on raster`.
+The sampler has no persistent cursor: each call supplies its complete state.
+Perspective projection and per-row/per-column deltas belong to ordinary MODL
+source, not a host scene engine.
+
 The `palt` mask affects sprites, transformed sprites, animation and map tiles.
 It tests the original indexed source colour **before** the drawing palette remap.
 For example, remapping opaque colour 2 to transparent colour 0 still draws it;

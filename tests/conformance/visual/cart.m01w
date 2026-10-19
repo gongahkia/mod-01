@@ -94,6 +94,12 @@ on draw:
   sprite_region(#dot, -1, 0, 2, 1, 60, 8, 4, 1, false, false)
   assert mem_read(104380) == 0, "out of source region is skipped"
   assert mem_read(104382) == 23, "source clipping preserves destination alignment"
+  texture_line(#dot, 70, 8, 76, 8, -0.5, 0.0, 0.25, 0.0, true)
+  assert mem_read(104390) == 23, "texture wrapping samples original sprite"
+  assert mem_read(104396) == 23, "textured line includes endpoint"
+  texture_line(#dot, 70, 9, 76, 9, -1.0, 0.0, 0.5, 0.0, false)
+  assert mem_read(104630) == 0, "non-wrapping texture samples skip outside source"
+  assert mem_read(104632) == 23, "non-wrapping texture enters source"
 """
 
 [[asset]]

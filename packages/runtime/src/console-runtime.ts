@@ -604,6 +604,7 @@ const DRAW_CALLS = new Set([
   'sprite',
   'sprite_xform',
   'sprite_region',
+  'texture_line',
   'animation',
   'map',
   'pal',
@@ -657,6 +658,11 @@ export function consoleWorkCost(name: string, arguments_: readonly unknown[]): n
         Number.MAX_SAFE_INTEGER,
         Math.max(1, Math.ceil((integer(7) * integer(8)) / 4)),
       );
+    }
+    case 'texture_line': {
+      const samples =
+        Math.max(Math.abs(integer(3) - integer(1)), Math.abs(integer(4) - integer(2))) + 1;
+      return Math.min(Number.MAX_SAFE_INTEGER, 2 + Math.ceil(samples / 2));
     }
     case 'map':
       return 128;

@@ -2138,6 +2138,23 @@ var IndexedGraphics = class {
           state,
         );
         return;
+      case 'texture_line':
+        if (command.arguments.length !== 10)
+          throw new TypeError('texture_line expects ten arguments');
+        this.textureLine(
+          readAssetName(command.arguments[0], 'Sprite'),
+          expectInteger$1(command.arguments[1]),
+          expectInteger$1(command.arguments[2]),
+          expectInteger$1(command.arguments[3]),
+          expectInteger$1(command.arguments[4]),
+          textureFixed(command.arguments[5]),
+          textureFixed(command.arguments[6]),
+          textureFixed(command.arguments[7]),
+          textureFixed(command.arguments[8]),
+          expectBoolean(command.arguments[9]),
+          state,
+        );
+        return;
       case 'map': {
         const [handle, x, y] = command.arguments;
         this.drawMap(readAssetName(handle, 'Map'), expectInteger$1(x), expectInteger$1(y), state);
@@ -2385,6 +2402,59 @@ var IndexedGraphics = class {
     if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
       this.plot(x, y, color, state);
   }
+  textureLine(name, startX, startY, endX, endY, u, v, du, dv, repeat, state) {
+    const sprite = this.assets.get(name);
+    if (sprite?.kind !== 'sprite') throw new TypeError(`missing Sprite asset '${name}'`);
+    const dx = Math.abs(endX - startX),
+      dy = -Math.abs(endY - startY);
+    if (Math.max(dx, -dy) >= 4096)
+      throw new RangeError('texture line must contain at most 4096 raster samples');
+    let x = startX - state.cameraX,
+      y = startY - state.cameraY;
+    const targetX = endX - state.cameraX,
+      targetY = endY - state.cameraY;
+    const left = Math.max(0, state.clipX),
+      right = Math.min(HARDWARE.width, state.clipX + state.clipWidth);
+    const top = Math.max(0, state.clipY),
+      bottom = Math.min(HARDWARE.height, state.clipY + state.clipHeight);
+    if (
+      Math.max(x, targetX) < left ||
+      Math.min(x, targetX) >= right ||
+      Math.max(y, targetY) < top ||
+      Math.min(y, targetY) >= bottom
+    )
+      return;
+    const stepX = startX < endX ? 1 : -1,
+      stepY = startY < endY ? 1 : -1;
+    let error = dx + dy;
+    const screenState = {
+      ...state,
+      cameraX: 0,
+      cameraY: 0,
+    };
+    for (;;) {
+      let sx = Math.floor(u / 65536),
+        sy = Math.floor(v / 65536);
+      if (repeat) {
+        sx = wrap(sx, sprite.width);
+        sy = wrap(sy, sprite.height);
+      }
+      if (sx >= 0 && sx < sprite.width && sy >= 0 && sy < sprite.height)
+        this.plotTexture(x, y, sprite.pixels[sy * sprite.width + sx] ?? 0, screenState);
+      if (x === targetX && y === targetY) return;
+      const doubled = error * 2;
+      if (doubled >= dy) {
+        error += dy;
+        x += stepX;
+      }
+      if (doubled <= dx) {
+        error += dx;
+        y += stepY;
+      }
+      u += du;
+      v += dv;
+    }
+  }
   drawMap(name, x, y, state) {
     const map = this.assets.get(name);
     if (map?.kind !== 'map') throw new TypeError(`missing Map asset '${name}'`);
@@ -2590,6 +2660,13 @@ function expectInteger$1(value) {
   if (typeof value !== 'number' || !Number.isSafeInteger(value))
     throw new TypeError('graphics arguments must be safe integers');
   return value;
+}
+function textureFixed(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 32768)
+    throw new RangeError(
+      'texture coordinates and deltas must be finite numbers within -32768..32768',
+    );
+  return Math.trunc(value * 65536);
 }
 function expectBoolean(value) {
   if (typeof value !== 'boolean') throw new TypeError('graphics argument must be Bool');
@@ -5158,6 +5235,7 @@ var DRAW_CALLS = /* @__PURE__ */ new Set([
   'sprite',
   'sprite_xform',
   'sprite_region',
+  'texture_line',
   'animation',
   'map',
   'pal',
@@ -5209,6 +5287,11 @@ function consoleWorkCost(name, arguments_) {
         Number.MAX_SAFE_INTEGER,
         Math.max(1, Math.ceil((integer(7) * integer(8)) / 4)),
       );
+    case 'texture_line': {
+      const samples =
+        Math.max(Math.abs(integer(3) - integer(1)), Math.abs(integer(4) - integer(2))) + 1;
+      return Math.min(Number.MAX_SAFE_INTEGER, 2 + Math.ceil(samples / 2));
+    }
     case 'map':
       return 128;
     case 'print':

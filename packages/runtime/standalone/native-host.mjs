@@ -5316,7 +5316,7 @@ async function handle(command) {
       return {
         type: 'scratch',
         locals,
-        state,
+        state: frame.debug === void 0 ? state : namedValues(frame.debug.inspection.state),
         bootWorkUnits,
         workUnits: frame.workUnits,
         pixels: encoded(frame.output.indexedPixels),

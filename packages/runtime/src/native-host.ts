@@ -191,7 +191,7 @@ async function handle(command: Command): Promise<unknown> {
       return {
         type: 'scratch',
         locals,
-        state,
+        state: frame.debug === undefined ? state : namedValues(frame.debug.inspection.state),
         bootWorkUnits,
         workUnits: frame.workUnits,
         pixels: encoded(frame.output.indexedPixels),

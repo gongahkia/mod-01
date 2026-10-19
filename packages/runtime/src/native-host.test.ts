@@ -19,17 +19,18 @@ const javascript = `export default function createCartridge(api) {
 }`;
 const debugJavascript = `export default function createCartridge(api) {
   let stepped = false;
+  let score = 2;
   return {
     start() {
       if (!stepped) { stepped = true; api.work(12, {start: 0, end: 1}); api.call('pixel', [1, 2, 255], {start: 0, end: 1}); return { done: false, event: { id: 1, sourceSpan: { start: 0, end: 1, source: 'src/main.modl' }, locals: { s1: 3 } } }; }
       return { done: true };
     },
-    update() { return { done: true }; },
+    update() { score = 4; return { done: true }; },
     draw() { return { done: true }; },
     raster() { return { done: true }; },
-    snapshot() { return { state: { s0: 2 }, tasks: [], nextTaskId: 1 }; },
-    restore() {},
-    inspect() { return { state: { s0: 2 }, tasks: [], callStack: [] }; }
+    snapshot() { return { state: { s0: score }, tasks: [], nextTaskId: 1 }; },
+    restore(value) { score = value.state.s0; },
+    inspect() { return { state: { s0: score }, tasks: [], callStack: [] }; }
   };
 }`;
 
@@ -135,7 +136,7 @@ describe('native process host', () => {
       expect(scratch).toMatchObject({
         type: 'scratch',
         locals: { health: 3 },
-        state: { score: 2 },
+        state: { score: 4 },
         bootWorkUnits: 13,
       });
       expect(Buffer.from(scratch.pixels as string, 'base64')[2 * 240 + 1]).toBe(255);

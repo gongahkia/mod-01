@@ -125,9 +125,43 @@ enum DebugTab {
 }
 
 struct SourceBreakpoint {
+    member: String,
     source: String,
     line: usize,
     condition: String,
+}
+
+struct RunningMember {
+    id: String,
+    title: String,
+    entry: String,
+    sources: BTreeMap<String, Vec<u8>>,
+}
+
+impl RunningMember {
+    fn catalog(game: &modl_core::game::PackedGame) -> Result<BTreeMap<String, Self>, String> {
+        game.catalog()
+            .cartridges()
+            .iter()
+            .map(|(alias, cart)| {
+                let view = modl_core::unpack_cartridge_project(&cart.bytes)
+                    .map_err(|error| error.to_string())?;
+                Ok((
+                    alias.clone(),
+                    Self {
+                        id: cart.manifest.id.clone(),
+                        title: cart.manifest.title.clone(),
+                        entry: cart.manifest.entry.clone(),
+                        sources: view
+                            .files
+                            .into_iter()
+                            .filter(|(path, _)| path.ends_with(".modl"))
+                            .collect(),
+                    },
+                ))
+            })
+            .collect()
+    }
 }
 
 struct StudioApp {
@@ -176,6 +210,7 @@ struct StudioApp {
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
+    debug_source: Option<(String, String, usize)>,
     debug_inspection: Value,
     debug_trace: Vec<Value>,
     debug_tab: DebugTab,
@@ -201,8 +236,7 @@ struct StudioApp {
     preview_cancelling: bool,
     preview_name: String,
     loaded: bool,
-    running_members: BTreeMap<String, String>,
-    running_titles: BTreeMap<String, String>,
+    running_members: BTreeMap<String, RunningMember>,
     active_alias: String,
     pending: bool,
     frame: u32,
@@ -291,6 +325,7 @@ impl StudioApp {
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
+            debug_source: None,
             debug_inspection: Value::Null,
             debug_trace: Vec::new(),
             debug_tab: DebugTab::Source,
@@ -317,7 +352,6 @@ impl StudioApp {
             preview_name: String::new(),
             loaded: false,
             running_members: BTreeMap::new(),
-            running_titles: BTreeMap::new(),
             active_alias: String::new(),
             pending: false,
             frame: 0,
@@ -1287,21 +1321,16 @@ impl StudioApp {
                 return;
             }
         };
-        let members = game
-            .catalog()
-            .cartridges()
-            .iter()
-            .map(|(alias, cart)| (alias.clone(), cart.manifest.id.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let titles = game
-            .catalog()
-            .cartridges()
-            .iter()
-            .map(|(alias, cart)| (alias.clone(), cart.manifest.title.clone()))
-            .collect();
+        let members = match RunningMember::catalog(&game) {
+            Ok(members) => members,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
         let saves = members
             .values()
-            .map(|id| read_save(id).map(|save| (id.clone(), save)))
+            .map(|member| read_save(&member.id).map(|save| (member.id.clone(), save)))
             .collect::<Result<BTreeMap<_, _>, _>>();
         let saves = match saves {
             Ok(saves) => saves,
@@ -1325,7 +1354,6 @@ impl StudioApp {
         match self.runtime.send(command) {
             Ok(()) => {
                 self.running_members = members;
-                self.running_titles = titles;
                 self.active_alias = "main".to_owned();
                 self.running = true;
                 self.keyboard_controller.quarantine();
@@ -1337,6 +1365,7 @@ impl StudioApp {
                 self.debugging = debug;
                 self.snapshot = None;
                 self.debug_event.clear();
+                self.debug_source = None;
                 self.debug_inspection = Value::Null;
                 self.debug_trace.clear();
                 self.watch_results.clear();
@@ -1447,16 +1476,27 @@ impl StudioApp {
                         let mut source_event = event["event"].clone();
                         source_event["cartridgeAlias"] = event["cartridgeAlias"].clone();
                         source_event["cartridgeId"] = event["cartridgeId"].clone();
+                        let alias = event["cartridgeAlias"].as_str().unwrap_or("").to_owned();
+                        let path = event["event"]["sourceSpan"]["source"]
+                            .as_str()
+                            .or_else(|| {
+                                self.running_members
+                                    .get(&alias)
+                                    .map(|member| member.entry.as_str())
+                            })
+                            .unwrap_or("")
+                            .to_owned();
+                        let offset =
+                            event["event"]["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
+                        self.debug_source = Some((alias, path, offset));
+                        self.debug_event = serde_json::to_string_pretty(&source_event)
+                            .unwrap_or_else(|_| "debug event".to_owned());
                         self.debug_trace.push(source_event);
                         if self.debug_trace.len() > 4096 {
                             self.debug_trace.remove(0);
                         }
-                        self.debug_event = serde_json::to_string_pretty(&event["event"])
-                            .unwrap_or_else(|_| "debug event".to_owned());
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
-                        if event["cartridgeAlias"] == "main"
-                            && self.hit_breakpoint(&event["event"], &event["conditions"])
-                        {
+                        if self.hit_breakpoint(&event, &event["conditions"]) {
                             self.debug_running = false;
                             self.resume_debug = false;
                             self.status = "BREAKPOINT".to_owned();
@@ -1481,6 +1521,10 @@ impl StudioApp {
                 }
                 Some("restored") => {
                     self.accept_active(&event);
+                    self.debug_source = None;
+                    self.debug_event.clear();
+                    self.debug_inspection = Value::Null;
+                    self.watch_results.clear();
                     self.touch_controller.clear();
                     self.keyboard_controller.quarantine();
                     self.gamepad_controller.quarantine();
@@ -1528,6 +1572,20 @@ impl StudioApp {
                 }
                 Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
+                    if let Some(alias) = event["active"]["cartridgeAlias"].as_str()
+                        && let Some(member) = self.running_members.get(alias)
+                        && event["sourceSpan"].is_object()
+                    {
+                        let path = event["sourceSpan"]["source"]
+                            .as_str()
+                            .unwrap_or(&member.entry)
+                            .to_owned();
+                        self.debug_source = Some((
+                            alias.to_owned(),
+                            path,
+                            event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize,
+                        ));
+                    }
                     self.set_player_paused(false);
                     self.debug_running = false;
                     self.resume_debug = false;
@@ -1546,14 +1604,16 @@ impl StudioApp {
     }
 
     fn hit_breakpoint(&self, event: &Value, conditions: &Value) -> bool {
-        let Some(project) = &self.project else {
+        let alias = event["cartridgeAlias"].as_str().unwrap_or("");
+        let Some(member) = self.running_members.get(alias) else {
             return false;
         };
-        let source = event["sourceSpan"]["source"]
+        let source_event = &event["event"];
+        let source = source_event["sourceSpan"]["source"]
             .as_str()
-            .unwrap_or(&project.manifest.entry);
-        let offset = event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
-        let Some(bytes) = project.files.get(source) else {
+            .unwrap_or(&member.entry);
+        let offset = source_event["sourceSpan"]["start"].as_u64().unwrap_or(0) as usize;
+        let Some(bytes) = member.sources.get(source) else {
             return false;
         };
         let line = 1 + bytes
@@ -1562,7 +1622,8 @@ impl StudioApp {
             .filter(|byte| **byte == b'\n')
             .count();
         self.breakpoints.iter().enumerate().any(|(index, point)| {
-            point.source == source
+            point.member == alias
+                && point.source == source
                 && point.line == line
                 && (point.condition.is_empty()
                     || conditions[index]["value"] == true
@@ -1570,10 +1631,51 @@ impl StudioApp {
         })
     }
 
+    fn reveal_debug_source(&mut self) {
+        let Some((alias, path, offset)) = self.debug_source.clone() else {
+            return;
+        };
+        self.debug_running = false;
+        self.resume_debug = false;
+        let previous_view = self.view;
+        self.select_member(&alias);
+        let Some(project) = self
+            .project
+            .as_mut()
+            .filter(|project| project.member_alias() == alias)
+        else {
+            return;
+        };
+        project.sync_editor();
+        let frozen = self
+            .running_members
+            .get(&alias)
+            .and_then(|member| member.sources.get(&path));
+        if frozen.is_none() || project.files.get(&path) != frozen {
+            self.view = previous_view;
+            self.status =
+                "EDITED SOURCE DIFFERS FROM RUNNING BUILD / READ-ONLY SOURCE SHOWN IN DEBUGGER"
+                    .to_owned();
+            return;
+        }
+        match self.source_editor.reveal(project, &path, offset) {
+            Ok(()) => {
+                self.view = View::Code;
+                self.status = format!("RUNNING SOURCE {alias}/{path}");
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
         let alias = event["cartridgeAlias"].as_str().unwrap_or("");
         let id = event["cartridgeId"].as_str().unwrap_or("");
-        if self.running_members.get(alias).map(String::as_str) != Some(id) {
+        if self
+            .running_members
+            .get(alias)
+            .map(|member| member.id.as_str())
+            != Some(id)
+        {
             self.status = "INVALID RUNTIME FRAME OWNER".to_owned();
             self.running = false;
             self.loaded = false;
@@ -1646,7 +1748,12 @@ impl StudioApp {
         let active = &event["active"];
         let alias = active["cartridgeAlias"].as_str().unwrap_or("");
         let id = active["cartridgeId"].as_str().unwrap_or("");
-        if self.running_members.get(alias).map(String::as_str) == Some(id) {
+        if self
+            .running_members
+            .get(alias)
+            .map(|member| member.id.as_str())
+            == Some(id)
+        {
             if self.active_alias != alias && !self.debugging {
                 self.status = format!("RUNNING {alias} / {id}");
             }
@@ -1657,7 +1764,11 @@ impl StudioApp {
 
     fn runtime_title(&self) -> String {
         self.running
-            .then(|| self.running_titles.get(&self.active_alias))
+            .then(|| {
+                self.running_members
+                    .get(&self.active_alias)
+                    .map(|member| &member.title)
+            })
             .flatten()
             .cloned()
             .or_else(|| {
@@ -1710,24 +1821,38 @@ impl StudioApp {
         egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| match self.debug_tab {
             DebugTab::Source => {
                 let source = self.project.as_ref().map_or("", |project| project.selected_file.as_str()).to_owned();
-                ui.horizontal(|ui| {
-                    ui.label(format!("BREAKPOINT {source}:"));
+                let member = self.project.as_ref().map_or("", |project| project.member_alias()).to_owned();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("BREAKPOINT {member}/{source}:"));
                     ui.add(egui::DragValue::new(&mut self.breakpoint_line).range(1..=100_000));
                     ui.add_sized([150.0, 22.0], egui::TextEdit::singleline(&mut self.breakpoint_condition).hint_text("CONDITION"));
                     if ui.button("ADD").clicked() && !source.is_empty() && self.breakpoints.len() < 32
-                        && !self.breakpoints.iter().any(|point| point.source == source && point.line == self.breakpoint_line) {
-                        self.breakpoints.push(SourceBreakpoint { source: source.clone(), line: self.breakpoint_line, condition: self.breakpoint_condition.trim().chars().take(256).collect() });
+                        && !self.breakpoints.iter().any(|point| point.member == member && point.source == source && point.line == self.breakpoint_line) {
+                        self.breakpoints.push(SourceBreakpoint { member: member.clone(), source: source.clone(), line: self.breakpoint_line, condition: self.breakpoint_condition.trim().chars().take(256).collect() });
                     }
                 });
                 let mut remove = None;
                 for (index, point) in self.breakpoints.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}:{}{}", point.source, point.line,
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{}/{}:{}{}", point.member, point.source, point.line,
                             if point.condition.is_empty() { String::new() } else { format!(" IF {}", point.condition) }));
                         if ui.button("REMOVE").clicked() { remove = Some(index); }
                     });
                 }
                 if let Some(index) = remove { self.breakpoints.remove(index); }
+                if let Some((alias, path, offset)) = self.debug_source.clone() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("RUNNING SOURCE {alias}/{path}"));
+                        if ui.button("OPEN EDITABLE SOURCE").clicked() { self.reveal_debug_source(); }
+                    });
+                    if let Some(bytes) = self.running_members.get(&alias).and_then(|member| member.sources.get(&path)) {
+                        let line = bytes.iter().take(offset).filter(|byte| **byte == b'\n').count();
+                        let text = String::from_utf8_lossy(bytes);
+                        for (index, text) in text.lines().enumerate().skip(line.saturating_sub(2)).take(5) {
+                            ui.label(RichText::new(format!("{} {:05} {text}", if index == line { ">" } else { " " }, index + 1)).monospace().color(if index == line { ui_theme::AMBER } else { ui_theme::CREAM }));
+                        }
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.label("WATCH");
                     ui.add_sized([190.0, 22.0], egui::TextEdit::singleline(&mut self.watch_input).hint_text("EXPRESSION"));
@@ -1856,7 +1981,7 @@ impl StudioApp {
         });
         let command = if kind == "step" {
             json!({"type":kind,"input":input,"watches":self.watches,
-                "conditions":self.breakpoints.iter().map(|point| point.condition.as_str()).collect::<Vec<_>>()})
+                "conditions":self.breakpoints.iter().map(|point| if point.member == self.active_alias { point.condition.as_str() } else { "" }).collect::<Vec<_>>()})
         } else {
             json!({"type":kind,"input":input})
         };

@@ -37,6 +37,15 @@ A condition must return `Bool`; evaluation errors also stop continuation so a
 broken condition cannot silently skip a breakpoint. Breakpoints are session-local
 line positions, not persistent semantic anchors.
 
+Bundled games qualify breakpoints and source events by cartridge alias as well
+as module and line. Identical paths or compiler symbol IDs in different members
+remain independent. Locations use a frozen copy of the launched member's source,
+not an edited workspace's line numbers. The SOURCE tab shows a read-only excerpt
+and OPEN EDITABLE SOURCE selects that member/module and cursor. If the authored
+module has changed since launch, the debugger keeps the draft and the read-only
+running excerpt instead of navigating to a misleading offset. The system menu's
+INSPECT SOURCE stops play and selects the active member, not the last edited one.
+
 ## Inspection and memory
 
 SOURCE shows the latest source event and up to four read-only watch expressions.
@@ -65,6 +74,12 @@ discards any suspended generator and queued audio, pauses continuation and uses
 the runtime's authoritative next-frame cursor. Any later recording entries are
 discarded before continuing that branch. The displayed framebuffer refreshes
 when the next complete frame returns.
+
+Whole-game snapshots include the active alias, transfer parameter, loaded asset
+bank, all committed member saves and input-release ownership. The public replay
+cursor continues across cartridge loads; a member's local VM clock restarts.
+Restoring a boundary before a target boots does not record boot statement steps
+as input frames. Stale source/watch inspection is cleared until a fresh event.
 
 EXPORT → RECORD REPLAY starts a fresh run from the current cartridge/save and
 clears loaded playback. Exactly one input is recorded for each completed frame,

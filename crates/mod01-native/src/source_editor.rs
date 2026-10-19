@@ -55,6 +55,22 @@ enum EditAction {
 }
 
 impl SourceEditor {
+    pub fn reveal(
+        &mut self,
+        project: &mut NativeProject,
+        path: &str,
+        offset: usize,
+    ) -> Result<(), String> {
+        project.select_source(path)?;
+        let mut byte = offset.min(project.editor_text.len());
+        while !project.editor_text.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        let cursor = project.editor_text[..byte].chars().count();
+        self.pending = Some(cursor..cursor);
+        Ok(())
+    }
+
     pub fn dismiss_completion(&mut self) {
         self.show_complete = false;
         self.focus_complete = false;
@@ -1066,6 +1082,35 @@ fn completion_candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debugger_navigation_uses_utf8_byte_spans_and_clamps_to_valid_editor_cursors() {
+        let mut project = NativeProject::from_source(
+            include_str!("../../../templates/blank/cart.m01w").to_owned(),
+            None,
+        )
+        .unwrap();
+        let text = "on draw:\n  print(\"é\", 0, 0, 1)\n";
+        project
+            .files
+            .insert("src/other.modl".to_owned(), text.as_bytes().to_vec());
+        let mut editor = SourceEditor::default();
+        let offset = text.find('é').unwrap();
+        editor
+            .reveal(&mut project, "src/other.modl", offset + 1)
+            .unwrap();
+        assert_eq!(project.selected_file, "src/other.modl");
+        assert_eq!(project.editor_text, text);
+        let expected = text[..offset].chars().count();
+        assert_eq!(editor.pending, Some(expected..expected));
+        editor
+            .reveal(&mut project, "src/other.modl", usize::MAX)
+            .unwrap();
+        let end = text.chars().count();
+        assert_eq!(editor.pending, Some(end..end));
+        assert!(editor.reveal(&mut project, "src/missing.modl", 0).is_err());
+        assert_eq!(project.selected_file, "src/other.modl");
+    }
 
     fn key(key: Key, modifiers: Modifiers) -> egui::Event {
         egui::Event::Key {

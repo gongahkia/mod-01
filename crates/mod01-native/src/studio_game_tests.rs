@@ -159,14 +159,9 @@ fn frame_commit_owner_is_the_admitted_producer_not_the_editor_or_next_active_mem
     let mut app = StudioApp::new_with_devices(None, &context, false);
     app.project = Some(NativeProject::from_source(game_source(), None).unwrap());
     let game = app.project.as_ref().unwrap().game().unwrap();
-    app.running_members = game
-        .catalog()
-        .cartridges()
-        .iter()
-        .map(|(alias, cart)| (alias.clone(), cart.manifest.id.clone()))
-        .collect();
-    let main_id = app.running_members["main"].clone();
-    let arena_id = app.running_members["arena"].clone();
+    app.running_members = RunningMember::catalog(&game).unwrap();
+    let main_id = app.running_members["main"].id.clone();
+    let arena_id = app.running_members["arena"].id.clone();
     let main_path = save_path(&main_id).unwrap();
     let arena_path = save_path(&arena_id).unwrap();
     assert!(!main_path.exists() && !arena_path.exists());
@@ -524,4 +519,97 @@ fn studio_member_switches_isolate_identical_asset_paths_bytes_and_redo_history()
     app.select_member("main");
     assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
     assert_eq!(app.asset_text, "invalid JSON draft");
+}
+
+#[test]
+fn breakpoints_use_frozen_member_source_and_navigation_never_overwrites_unsaved_edits() {
+    let (mut app, context, _) = fixture(true);
+    let frozen =
+        String::from_utf8(app.running_members["arena"].sources["src/main.modl"].clone()).unwrap();
+    let line = frozen
+        .lines()
+        .position(|line| line.contains("assert cart_parameter()"))
+        .unwrap()
+        + 1;
+    app.breakpoints.push(SourceBreakpoint {
+        member: "arena".to_owned(),
+        source: "src/main.modl".to_owned(),
+        line,
+        condition: "arena_ticks == 0".to_owned(),
+    });
+    app.select_member("arena");
+    app.project
+        .as_mut()
+        .unwrap()
+        .editor_text
+        .insert_str(0, "// unsaved line changes after launch\n");
+    app.project.as_mut().unwrap().dirty = true;
+    let edited = app.project.as_ref().unwrap().editor_text.clone();
+    app.debug_running = true;
+    let mut hit = false;
+    for _ in 0..256 {
+        app.send_input(&context, "step");
+        pump(&mut app, &context);
+        if app.active_alias == "main" {
+            assert_ne!(app.status, "BREAKPOINT");
+        }
+        if app.status == "BREAKPOINT" {
+            hit = true;
+            break;
+        }
+    }
+    assert!(hit, "{}", app.status);
+    assert!(!app.debug_running);
+    let (alias, path, offset) = app.debug_source.clone().unwrap();
+    assert_eq!(alias, "arena");
+    assert_eq!(path, "src/main.modl");
+    assert_eq!(
+        1 + frozen
+            .as_bytes()
+            .iter()
+            .take(offset)
+            .filter(|byte| **byte == b'\n')
+            .count(),
+        line
+    );
+    app.view = View::Player;
+    app.reveal_debug_source();
+    assert_eq!(app.project.as_ref().unwrap().editor_text, edited);
+    assert!(app.status.starts_with("EDITED SOURCE DIFFERS"));
+    assert!(matches!(app.view, View::Player));
+    assert_eq!(
+        app.running_members["arena"].sources["src/main.modl"],
+        frozen.as_bytes()
+    );
+    app.project.as_mut().unwrap().editor_text = frozen;
+    app.select_member("main");
+    app.reveal_debug_source();
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
+    assert!(matches!(app.view, View::Code));
+    assert_eq!(app.status, "RUNNING SOURCE arena/src/main.modl");
+    app.stop();
+}
+
+#[test]
+fn system_source_inspection_selects_the_active_member_not_the_last_edited_one() {
+    let (mut app, context, _) = fixture(false);
+    for _ in 0..3 {
+        app.send_input(&context, "frame");
+        pump(&mut app, &context);
+    }
+    assert_eq!(app.active_alias, "arena");
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "main");
+    app.set_player_paused(true);
+    app.system_menu_action(pause_menu::Action::Source);
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
+    assert!(
+        app.project
+            .as_ref()
+            .unwrap()
+            .editor_text
+            .contains("arena_ticks")
+    );
+    assert!(!app.running && !app.player_mode);
+    assert!(matches!(app.view, View::Code));
+    assert_eq!(app.status, "SOURCE INSPECTION / arena / STOPPED");
 }

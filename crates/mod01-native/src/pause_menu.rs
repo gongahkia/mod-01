@@ -206,10 +206,19 @@ impl crate::StudioApp {
             Action::Resume => self.set_player_paused(false),
             Action::Restart => self.run_mode(self.debugging),
             Action::Source => {
+                let alias = self.active_alias.clone();
+                self.select_member(&alias);
+                if self
+                    .project
+                    .as_ref()
+                    .is_none_or(|project| project.member_alias() != alias)
+                {
+                    return;
+                }
                 self.stop();
                 self.player_mode = false;
                 self.view = crate::View::Code;
-                self.status = "SOURCE INSPECTION / STOPPED".to_owned();
+                self.status = format!("SOURCE INSPECTION / {alias} / STOPPED");
             }
             Action::Cartridge(slot) => {
                 if !self.player_paused

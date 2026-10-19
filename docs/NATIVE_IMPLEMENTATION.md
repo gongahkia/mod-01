@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- Native source debugging now qualifies breakpoints/events by alias and original
+  module, using an immutable per-member source snapshot from the admitted launch.
+  Same-path/same-line breakpoints cannot hit a different cart; unsaved line edits
+  do not move running locations. The debugger shows the actual running excerpt
+  and opens the correct editable member/module only when its bytes still match;
+  changed drafts stay intact. System-menu source inspection selects the active
+  member. Restore clears stale source/watch inspection. Three new tests cover
+  conditional child breakpoints after unsaved line shifts, draft-safe navigation,
+  active-member source inspection and UTF-8 byte/cursor boundaries. All 106 native
+  tests and warning-free workspace Clippy pass. Real native debug/source screenshots
+  show the alias-qualified row, running excerpt and navigation control.
 - Studio's game-member picker now provides independent embedded source/manifest/
   asset views while Save, Check and Run retain the complete game. Switching keeps
   unsaved code (including compiler-invalid drafts), exact untouched child source,

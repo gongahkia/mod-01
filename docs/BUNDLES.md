@@ -11,8 +11,10 @@ without separating them into disk projects: switching flushes the visible source
 assets, manifest and per-member file selection; Save and Run always retain the
 whole game and Run starts `main`, whichever member is selected for editing.
 Asset history and source widget identities include the member alias, and invalid
-asset/manifest drafts block switching without discarding text. Source navigation,
-member composition controls, remaining export/analysis integration and cross-host verification are still being implemented; these
+asset/manifest drafts block switching without discarding text. Breakpoints, watches,
+source events and source navigation are member-scoped, using the launched source
+snapshot when authored code changes. Member composition controls, remaining
+export/analysis integration and cross-host verification are still being implemented; these
 workflows are not yet exposed as a complete native feature.
 
 ## Authoring and admission

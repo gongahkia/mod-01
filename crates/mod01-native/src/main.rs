@@ -23,9 +23,11 @@ mod asset_meter;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
+mod gamepad_controller;
 mod keyboard_controller;
 mod launch;
 mod live_audio;
+mod pause_menu;
 mod player;
 mod playground;
 mod project;
@@ -36,6 +38,8 @@ mod source_editor;
 mod sprite;
 #[cfg(test)]
 mod studio_asset_tests;
+#[cfg(test)]
+mod studio_menu_tests;
 #[cfg(test)]
 mod studio_replay_tests;
 mod syntax;
@@ -56,7 +60,7 @@ use audio::AudioOutput;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use directories::ProjectDirs;
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
-use gilrs::{Axis, Button, Gilrs};
+use gilrs::Gilrs;
 use project::NativeProject;
 use runtime::RuntimeBridge;
 use serde_json::{Value, json};
@@ -154,6 +158,11 @@ struct StudioApp {
     player_paused: bool,
     touch_controller: touch_controller::TouchController,
     keyboard_controller: keyboard_controller::KeyboardController,
+    gamepad_controller: gamepad_controller::GamepadController,
+    pause_menu: pause_menu::PauseMenu,
+    pause_navigation: gamepad_controller::Navigation,
+    pending_menu_action: Option<u8>,
+    resume_debug: bool,
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
@@ -249,6 +258,11 @@ impl StudioApp {
             player_paused: false,
             touch_controller: touch_controller::TouchController::default(),
             keyboard_controller: keyboard_controller::KeyboardController::default(),
+            gamepad_controller: gamepad_controller::GamepadController::default(),
+            pause_menu: pause_menu::PauseMenu::default(),
+            pause_navigation: gamepad_controller::Navigation::default(),
+            pending_menu_action: None,
+            resume_debug: false,
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
@@ -1223,6 +1237,10 @@ impl StudioApp {
             Ok(()) => {
                 self.running = true;
                 self.keyboard_controller.quarantine();
+                self.gamepad_controller.quarantine();
+                self.pause_menu = pause_menu::PauseMenu::default();
+                self.pending_menu_action = None;
+                self.resume_debug = false;
                 self.player_paused = false;
                 self.debugging = debug;
                 self.snapshot = None;
@@ -1257,6 +1275,10 @@ impl StudioApp {
 
     fn stop(&mut self) {
         self.keyboard_controller.quarantine();
+        self.gamepad_controller.quarantine();
+        self.pending_menu_action = None;
+        self.resume_debug = false;
+        self.pause_menu = pause_menu::PauseMenu::default();
         self.touch_controller.clear();
         self.live_audio.stop();
         if self.preview_pending && !self.preview_cancelling {
@@ -1277,9 +1299,18 @@ impl StudioApp {
     }
 
     fn set_player_paused(&mut self, paused: bool) {
+        if paused && !self.player_paused {
+            self.resume_debug = self.debug_running;
+            self.debug_running = false;
+            self.pause_menu.reset_selection();
+        } else if !paused && self.player_paused {
+            self.debug_running = self.resume_debug;
+            self.resume_debug = false;
+        }
         self.player_paused = paused;
         self.touch_controller.clear();
         self.keyboard_controller.quarantine();
+        self.gamepad_controller.quarantine();
         if let Some(audio) = &self.audio {
             audio.clear();
         }
@@ -1289,6 +1320,11 @@ impl StudioApp {
     fn process_events(&mut self, context: &egui::Context) {
         while let Some(event) = self.runtime.poll() {
             self.pending = false;
+            if let Some(items) = event.get("menuItems") {
+                if let Err(error) = self.pause_menu.update_items(items) {
+                    self.status = error;
+                }
+            }
             match event["type"].as_str() {
                 Some("loaded") => {
                     self.loaded = true;
@@ -1322,6 +1358,7 @@ impl StudioApp {
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
                         if self.hit_breakpoint(&event["event"], &event["conditions"]) {
                             self.debug_running = false;
+                            self.resume_debug = false;
                             self.status = "BREAKPOINT".to_owned();
                         }
                     }
@@ -1345,6 +1382,9 @@ impl StudioApp {
                 Some("restored") => {
                     self.touch_controller.clear();
                     self.keyboard_controller.quarantine();
+                    self.gamepad_controller.quarantine();
+                    self.pending_menu_action = None;
+                    self.resume_debug = false;
                     self.input_frame = event["frame"].as_u64().unwrap_or(0) as u32;
                     self.frame = self.input_frame.saturating_sub(1);
                     self.frame_input = None;
@@ -1398,9 +1438,6 @@ impl StudioApp {
             }
         }
         self.pending = self.runtime.has_pending();
-        if self.debug_running && self.running && self.loaded && !self.pending {
-            self.step(context);
-        }
     }
 
     fn hit_breakpoint(&self, event: &Value, conditions: &Value) -> bool {
@@ -1429,6 +1466,11 @@ impl StudioApp {
     }
 
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
+        if let Some(items) = event.get("menuItems") {
+            if let Err(error) = self.pause_menu.update_items(items) {
+                self.status = error;
+            }
+        }
         self.frame = event["frame"].as_u64().unwrap_or(0) as u32;
         self.input_frame = self.frame.saturating_add(1);
         self.debug_frame_boundary = true;
@@ -1505,7 +1547,7 @@ impl StudioApp {
     }
 
     fn step(&mut self, context: &egui::Context) {
-        if self.running && self.loaded && !self.pending && self.debugging {
+        if self.running && self.loaded && !self.pending && self.debugging && !self.player_paused {
             self.send_input(context, "step");
         }
     }
@@ -1629,6 +1671,11 @@ impl StudioApp {
             && (self.player_mode || self.view == View::Player)
             && self.replay_playback.is_none();
         self.keyboard_controller.capture(context, enabled);
+        self.gamepad_controller.capture(
+            context,
+            &mut self.gamepads,
+            enabled && !context.text_edit_focused(),
+        );
     }
 
     fn send_input(&mut self, context: &egui::Context, kind: &str) {
@@ -1650,55 +1697,12 @@ impl StudioApp {
         let mut live_input = replay::empty_input();
         live_input["pointer"] = pointer;
         self.keyboard_controller.apply_to(&mut live_input);
-        let controllers = live_input["controllers"]
-            .as_array_mut()
-            .expect("four controller ports");
-        if let Some(gamepads) = self.gamepads.as_mut() {
-            while gamepads.next_event().is_some() {}
-            for (port, (_, gamepad)) in gamepads
-                .gamepads()
-                .filter(|(_, gamepad)| gamepad.is_connected())
-                .take(4)
-                .enumerate()
-            {
-                let states = [
-                    (
-                        "up",
-                        gamepad.is_pressed(Button::DPadUp) || gamepad.value(Axis::LeftStickY) > 0.5,
-                    ),
-                    (
-                        "down",
-                        gamepad.is_pressed(Button::DPadDown)
-                            || gamepad.value(Axis::LeftStickY) < -0.5,
-                    ),
-                    (
-                        "left",
-                        gamepad.is_pressed(Button::DPadLeft)
-                            || gamepad.value(Axis::LeftStickX) < -0.5,
-                    ),
-                    (
-                        "right",
-                        gamepad.is_pressed(Button::DPadRight)
-                            || gamepad.value(Axis::LeftStickX) > 0.5,
-                    ),
-                    ("a", gamepad.is_pressed(Button::South)),
-                    ("b", gamepad.is_pressed(Button::East)),
-                    ("x", gamepad.is_pressed(Button::West)),
-                    ("y", gamepad.is_pressed(Button::North)),
-                    ("l", gamepad.is_pressed(Button::LeftTrigger)),
-                    ("r", gamepad.is_pressed(Button::RightTrigger)),
-                    ("start", gamepad.is_pressed(Button::Start)),
-                    ("menu", gamepad.is_pressed(Button::Select)),
-                ];
-                for (name, pressed) in states {
-                    let before = controllers[port]["buttons"][name]
-                        .as_bool()
-                        .unwrap_or(false);
-                    controllers[port]["buttons"][name] = Value::Bool(before || pressed);
-                }
-            }
-        }
+        self.gamepad_controller.apply_to(&mut live_input);
         self.touch_controller.apply_to(&mut live_input);
+        if let Some(action) = self.pending_menu_action {
+            live_input = replay::empty_input();
+            live_input["menuAction"] = action.into();
+        }
         let input = self.frame_input.clone().unwrap_or_else(|| {
             self.replay_playback.as_ref().map_or_else(
                 || live_input.clone(),
@@ -1722,8 +1726,10 @@ impl StudioApp {
         } else {
             if self.frame_input.is_none() && (kind != "step" || self.debug_booted) {
                 self.frame_input = Some(input);
+                self.pending_menu_action = None;
                 self.touch_controller.consume();
                 self.keyboard_controller.consume();
+                self.gamepad_controller.consume();
             }
             if kind == "step" {
                 self.debug_frame_boundary = false;
@@ -1902,6 +1908,9 @@ impl StudioApp {
             });
             if ui.button("HELP").clicked() {
                 self.show_manual = true;
+            }
+            if self.running && ui.button("MENU").clicked() {
+                self.set_player_paused(!self.player_paused);
             }
             ui.separator();
             if ui
@@ -2937,6 +2946,7 @@ impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
         self.capture_keyboard(&context);
+        self.handle_system_menu_toggle(&context);
         self.process_events(&context);
         self.process_preview(&context);
         if (self.player_mode || self.view != View::Assets) && self.live_audio.active() {
@@ -3413,8 +3423,8 @@ impl eframe::App for StudioApp {
                     );
                 }
             });
-        self.capture_keyboard(&context);
-        self.send_frame(&context);
+        self.system_menu_ui(&context);
+        self.advance_runtime(&context);
         self.cursors.paint(&context);
         if self.running {
             context.request_repaint_after(Duration::from_millis(4));

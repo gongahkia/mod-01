@@ -47,6 +47,9 @@ without modifying your cartridge or saves.
 For a playable textured first-person maze, open `cartridges/prism-corridor`;
 its [software 3D walkthrough](docs/SOFTWARE_3D.md) explains the ordinary MODL
 projection, map, controls and tested completion route.
+`target/debug/mod01-studio --play examples/menu-actions` demonstrates the common
+[system menu and typed cartridge actions](docs/MENU.md): Escape pauses the frame
+counter; actions toggle the grid, update their labels or remove themselves.
 
 ## CLI and game distribution
 

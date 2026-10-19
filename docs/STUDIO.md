@@ -127,8 +127,18 @@ clears the suspended continuation and trims any later recorded inputs. Native
 request tracking waits for all outstanding replies before advancing debug steps.
 
 The standalone game surface is available through `--play PATH` or OPEN GAME VIEW.
-It uses the same execution/input/audio/save devices. PAUSE/Escape suspends frame
-submission; RESTART reboots; SOURCE opens the authored modules/assets in Studio.
+It uses the same execution/input/audio/save devices. Studio and that game surface
+share the native system menu: MENU/PAUSE, Escape, controller Select or touch MENU
+opens it without advancing machine time. Up/down and Z/Enter (controller A/Start)
+select; X/controller B/Escape resumes. Resume/restart/source inspection and the
+cartridge's typed actions use this common path. RESTART preserves debug mode;
+SOURCE stops execution and opens authored modules/assets unchanged in Studio.
+`menu_item` and `on menu(action: Int)` are documented in [MENU.md](MENU.md), with
+the runnable `examples/menu-actions` demonstration. Actions use one neutral input
+frame, are recorded/replayed and cannot be selected during replay or inside a
+partial debug frame. Gamepad taps are latched across response latency and other
+controllers disconnecting do not renumber surviving logical ports. Software
+events/model tests do not claim physical-controller QA.
 [native games](NATIVE_GAMES.md) documents package layout and bridge verification.
 
 TOUCH enables an optional native port-one D-pad, A/B/X/Y, L/R and Start pad in

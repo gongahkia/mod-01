@@ -22,6 +22,12 @@ frame input. Cartridge time, frame/update counters, raster scanout and PCM outpu
 do not advance while no runtime step is submitted. Partial-frame graphics and
 audio remain runtime-local until a complete frame is returned.
 
+The common [system menu](MENU.md) stops both normal frames and debug continuation.
+Cartridge actions can be queued only at completed debug boundaries, not during a
+suspended handler. Selecting an action preserves whether the debugger was already
+continuing; otherwise STEP/CONTINUE executes it. A breakpoint reached by an
+in-flight step while the menu opens still requires explicit continuation.
+
 SOURCE accepts up to 32 original-module/line breakpoints, optionally with a
 condition. A condition is evaluated at the pre-statement boundary by a restricted,
 non-mutating expression interpreter, never JavaScript `eval`. Literals, names,

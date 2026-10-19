@@ -1,10 +1,10 @@
 //! Standalone game surface; execution/input/audio/save devices are the Studio devices.
 use crate::{
-    SCREEN_HEIGHT, SCREEN_WIDTH, StudioApp, View, native_host_path, project::NativeProject, replay,
+    SCREEN_HEIGHT, SCREEN_WIDTH, StudioApp, native_host_path, project::NativeProject, replay,
     runtime::RuntimeBridge, ui_theme,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use eframe::egui::{self, Key};
+use eframe::egui;
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -15,9 +15,6 @@ use std::{
 impl StudioApp {
     pub fn player_ui(&mut self, root: &mut egui::Ui) {
         let context = root.ctx().clone();
-        if context.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
-            self.set_player_paused(!self.player_paused);
-        }
         egui::Panel::top("game-controls")
             .frame(ui_theme::case_frame())
             .show(root, |ui| {
@@ -38,13 +35,10 @@ impl StudioApp {
                         self.set_player_paused(!self.player_paused);
                     }
                     if ui.button("RESTART").clicked() {
-                        self.player_paused = false;
-                        self.run();
+                        self.system_menu_action(crate::pause_menu::Action::Restart);
                     }
                     if ui.button("SOURCE").clicked() {
-                        self.stop();
-                        self.player_mode = false;
-                        self.view = View::Code;
+                        self.system_menu_action(crate::pause_menu::Action::Source);
                     }
                     let mut touch = self.touch_controller.enabled();
                     if ui.checkbox(&mut touch, "TOUCH").changed() {
@@ -91,8 +85,8 @@ impl StudioApp {
                     ui.label(&self.status);
                 }
             });
-        self.capture_keyboard(&context);
-        self.send_frame(&context);
+        self.system_menu_ui(&context);
+        self.advance_runtime(&context);
         self.cursors.paint(&context);
         context.request_repaint_after(Duration::from_millis(4));
     }

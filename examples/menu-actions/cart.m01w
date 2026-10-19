@@ -1,0 +1,56 @@
+format = 2
+asset = []
+file = []
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "menu-actions"
+title = "PAUSE ACTIONS DEMO"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+state ticks: Int = 0
+state grid: Bool = true
+
+on start:
+  menu_item(1, "GRID: ON")
+  menu_item(2, "RESET COUNTER")
+  menu_item(5, "REMOVE THIS ACTION")
+
+on menu(action: Int):
+  if action == 1:
+    grid = not grid
+    if grid:
+      menu_item(1, "GRID: ON")
+    else:
+      menu_item(1, "GRID: OFF")
+  if action == 2:
+    ticks = 0
+  if action == 5:
+    menu_item(5, "")
+
+on update:
+  ticks += 1
+
+on draw:
+  clear(1)
+  if grid:
+    for x in 0..16:
+      line(x * 16, 0, x * 16, 143, 2)
+    for y in 0..10:
+      line(0, y * 16, 239, y * 16, 2)
+  circle_fill(10 + ticks % 220, 72, 8, 23)
+  print("TYPED PAUSE ACTIONS", 12, 12, 7)
+  print("FRAME " + format_int(ticks, 10, 5), 12, 28, 6)
+  print("ESC: SYSTEM MENU", 12, 116, 7)
+  print("NO CLOCK TICKS WHILE PAUSED", 12, 128, 6)
+"""

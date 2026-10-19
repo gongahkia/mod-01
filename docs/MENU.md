@@ -54,8 +54,34 @@ inputs. A debug build steps the handler's real source statements and freezes tha
 frame's chosen action across pauses. Restoring a completed snapshot restores
 registrations, inputs and counters and discards unfinished handler continuations.
 
-The native common menu UI is a separate implementation slice in the acceptance
-ledger; the core API alone does not mark that requirement complete.
+## Native controls and example
+
+Studio and standalone play use the same system menu. Open it with Escape,
+controller Select, the MENU/PAUSE control or the optional touch pad's MENU button.
+Up/down chooses an entry; Z/Enter or controller A/Start activates; X/controller B
+or Escape resumes. Mouse/touch can select rows directly. The opening gesture
+cannot also activate an entry. Resume, restart and source inspection are built-in
+host actions; source inspection stops execution without changing authored files.
+
+Cartridge actions wait for an outstanding runtime reply and are unavailable while
+source-stepped inside an unfinished debug frame or during loaded replay playback.
+After choosing one at a debug boundary, an already-continuing debugger resumes;
+an explicitly stopped debugger keeps the action queued for STEP/CONTINUE. Pause
+does not resume a breakpoint encountered by an already-in-flight source step.
+Keyboard/gamepad/touch ownership is cleared across interruption; selection presses
+cannot become game buttons or pointer clicks. Gamepads retain logical port slots
+across other controllers disconnecting, and short taps are event-latched rather
+than sampled only when a runtime reply arrives.
+
+Try the source-visible demo:
+
+```sh
+target/debug/mod01-studio --play examples/menu-actions
+```
+
+The moving dot/frame counter freezes while paused. Toggle the grid and reopen
+the menu to see its updated label; reset the counter or remove the fifth slot.
+INSPECT SOURCE exposes its actual MODL registration/handler in native Studio.
 
 This is MODL's typed design, not Lua callback compatibility. PICO-8's
 [official custom-menu API](https://www.lexaloffle.com/dl/docs/pico-8_manual.html)

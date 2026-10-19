@@ -30,7 +30,7 @@ fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
     (app, context, inputs)
 }
 
-fn pump(app: &mut StudioApp, context: &egui::Context) {
+pub(super) fn pump(app: &mut StudioApp, context: &egui::Context) {
     let deadline = Instant::now() + Duration::from_secs(7);
     while app.pending {
         app.process_events(context);
@@ -43,7 +43,7 @@ fn pump(app: &mut StudioApp, context: &egui::Context) {
         .drop_without_applying_deltas();
 }
 
-fn advance_debug_to(app: &mut StudioApp, context: &egui::Context, frame: u32) {
+pub(super) fn advance_debug_to(app: &mut StudioApp, context: &egui::Context, frame: u32) {
     let mut steps = 0;
     while app.input_frame < frame {
         app.send_input(context, "step");

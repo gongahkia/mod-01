@@ -29,7 +29,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [x]      |
-| Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [ ]      |
+| Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [x]      |
 | Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
 | Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [ ]      |
 | Examples and games            | Documented, playable and tested 2D and software-rendered 3D games demonstrate the added APIs using public facilities.                                                                                       | [x]      |
@@ -319,3 +319,25 @@ choices remain outstanding.
   ownership and exact recorded input. All 74 native tests, native Clippy and
   builds pass. Native Xvfb QA verified a 12 ms Z tap starts PRISM CORRIDOR;
   before/after screenshots were inspected under `output/native-qa-8iPAwp/`.
+
+- Common native menu UI now closes its acceptance row: Studio and standalone
+  play share resume/restart/source and five typed cartridge-action slots,
+  keyboard/controller/pointer navigation, neutral recorded activation frames,
+  dynamic labels/removal and pending/replay/partial-debug guards. Native source
+  continuation is scheduled after UI input handling and remains stopped while
+  paused, including an already-in-flight breakpoint. Four-port gamepad events
+  latch short taps, keep surviving port identities on disconnect and reserve
+  physical Select for the host menu. Seven new model/widget/real Studio tests
+  cover those cases, packed-source execution, exact action replay, zero paused
+  frame submissions and unchanged source inspection. All 81 native tests and
+  native Clippy pass. `examples/menu-actions` is a source-visible running demo.
+  Native Xvfb screenshots were inspected for both game and Studio menus,
+  GRID: ON/OFF, removed actions, source inspection and 900×600 layout:
+  `system-menu-player.png`, `system-menu-minimum.png`,
+  `system-menu-removed-action.png`, `system-menu-source-inspection.png` and
+  `system-menu-studio-final.png` under `output/native-qa-8iPAwp/`. Real physical
+  controller/touch/speaker and Windows/macOS QA remain unclaimed.
+  The complete repository gate also passes: formatting/lint/types, 230 runtime,
+  81 native, 95 core and 22 CLI tests, all-feature workspace Clippy/builds,
+  all nine reproducible raw/PNG pairs and the 120-frame bundled Linux player
+  verification without PATH. No further golden changes were required.

@@ -51,6 +51,15 @@ choices remain outstanding.
 
 ## Progress
 
+- A replayable input-owner barrier is implemented for scheduler integration:
+  after a cartridge load, held buttons on all four ports and pointer presses stay
+  blocked until release; unrelated fresh controls, hover and explicit menu events
+  remain available. Four tests cover all ports, release/repress, defensive snapshots
+  and malformed frames. Data reloads will retain this owner instead of resetting it.
+- The typed request/snapshot checkpoint passes the full gate: 240 runtime tests,
+  113 core unit/integration tests, 95 native tests, 22 CLI integrations, all format/
+  lint/type/Clippy/build gates, nine reproducible raw/PNG pairs and 120 Linux
+  packaged frames without PATH. Subsequent input-owner tests pass separately.
 - Typed `load_cart`, `cart_parameter` and `reload_assets` now reach the production
   console's deferred request service; both compiler modes enforce their signatures
   and reject raster calls. Console snapshots are current revision 7 (machine 3),

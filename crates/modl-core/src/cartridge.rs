@@ -1588,6 +1588,22 @@ fn normalized_source(bytes: &[u8], path: &str) -> Result<String, CartridgeError>
     Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
+/// A portable filename stem, not cartridge/save identity. The `cart-` namespace
+/// avoids device basenames; dots become underscores so even bare executable
+/// names have no trailing dots. IDs cannot contain underscores, so this is injective.
+///
+/// # Errors
+/// Rejects any value outside the current cartridge-ID grammar before path joining.
+pub fn cartridge_file_stem(id: &str) -> Result<String, CartridgeError> {
+    if !valid_cartridge_id(id) {
+        return Err(cartridge_error(
+            "M014006",
+            "invalid cartridge id for a filesystem name".to_owned(),
+        ));
+    }
+    Ok(format!("cart-{}", id.replace('.', "_")))
+}
+
 fn valid_cartridge_id(value: &str) -> bool {
     (3..=64).contains(&value.len())
         && value.is_ascii()

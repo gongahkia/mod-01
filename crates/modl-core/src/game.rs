@@ -74,6 +74,15 @@ impl PackedGame {
     pub fn identity(&self) -> &str {
         &self.identity
     }
+    /// Main owns the portable distribution filename, not the selected editor member.
+    ///
+    /// # Panics
+    /// Only if a private constructor violates the admitted cartridge-ID invariant.
+    #[must_use]
+    pub fn file_stem(&self) -> String {
+        crate::cartridge::cartridge_file_stem(&self.entry().manifest.id)
+            .expect("admitted game has a valid main cartridge id")
+    }
     #[must_use]
     pub fn is_bundle(&self) -> bool {
         self.catalog.cartridges().len() > 1

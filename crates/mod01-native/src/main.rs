@@ -1048,7 +1048,7 @@ impl StudioApp {
         match project.game() {
             Ok(game) => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(format!("{}.m01c", game.entry().manifest.id))
+                    .set_file_name(format!("{}.m01c", game.file_stem()))
                     .add_filter("MOD-01 cartridge", &["m01c"])
                     .save_file()
                 {
@@ -1115,7 +1115,7 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let (id, png) = match project.cartridge_png() {
+        let (stem, png) = match project.cartridge_png() {
             Ok(png) => png,
             Err(error) => {
                 self.status = error;
@@ -1123,7 +1123,7 @@ impl StudioApp {
             }
         };
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(format!("{id}.m01c.png"))
+            .set_file_name(format!("{stem}.m01c.png"))
             .save_file()
         {
             self.status = match fs::write(path, png) {

@@ -182,8 +182,9 @@ pub fn export_native_game(
     let id = &cart.manifest.id;
     // Keep authored IDs out of the package's reserved file namespace (node,
     // game.m01c, metadata, notices) and Windows device basenames such as CON.
+    let stem = game.file_stem();
     let executable_name = format!(
-        "cart-{id}{}",
+        "{stem}{}",
         if tools.platform == NativePlatform::Windows {
             ".exe"
         } else {
@@ -191,7 +192,7 @@ pub fn export_native_game(
         }
     );
     let binaries = if tools.platform == NativePlatform::Macos {
-        output.join(format!("{id}.app/Contents/MacOS"))
+        output.join(format!("{stem}.app/Contents/MacOS"))
     } else {
         output.to_path_buf()
     };
@@ -220,7 +221,7 @@ pub fn export_native_game(
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;");
-        fs::write(output.join(format!("{id}.app/Contents/Info.plist")), format!(
+        fs::write(output.join(format!("{stem}.app/Contents/Info.plist")), format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>dev.mod01.game.{id}</string><key>CFBundleName</key><string>{title}</string><key>CFBundleExecutable</key><string>{executable_name}</string><key>CFBundlePackageType</key><string>APPL</string><key>LSMinimumSystemVersion</key><string>12.0</string></dict></plist>\n"
         )).map_err(export_error)?;
     }
@@ -451,9 +452,10 @@ mod tests {
             assert!(readme.contains(game.identity()));
             if platform == NativePlatform::Macos {
                 let plist =
-                    fs::read_to_string(output.join("blank-cart.app/Contents/Info.plist")).unwrap();
+                    fs::read_to_string(output.join("cart-blank-cart.app/Contents/Info.plist"))
+                        .unwrap();
                 assert!(plist.contains("<string>BLANK CART</string>"));
-                assert!(executable.starts_with(output.join("blank-cart.app/Contents/MacOS")));
+                assert!(executable.starts_with(output.join("cart-blank-cart.app/Contents/MacOS")));
             }
             assert!(export_native_game(&output, game.bytes(), &tools).is_err());
             assert_eq!(fs::read(binaries.join("game.m01c")).unwrap(), game.bytes());
@@ -575,7 +577,8 @@ mod tests {
                     "filesystem naming never changes save identity"
                 );
                 let expected = format!(
-                    "cart-{id}{}",
+                    "cart-{}{}",
+                    id.replace('.', "_"),
                     if platform == NativePlatform::Windows {
                         ".exe"
                     } else {

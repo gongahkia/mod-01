@@ -75,10 +75,10 @@ fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is
     let game = project.game().unwrap();
     let child_id = project.manifest.id.clone();
     let executable = project.export_native(&directory, &tools).unwrap();
-    let output = directory.join(format!("{main_id}-native"));
+    let output = directory.join(format!("cart-{main_id}-native"));
     assert!(executable.starts_with(&output));
     assert_eq!(fs::read(output.join("game.m01c")).unwrap(), game.bytes());
-    assert!(!directory.join(format!("{child_id}-native")).exists());
+    assert!(!directory.join(format!("cart-{child_id}-native")).exists());
     let metadata: Value =
         serde_json::from_slice(&fs::read(output.join("mod01-game.json")).unwrap()).unwrap();
     assert_eq!(metadata["cartridgeId"], main_id);
@@ -857,8 +857,8 @@ fn native_png_export_uses_main_identity_and_large_png_games_boot_and_transition_
     let game = project.game().unwrap();
     assert!(game.bytes().len() > 1024 * 1024);
     project.select_member("arena").unwrap();
-    let (id, png) = project.cartridge_png().unwrap();
-    assert_eq!(id, game.entry().manifest.id);
+    let (stem, png) = project.cartridge_png().unwrap();
+    assert_eq!(stem, game.file_stem());
     assert_eq!(
         png,
         modl_core::cartridge_png::encode_game_png(&game).unwrap()

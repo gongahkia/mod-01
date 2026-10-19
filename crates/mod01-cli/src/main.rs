@@ -250,8 +250,7 @@ fn export_native_directory(arguments: &NativeExportArguments) -> ExitCode {
             };
         }
         let output = arguments.output.clone().unwrap_or_else(|| {
-            project_output_directory(&arguments.path)
-                .join(format!("{}-native", game.entry().manifest.id))
+            project_output_directory(&arguments.path).join(format!("{}-native", game.file_stem()))
         });
         modl_core::export_native_game(&output, game.bytes(), &tools)
             .map_err(|error| error.to_string())
@@ -411,7 +410,7 @@ fn export_png_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, (
         eprintln!("{}: {error}", path.display());
     })?;
     let output = output.map_or_else(
-        || project_output_directory(path).join(format!("{}.m01c.png", project.manifest.id)),
+        || project_output_directory(path).join(format!("{}.m01c.png", packed.file_stem())),
         Path::to_path_buf,
     );
     if let Some(parent) = output.parent() {
@@ -1127,7 +1126,7 @@ fn pack_directory(path: &Path, output: Option<&Path>) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let output = output.map_or_else(
-        || project_output_directory(path).join(format!("{}.m01c", project.manifest.id)),
+        || project_output_directory(path).join(format!("{}.m01c", packed.file_stem())),
         Path::to_path_buf,
     );
     if let Some(parent) = output.parent()

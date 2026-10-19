@@ -389,10 +389,11 @@ impl NativeProject {
         pack_game_workcart(&source).map_err(|error| error.to_string())
     }
 
+    /// Returns main's portable filename stem together with the whole-game PNG.
     pub fn cartridge_png(&self) -> Result<(String, Vec<u8>), String> {
         let game = self.game()?;
         let png = modl_core::cartridge_png::encode_game_png(&game)?;
-        Ok((game.entry().manifest.id.clone(), png))
+        Ok((game.file_stem(), png))
     }
 
     pub fn export_native(
@@ -401,7 +402,7 @@ impl NativeProject {
         tools: &modl_core::NativeToolchain,
     ) -> Result<PathBuf, String> {
         let game = self.game()?;
-        let output = parent.join(format!("{}-native", game.entry().manifest.id));
+        let output = parent.join(format!("{}-native", game.file_stem()));
         modl_core::export_native_game(&output, game.bytes(), tools)
             .map_err(|error| error.to_string())
     }

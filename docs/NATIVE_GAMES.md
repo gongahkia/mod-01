@@ -43,6 +43,11 @@ This namespace also keeps the executable out of Windows's
 [reserved device basenames](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
 which remain reserved even with extensions. The cartridge's actual ID, save
 identity and title do not change with its executable filename.
+Dots in IDs are encoded as underscores in filesystem stems, making trailing-dot
+IDs portable too; IDs cannot contain underscores, so this mapping is injective.
+The default output folder is `dist/cart-ID-native` (or Studio's chosen parent),
+and macOS's app directory is `cart-ID.app`. Packed/PNG default names use the same
+stem. These are filename rules, not a cartridge-format change or ID migration.
 
 Source workcarts, raw `.m01c` and cartridge PNG inputs all preserve the **complete
 game**, including every embedded dependency and its exact authored source. Core

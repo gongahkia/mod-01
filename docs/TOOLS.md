@@ -36,6 +36,13 @@ leave the last successful cartridge intact. `watch --once` packs once and exits.
 Generated output and neighbouring files are not watched, including a custom
 output inside the project directory. The default output remains in `dist/`.
 
+Default distribution names use main's shared portable stem: `cart-ID.m01c`,
+`cart-ID.m01c.png` and `cart-ID-native`. Dots in the ID become underscores only
+in this filename stem, avoiding reserved basenames and trailing-dot issues on
+desktop filesystems. IDs themselves cannot contain underscores, so distinct IDs
+remain distinct filenames. Explicit `--output` paths are respected. Source bytes,
+cartridge IDs and save ownership are unaffected.
+
 `export png` contains the complete canonical cartridge in a validated PNG chunk.
 `info` accepts source/raw/PNG games and emits the entry's packed metadata plus
 the current revision-2 `analysis` JSON. `shipping` measures the complete canonical

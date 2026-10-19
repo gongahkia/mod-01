@@ -557,6 +557,84 @@ fn large_whole_game_png_exports_current_bytes_and_replays_identically_with_trans
 }
 
 #[test]
+fn default_distribution_names_are_portable_without_changing_cartridge_identity_or_bytes() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-cli-portable-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let tool = directory.join("tool");
+    let host = directory.join("native-host.mjs");
+    let license = directory.join("Node-LICENSE");
+    let mut header = [0_u8; 128];
+    header[..6].copy_from_slice(b"\x7fELF\x02\x01");
+    header[18] = 62;
+    fs::write(&tool, header).unwrap();
+    fs::write(&host, "process.stdin; // fixture, never executed").unwrap();
+    fs::write(&license, "Node license fixture").unwrap();
+    for (index, id) in ["con", "con.foo", "aux", "com1", "node", "trailing."]
+        .into_iter()
+        .enumerate()
+    {
+        let case = directory.join(format!("case-{index}"));
+        fs::create_dir(&case).unwrap();
+        let path = case.join("cart.m01w");
+        let mut project =
+            modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        id.clone_into(&mut project.manifest.id);
+        let source =
+            modl_core::encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+        fs::write(&path, &source).unwrap();
+        let game = modl_core::game::pack_game_workcart(&source).unwrap();
+        for command in ["pack", "png", "native"] {
+            let mut call = binary();
+            if command == "pack" {
+                call.arg("pack");
+            } else {
+                call.args(["export", command]);
+            }
+            call.arg(&path).env("PATH", "");
+            if command == "native" {
+                call.arg("--player")
+                    .arg(&tool)
+                    .arg("--node")
+                    .arg(&tool)
+                    .arg("--host")
+                    .arg(&host)
+                    .arg("--node-license")
+                    .arg(&license)
+                    .args(["--platform", "linux"]);
+            }
+            let output = call.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{id} / {command}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let dist = case.join("dist");
+        let stem = format!("cart-{}", id.replace('.', "_"));
+        assert_eq!(
+            fs::read(dist.join(format!("{stem}.m01c"))).unwrap(),
+            game.bytes()
+        );
+        let png = fs::read(dist.join(format!("{stem}.m01c.png"))).unwrap();
+        assert_eq!(
+            modl_core::decode_cartridge_png(&png).unwrap().cartridge,
+            game.bytes()
+        );
+        let native = dist.join(format!("{stem}-native"));
+        let metadata: Value =
+            serde_json::from_slice(&fs::read(native.join("mod01-game.json")).unwrap()).unwrap();
+        assert_eq!(metadata["cartridgeId"], id);
+        assert_eq!(fs::read(native.join("game.m01c")).unwrap(), game.bytes());
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn native_export_accepts_identical_source_raw_and_png_games_without_running_node() {
     let directory = std::env::temp_dir().join(format!(
         "mod01-cli-native-game-{}-{}",

@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Core now provides a checked, injective portable cartridge filename stem:
+  `cart-ID`, with dots encoded as underscores (not legal in cartridge IDs).
+  Invalid IDs are rejected before path joining. CLI/Studio packed/PNG defaults,
+  native output folders, executable and macOS app names all use main's same stem.
+  Root IDs, title, exact packed bytes and per-member save ownership do not change.
+  Tests cover maximum-length/device/dotted/trailing-dot IDs, rejected traversal/
+  non-current IDs, six real CLI default export paths without Node, shared package
+  layouts and child-selected Studio export. These targeted core/CLI/native tests
+  and all-feature workspace Clippy pass. Save storage/recovery names, asset
+  export defaults and the final cross-host audit remain open.
 - Native player executables now use a separate `cart-ID[.exe]` file namespace.
   A regression first reproduced a valid `node` ID overwriting the exported
   player with bundled Node. The test checks distinct player/Node bytes, canonical

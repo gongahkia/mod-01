@@ -55,6 +55,10 @@ enum EditAction {
 }
 
 impl SourceEditor {
+    pub fn dismiss_completion(&mut self) {
+        self.show_complete = false;
+        self.focus_complete = false;
+    }
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -71,11 +75,20 @@ impl SourceEditor {
             self.cursor = range.start.0..range.end.0;
         }
         let focused = context.memory(|memory| memory.has_focus(id));
+        let owns_keyboard = ui.is_enabled()
+            && context.memory(|memory| {
+                memory.focused().is_none_or(|focused| {
+                    focused == id || focused == find_query_id() || focused == replace_query_id()
+                })
+            });
         let mut edit = None;
         let mut next_match = None;
         let mut definition = false;
         let mut back = false;
         context.input_mut(|input| {
+            if !owns_keyboard {
+                return;
+            }
             if self.show_search
                 && !self.show_complete
                 && input.consume_key(Modifiers::NONE, Key::Escape)
@@ -342,7 +355,11 @@ impl SourceEditor {
         let mut replace_all = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("FIND");
-            let response = ui.add(egui::TextEdit::singleline(&mut self.query).desired_width(160.0));
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .id(find_query_id())
+                    .desired_width(160.0),
+            );
             if self.focus_search {
                 response.request_focus();
                 response.scroll_to_me(Some(egui::Align::Center));
@@ -377,8 +394,11 @@ impl SourceEditor {
         if self.show_replace {
             ui.horizontal_wrapped(|ui| {
                 ui.label("WITH");
-                let response =
-                    ui.add(egui::TextEdit::singleline(&mut self.replacement).desired_width(160.0));
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.replacement)
+                        .id(replace_query_id())
+                        .desired_width(160.0),
+                );
                 if response.gained_focus() {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }
@@ -626,7 +646,12 @@ impl SourceEditor {
         if !self.show_complete {
             return;
         }
-        if context.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape)) {
+        let completion_id = egui::Id::unique("native-source-completion-filter");
+        let owns_keys = context.memory(|memory| {
+            memory.has_focus(completion_id)
+                || self.focus_complete && memory.has_focus(editor_id(project))
+        });
+        if owns_keys && context.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape)) {
             self.show_complete = false;
             self.pending = Some(self.cursor.clone());
             return;
@@ -652,6 +677,9 @@ impl SourceEditor {
                     .completion_index
                     .min(candidates.len().saturating_sub(1));
                 context.input_mut(|input| {
+                    if !owns_keys {
+                        return;
+                    }
                     if input.consume_key(Modifiers::NONE, Key::ArrowDown) {
                         self.completion_index =
                             (self.completion_index + 1).min(candidates.len().saturating_sub(1));
@@ -665,7 +693,8 @@ impl SourceEditor {
                             .map(|item| item.0.clone());
                     }
                 });
-                let response = ui.text_edit_singleline(&mut self.completion_filter);
+                let response = ui
+                    .add(egui::TextEdit::singleline(&mut self.completion_filter).id(completion_id));
                 if self.focus_complete {
                     response.request_focus();
                     self.focus_complete = false;
@@ -761,6 +790,12 @@ fn editor_id(project: &NativeProject) -> egui::Id {
         &project.manifest.id,
         &project.selected_file,
     ))
+}
+fn find_query_id() -> egui::Id {
+    egui::Id::unique("native-source-find-query")
+}
+fn replace_query_id() -> egui::Id {
+    egui::Id::unique("native-source-replace-query")
 }
 fn cursor_range(range: Range<usize>) -> CCursorRange {
     CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end))
@@ -1230,6 +1265,49 @@ mod tests {
                 },
             )
             .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn another_tool_window_owns_its_keyboard_without_editing_the_cartridge() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../templates/blank/cart.m01w");
+        let mut project = NativeProject::open(&path).unwrap();
+        let original = project.editor_text.clone();
+        let context = egui::Context::default();
+        let mut editor = SourceEditor {
+            show_complete: true,
+            ..Default::default()
+        };
+        let mut foreign = String::new();
+        let id = egui::Id::unique("other-native-tool-input");
+        for events in [
+            vec![],
+            vec![
+                key(Key::F, Modifiers::CTRL | Modifiers::COMMAND),
+                key(Key::Enter, Modifiers::NONE),
+            ],
+        ] {
+            context.memory_mut(|memory| memory.request_focus(id));
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut foreign).id(id));
+                        editor.show(ui, &mut project, &mut ModlHighlighter::default());
+                    },
+                )
+                .drop_without_applying_deltas();
+        }
+        assert!(!editor.show_search);
+        assert_eq!(project.editor_text, original);
+        assert!(editor.show_complete);
     }
     #[test]
     fn find_replace_respects_words_case_unicode_and_replacement_bounds() {

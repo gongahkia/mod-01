@@ -92,9 +92,11 @@ source and 16 MiB per member. This does not enlarge any member's machine capacit
 Game identity includes the entire shipping artifact and exact enclosing source;
 catalog identity covers sorted aliases and exact logical cartridge bytes.
 
-These are implemented core APIs; CLI/Studio/runtime bundle integration remains
-in progress. Single-cartridge APIs explicitly refuse bundled source instead of
-silently dropping dependencies. See [bundle implementation](BUNDLES.md).
+CLI, native Studio/player, PNG and native desktop export use these whole-game
+APIs. Single-cartridge APIs explicitly refuse bundled source instead of silently
+dropping dependencies. The [bundle contract](BUNDLES.md) documents the shared
+scheduler, member-scoped editing/debugging and remaining final verification;
+[Relay Station](RELAY_STATION.md) is a maintained playable composition.
 
 ## Cartridge PNG
 

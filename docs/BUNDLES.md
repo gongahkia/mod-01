@@ -111,7 +111,7 @@ admitted game scheduler:
 
 ```modl
 load_cart("arena", "lives=2")
-let parameter: Text = cart_parameter()
+let parameter = cart_parameter()
 reload_assets("bank")
 ```
 
@@ -141,6 +141,9 @@ not run start again. These behaviours run through actual release/debug MODL
 compiler output in `cartridge-control-conformance.test.ts`.
 
 ## Frame, input and save ownership
+
+[Relay Station](RELAY_STATION.md) is the maintained playable three-member game
+covering these operations, with a source-readable complete replay route.
 
 `GameRuntime` owns one admitted catalog and one monotonically increasing display
 frame/input timeline. Results identify the cartridge alias, persistent ID and

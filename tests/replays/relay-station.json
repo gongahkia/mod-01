@@ -1,0 +1,41 @@
+{
+  "revision": 1,
+  "frames": [
+    {
+      "frame": 1,
+      "menuAction": 1,
+      "controllers": [
+        { "port": 1, "buttons": ["right", "a"] },
+        { "port": 2, "buttons": ["right", "a"] },
+        { "port": 3, "buttons": ["right", "a"] },
+        { "port": 4, "buttons": ["right", "a"] }
+      ],
+      "pointer": { "x": 17, "y": 41, "primary": true, "secondary": true, "inside": true }
+    },
+    {
+      "frame": 2,
+      "controllers": [
+        { "port": 1, "buttons": ["right", "a"] },
+        { "port": 2, "buttons": ["right", "a"] },
+        { "port": 3, "buttons": ["right", "a"] },
+        { "port": 4, "buttons": ["right", "a"] }
+      ],
+      "pointer": { "x": 17, "y": 41, "primary": true, "secondary": true, "inside": true }
+    },
+    { "frame": 3, "controllers": [] },
+    { "frame": 4, "duration": 16, "controllers": [{ "port": 1, "buttons": ["right"] }] },
+    { "frame": 20, "controllers": [{ "port": 1, "buttons": ["a"] }] },
+    { "frame": 21, "controllers": [] },
+    { "frame": 22, "controllers": [{ "port": 1, "buttons": ["right", "b"] }] },
+    { "frame": 23, "duration": 30, "controllers": [{ "port": 1, "buttons": ["right"] }] },
+    { "frame": 53, "controllers": [{ "port": 1, "buttons": ["a"] }] },
+    { "frame": 54, "controllers": [] },
+    { "frame": 55, "controllers": [{ "port": 1, "buttons": ["right", "b"] }] },
+    { "frame": 56, "duration": 31, "controllers": [{ "port": 1, "buttons": ["right"] }] },
+    { "frame": 87, "controllers": [{ "port": 1, "buttons": ["a"] }] },
+    { "frame": 88, "controllers": [] },
+    { "frame": 89, "duration": 16, "controllers": [{ "port": 1, "buttons": ["right"] }] },
+    { "frame": 105, "duration": 2, "controllers": [{ "port": 1, "buttons": ["right", "a"] }] },
+    { "frame": 107, "duration": 3, "controllers": [] }
+  ]
+}

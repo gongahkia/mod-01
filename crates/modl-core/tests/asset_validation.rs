@@ -50,14 +50,21 @@ fn every_maintained_game_example_and_template_has_valid_current_assets() {
                 continue;
             }
             let project = parse_workcart(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let report = analyze_project_assets(&project.manifest, &project.files);
-            assert!(
-                report.is_valid(),
-                "{}: {:?}",
-                path.display(),
-                report.diagnostics
-            );
-            checked += 1;
+            let mut members = vec![("main".to_owned(), project.manifest, project.files)];
+            for child in project.bundle {
+                let parsed = parse_workcart(&child.source).unwrap();
+                members.push((child.alias, parsed.manifest, parsed.files));
+            }
+            for (alias, manifest, files) in members {
+                let report = analyze_project_assets(&manifest, &files);
+                assert!(
+                    report.is_valid(),
+                    "{}/{alias}: {:?}",
+                    path.display(),
+                    report.diagnostics
+                );
+                checked += 1;
+            }
         }
     }
     assert!(

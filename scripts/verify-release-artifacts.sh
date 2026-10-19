@@ -38,6 +38,7 @@ cartridges=(
   hardware-gauntlet
   modl-tutorial
   prism-corridor
+  relay-station
 )
 
 printf 'cartridge\tm01c-bytes\tm01c-sha256\tm01c.png-sha256\n'

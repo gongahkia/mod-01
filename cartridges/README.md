@@ -27,6 +27,13 @@ to `@gongahkia`.
   time save. Arrows walk/turn, Z starts/restarts, and A toggles the editable map.
   The DDA/projection are ordinary MODL using `texture_line`, not a native 3D engine.
   See [software 3D](../docs/SOFTWARE_3D.md) for the design and reproducible route.
+- `relay-station`: a complete three-member local game. Arrows move; Z docks at
+  the station door, links three vault relays in order, then exits right. Enter
+  also docks from the station. X swaps the vault's day/night sprites and synth
+  patch without restarting its 30 Hz program, task, RNG, RAM or clock. Escape
+  exposes the cartridge's dock/return/bank actions. The station and vault keep
+  distinct visit/clear saves; the night member supplies data and never boots.
+  See [bundle gameplay](../docs/RELAY_STATION.md) for the recorded complete route.
 
 Each directory contains its single editable `cart.m01w`. Packed byte sizes are
 measured by `mod01 info`, not source length or compressed code alone.

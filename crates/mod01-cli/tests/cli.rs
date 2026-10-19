@@ -1986,6 +1986,65 @@ fn bundled_cartridge_headless_replays_match_golden_machine_traces() {
 }
 
 #[test]
+fn relay_station_complete_route_swaps_banks_and_returns_with_separate_committed_saves() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let project = root.join("cartridges/relay-station/cart.m01w");
+    let input = root.join("tests/replays/relay-station.json");
+    let source = fs::read(&project).unwrap();
+    let trace = game_trace(&project, 110, "", Some(&input), None);
+    assert!(trace.get("fault").is_none(), "{trace}");
+    assert_eq!(trace["summary"]["completedFrames"], 110);
+    let frames = trace["frames"].as_array().unwrap();
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["cartridgeAlias"] == "main")
+            .count(),
+        6
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["cartridgeAlias"] == "vault")
+            .count(),
+        104
+    );
+    for frame in [2, 106] {
+        assert_eq!(frames[frame]["cartridgeFrame"], 0);
+    }
+    assert_eq!(frames[105]["cartridgeAlias"], "vault");
+    assert_eq!(frames[106]["cartridgeAlias"], "main");
+    let peak = trace["summary"]["workPeak"].as_u64().unwrap();
+    assert!(
+        (21_000..=50_000).contains(&peak),
+        "bank copies must be charged but stay in budget"
+    );
+    assert!(trace["summary"]["voicePeak"].as_u64().unwrap() > 0);
+    // These saves encode station owner=1/visits=2/clears=1 and vault owner=2/visits=1/clears=1.
+    assert_eq!(
+        trace["summary"]["finalSaves"]["relay-station"],
+        "36bc4828a5766c7cca119e57ad5a38a84d1b9cbb8a139fe7700eb237491316ac"
+    );
+    assert_eq!(
+        trace["summary"]["finalSaves"]["relay-station-vault"],
+        "6d4b9e07f8e505b8b6cd82d9ae9e952ec466e5888e1129aaf9438bddf5ad58d3"
+    );
+    assert_eq!(
+        trace["summary"]["finalSaves"]["relay-station-night"],
+        trace["configuration"]["initialSaves"]["relay-station-night"]
+    );
+    assert_eq!(
+        trace["summary"]["finalFramebufferSha256"],
+        "85eb5f16a9bd4b8941482bf67c2223dc16c1b7391c1360cfec4d9bc488996c51"
+    );
+    assert_eq!(
+        trace["summary"]["pcmSha256"],
+        "0be10db162af9fedcf4ec74fcc0cad46007f4976bb59a5ac0a0ffc12a513910f"
+    );
+    assert_eq!(fs::read(project).unwrap(), source);
+}
+
+#[test]
 fn bundled_cartridges_compile_and_pack_within_capacity() {
     let cartridges = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cartridges");
     for id in [
@@ -1998,6 +2057,7 @@ fn bundled_cartridges_compile_and_pack_within_capacity() {
         "hardware-gauntlet",
         "modl-tutorial",
         "prism-corridor",
+        "relay-station",
     ] {
         let project = cartridges.join(id);
         let check = binary()
@@ -2040,7 +2100,7 @@ fn bundled_cartridges_compile_and_pack_within_capacity() {
         );
         if matches!(
             id,
-            "signal-4k" | "pocket-relay" | "hardware-gauntlet" | "modl-tutorial"
+            "signal-4k" | "pocket-relay" | "hardware-gauntlet" | "modl-tutorial" | "relay-station"
         ) {
             let headless = binary()
                 .args([

@@ -1,0 +1,288 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "relay-station"
+title = "RELAY STATION"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+// A complete local game: main station, 30 Hz vault and data-only night bank.
+// All movement, drawing, menus and transfers use public MODL, not a scene engine.
+state player_x: Int = 20
+state visits: Int = 0
+state clears: Int = 0
+state leaving: Bool = false
+
+fn dock() -> Unit:
+  if not leaving:
+    leaving = true
+    sfx(#tone)
+    load_cart("vault", "dock")
+
+on start:
+  assert cart_parameter() == "" or cart_parameter() == "cleared" or cart_parameter() == "returned", "station ticket"
+  assert mem_read(0) == 0, "full loads start fresh RAM"
+  mem_write(0, 91)
+  assert save_get_int("owner", 1) == 1, "station owns its save"
+  visits = save_get_int("visits", 0) + 1
+  clears = save_get_int("clears", 0)
+  if cart_parameter() == "cleared":
+    clears += 1
+  save_set_int("owner", 1)
+  save_set_int("visits", visits)
+  save_set_int("clears", clears)
+  save_commit()
+  menu_item(1, "DOCK AT VAULT")
+
+on menu(action: Int):
+  if action == 1:
+    dock()
+
+on update:
+  if not leaving:
+    if btn(pad1, left):
+      player_x -= 3
+    if btn(pad1, right):
+      player_x += 3
+    player_x = clamp(player_x, 20, 216)
+
+on draw:
+  if not leaving:
+    if btnp(pad1, start_button):
+      dock()
+    elif btnp(pad1, a) and player_x >= 188:
+      dock()
+  clear(1)
+  print("RELAY STATION / MAIN", 12, 12, 23)
+  print("VISITS " + format_int(visits, 10, 3), 12, 30, 7)
+  print("CLEARS " + format_int(clears, 10, 3), 142, 30, 10)
+  if cart_parameter() == "cleared":
+    print("RETURN TICKET ACCEPTED", 12, 46, 10)
+  else:
+    print("LINK THREE RELAYS. RETURN HOME.", 12, 46, 6)
+  line(12, 102, 228, 102, 13)
+  rect(196, 60, 28, 42, 23)
+  sprite_xform(#relay, 204, 72, 3, 0, false, false)
+  sprite_xform(#hero, player_x - 8, 84, 2, 0, false, false)
+  print("ARROWS MOVE / Z AT DOOR", 12, 112, 7)
+  print("ENTER OR MENU: DOCK", 12, 124, 6)
+  print("SEPARATE CARTS. SEPARATE SAVES.", 12, 136, 6)
+"""
+
+[[asset]]
+name = "hero"
+kind = "sprite"
+path = "assets/hero.m01g"
+payload = '{"revision":2,"kind":"sprite","width":8,"height":8,"frames":[[0,0,23,23,23,23,0,0,0,23,7,23,23,7,23,0,0,23,23,23,23,23,23,0,0,0,23,23,23,23,0,0,0,23,23,7,7,23,23,0,23,0,23,23,23,23,0,23,0,0,23,0,0,23,0,0,0,23,23,0,0,23,23,0]]}'
+
+[[asset]]
+name = "relay"
+kind = "sprite"
+path = "assets/relay.m01g"
+payload = '{"revision":2,"kind":"sprite","width":4,"height":4,"frames":[[0,19,19,0,19,7,7,19,19,7,7,19,0,19,19,0]]}'
+
+[[asset]]
+name = "tone"
+kind = "sound"
+path = "assets/tone.m01s"
+payload = '{"revision":1,"kind":"sound","waveform":"triangle","note":60,"durationFrames":12,"volume":0.35,"pan":0,"envelope":{"attackFrames":0,"decayFrames":2,"sustainLevel":0.7,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}'
+
+[[bundle]]
+alias = "vault"
+source = '''
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "relay-station-vault"
+title = "RELAY VAULT"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 30
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+// State, tasks, RNG, input, RAM, clock and this executable survive a bank reload.
+state player_x: Int = 24
+state links: Int = 0
+state visits: Int = 0
+state clears: Int = 0
+state ticks: Int = 0
+state pulses: Int = 0
+state signal: Int = 0
+state night: Bool = false
+state leaving: Bool = false
+
+task beacon_clock():
+  while true:
+    pulses += 1
+    signal = rng_int(0, 255)
+    mem_write(3, pulses % 256)
+    wait 30f
+
+fn change_bank() -> Unit:
+  night = not night
+  if night:
+    reload_assets("night")
+  else:
+    reload_assets("vault")
+
+fn leave(ticket: Text) -> Unit:
+  if not leaving:
+    leaving = true
+    load_cart("main", ticket)
+
+fn interact() -> Unit:
+  if links < 3 and abs(player_x - (56 + links * 64)) <= 12:
+    links += 1
+    sfx(#tone)
+  elif links == 3 and player_x >= 204:
+    clears += 1
+    save_set_int("clears", clears)
+    save_commit()
+    leave("cleared")
+
+on start:
+  assert cart_parameter() == "dock", "vault needs its docking ticket"
+  assert mem_read(0) == 0, "vault RAM is not station RAM"
+  mem_write(0, 73)
+  assert save_get_int("owner", 2) == 2, "vault owns its save"
+  visits = save_get_int("visits", 0) + 1
+  clears = save_get_int("clears", 0)
+  save_set_int("owner", 2)
+  save_set_int("visits", visits)
+  save_commit()
+  menu_item(1, "RETURN TO STATION")
+  menu_item(2, "SWAP DAY/NIGHT BANK")
+  start beacon_clock()
+
+on menu(action: Int):
+  if not leaving:
+    if action == 1:
+      leave("returned")
+    elif action == 2:
+      change_bank()
+
+on update:
+  ticks += 1
+  assert mem_read(0) == 73, "asset reload keeps RAM"
+  assert mem_read(328220) == 30, "asset reload keeps the vault update rate"
+  if not leaving:
+    if btn(pad1, left):
+      player_x -= 4
+    if btn(pad1, right):
+      player_x += 4
+    player_x = clamp(player_x, 24, 216)
+
+on draw:
+  // Interaction samples every display frame, including between 30 Hz updates.
+  // A simultaneous X/Z gives the bank request priority: never two requests/frame.
+  if not leaving:
+    if btnp(pad1, b):
+      change_bank()
+    elif btnp(pad1, a):
+      interact()
+  clear(1)
+  print("RELAY VAULT / 30 HZ", 12, 12, 23)
+  print("LINKS " + format_int(links, 10, 1) + " / 3", 12, 28, 7)
+  print("VISITS " + format_int(visits, 10, 3), 142, 28, 6)
+  if night:
+    print("NIGHT BANK / SAME LIVE PROGRAM", 12, 42, 19)
+  else:
+    print("DAY BANK / X SWAPS ASSETS", 12, 42, 6)
+  line(12, 102, 228, 102, 13)
+  for index in 0..3:
+    let x = 56 + index * 64
+    if links > index:
+      circle_fill(x, 72, 10, 10)
+    elif links == index:
+      circle(x, 72, 11, 7)
+    sprite_xform(#relay, x - 6, 66, 3, 0, false, false)
+  if links == 3:
+    rect(204, 82, 20, 20, 10)
+  sprite_xform(#hero, player_x - 8, 84, 2, 0, false, false)
+  print("ARROWS / Z LINK THEN EXIT RIGHT", 12, 112, 7)
+  print("X BANK / ESC FOR RETURN MENU", 12, 124, 6)
+  print("TICKS " + format_int(ticks, 10, 3) + " PULSE " + format_int(pulses, 10, 2) + " RNG " + format_int(signal, 16, 2), 12, 136, 6)
+"""
+
+[[asset]]
+name = "hero"
+kind = "sprite"
+path = "assets/hero.m01g"
+payload = '{"revision":2,"kind":"sprite","width":8,"height":8,"frames":[[0,0,23,23,23,23,0,0,0,23,7,23,23,7,23,0,0,23,23,23,23,23,23,0,0,0,23,23,23,23,0,0,0,23,23,7,7,23,23,0,23,0,23,23,23,23,0,23,0,0,23,0,0,23,0,0,0,23,23,0,0,23,23,0]]}'
+
+[[asset]]
+name = "relay"
+kind = "sprite"
+path = "assets/relay.m01g"
+payload = '{"revision":2,"kind":"sprite","width":4,"height":4,"frames":[[0,19,19,0,19,7,7,19,19,7,7,19,0,19,19,0]]}'
+
+[[asset]]
+name = "tone"
+kind = "sound"
+path = "assets/tone.m01s"
+payload = '{"revision":1,"kind":"sound","waveform":"triangle","note":60,"durationFrames":12,"volume":0.35,"pan":0,"envelope":{"attackFrames":0,"decayFrames":2,"sustainLevel":0.7,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}'
+'''
+
+[[bundle]]
+alias = "night"
+source = '''
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "relay-station-night"
+title = "NIGHT ASSET BANK"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+// An asset donor is admitted/compiled with the game but must not be booted.
+// This deliberate assertion makes an accidental program load visible in QA.
+on start:
+  assert false, "night is data-only: use reload_assets, not load_cart"
+"""
+
+[[asset]]
+name = "hero"
+kind = "sprite"
+path = "assets/hero.m01g"
+payload = '{"revision":2,"kind":"sprite","width":8,"height":8,"frames":[[0,0,19,19,19,19,0,0,0,19,7,19,19,7,19,0,0,19,19,19,19,19,19,0,0,0,19,19,19,19,0,0,0,19,19,7,7,19,19,0,19,0,19,19,19,19,0,19,0,0,19,0,0,19,0,0,0,19,19,0,0,19,19,0]]}'
+
+[[asset]]
+name = "relay"
+kind = "sprite"
+path = "assets/relay.m01g"
+payload = '{"revision":2,"kind":"sprite","width":4,"height":4,"frames":[[0,11,11,0,11,23,23,11,11,23,23,11,0,11,11,0]]}'
+
+[[asset]]
+name = "tone"
+kind = "sound"
+path = "assets/tone.m01s"
+payload = '{"revision":1,"kind":"sound","waveform":"pulse","note":72,"durationFrames":12,"volume":0.35,"pan":0,"duty":0.25,"envelope":{"attackFrames":0,"decayFrames":2,"sustainLevel":0.7,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}'
+'''

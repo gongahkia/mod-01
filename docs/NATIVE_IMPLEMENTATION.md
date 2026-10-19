@@ -51,6 +51,24 @@ choices remain outstanding.
 
 ## Progress
 
+- `cartridges/relay-station` is a maintained playable 47,591-byte three-member
+  game: 60 Hz station, 30 Hz vault and compatible data-only night bank. Public
+  MODL implements movement, three ordered relay interactions, two bank swaps,
+  menu actions, parameter handoff, task/RNG HUD and per-ID visits/clears. Its
+  110-frame source-readable replay returns home with six main and 104 vault
+  frames, two save commits each and non-silent production PCM; the donor never
+  boots. CLI regression anchors the final image, PCM and distinct save images;
+  maintained asset checks now cover every embedded member, not only main.
+  Inspected `output/relay-station-qa-mFRPyN` captures show station, day/night
+  sprite changes, live counters, full minimum player/touch and active-member
+  source inspection. Updated bundle/format docs distinguish implemented
+  integration from the still-open complete cross-host/final audit. The actual
+  Linux package reproduces the 110-frame native source report, including final
+  checkpoint, from an unrelated directory with empty PATH. The full gate passes
+  278 runtime, 132 core, 134 native, 34 CLI integration and one CLI report-unit
+  test, formatting/lint/types/all-feature Clippy/builds, ten deterministic raw/PNG
+  pairs (the previous nine unchanged) and both existing 120-frame Linux package
+  verifications. Direct CLI/native per-frame comparison remains open.
 - Actual bundle GUI QA found SOURCE retained the 480×320 player window, leaving
   Studio unusably small. Native mode/touch transitions now update the same shared
   viewport minimum policy and grow undersized windows: Studio 900×600, player

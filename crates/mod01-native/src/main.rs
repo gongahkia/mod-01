@@ -1968,7 +1968,7 @@ impl StudioApp {
             && let Some(project) = &self.project
         {
             let overlay = if let Some(editor) = self.sprite.as_ref().filter(|editor| editor.dirty) {
-                let source = serde_json::to_vec(&json!({"revision":2,"kind":"sprite","width":editor.document.width,"height":editor.document.height,"frames":editor.document.indexed_frames(&sprite::palette())})).expect("indexed sprite is serializable");
+                let source = serde_json::to_vec(&json!({"revision":2,"kind":"sprite","width":editor.document.width,"height":editor.document.height,"frames":editor.document.indexed_frames()})).expect("indexed sprite is serializable");
                 Some(asset_meter::Overlay {
                     path: editor.asset_path.clone(),
                     source,
@@ -2108,7 +2108,7 @@ impl StudioApp {
             }
         };
         self.status = match self.asset_workbench.as_mut() {
-            Some(workbench) => match workbench.import_tile_png(&bytes, &sprite::palette()) {
+            Some(workbench) => match workbench.import_tile_png(&bytes) {
                 Ok(()) => {
                     self.asset_dirty = true;
                     "TILE ATLAS IMPORTED".to_owned()
@@ -2494,7 +2494,7 @@ impl StudioApp {
         let name = editor.name.clone();
         let asset_path = editor.asset_path.clone();
         let sidecar = format!("editor/sprites/{name}.m01paint");
-        let frames = editor.document.indexed_frames(&sprite::palette());
+        let frames = editor.document.indexed_frames();
         let asset = json!({
             "revision": 2,
             "kind": "sprite",

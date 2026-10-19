@@ -5,6 +5,16 @@ handles such as `#hero` and `#theme`. Sprite/tile-set/display JSON use current
 revision 2; map/font/sound/music each use their own current revision 1 schema.
 These are independent asset schemas, not compatibility profiles.
 
+Native sprite/tile PNG import uses the shared Rust decoder and palette converter.
+It checks PNG source size (16 MiB), IHDR geometry and purpose before pixel
+decoding, with decoder allocation limits as well: sprites are 1–128 on each axis;
+atlases contain 1–4,096 complete 8×8 tiles in row-major order. Alpha 0–127 becomes
+index zero. Other pixels use squared-RGB nearest colour among indices 1–255,
+choosing the lowest index on ties, without dithering. Original RGBA layer data
+remains editable; sprite resize/import is one undo transaction. Tile import
+preserves authored metadata and existing flags, truncating/extending flags with
+the new tile count. `M014065` identifies failed PNG/conversion admission.
+
 `mod01 assets PATH` prints the shared Rust validation/capacity report as JSON
 without needing Node or a display. Its exit status is nonzero for an invalid
 bank. `mod01 check PATH` prints independent asset failures alongside source

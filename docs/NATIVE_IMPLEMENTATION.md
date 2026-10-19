@@ -227,3 +227,12 @@ choices remain outstanding.
   JSON field, and wrapping at 900×600 (`asset-meter-valid.png`,
   `asset-meter-diagnostic.png`, `asset-meter-small.png`). Diagnostic expansion is
   height-bounded so a large failure list cannot consume the entire editor.
+
+- Shared PNG conversion now lives in `modl-core`: source/IHDR/decoder limits,
+  alpha threshold, exact master palette, deterministic RGB distance/ties and
+  row-major tile layout. Both native importers and layered-sprite flattening use
+  it; duplicate native quantizers were removed. Core tests cover palette/alpha,
+  malformed/oversized headers, preserved RGBA/metadata/flags and tile order.
+  A native regression compares actual imported pixels against that converter and
+  proves resize/import is one undo transaction with no mutation on rejection.
+  CLI workcart import remains the next integration slice.

@@ -180,69 +180,16 @@ impl AssetWorkbench {
         Ok(output.into_inner())
     }
 
-    pub fn import_tile_png(&mut self, png: &[u8], palette: &[[u8; 3]; 256]) -> Result<(), String> {
+    pub fn import_tile_png(&mut self, png: &[u8]) -> Result<(), String> {
+        use modl_core::asset_import::{PngAssetKind, decode_png, indexed_asset};
         if self.kind != AssetKind::TileSet || self.display {
             return Err("OPEN A TILE SET FIRST".to_owned());
         }
-        if png.len() < 24 || png[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
-            return Err("FILE IS NOT A PNG".to_owned());
-        }
-        let width =
-            u32::from_be_bytes(png[16..20].try_into().map_err(|_| "invalid PNG width")?) as usize;
-        let height =
-            u32::from_be_bytes(png[20..24].try_into().map_err(|_| "invalid PNG height")?) as usize;
-        let count = (width / 8).saturating_mul(height / 8);
-        if width == 0
-            || height == 0
-            || width % 8 != 0
-            || height % 8 != 0
-            || !(1..=4096).contains(&count)
-        {
-            return Err("TILE PNG MUST CONTAIN 1-4096 COMPLETE 8x8 TILES".to_owned());
-        }
-        let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-            .map_err(|error| error.to_string())?
-            .into_rgba8();
-        if image.width() as usize != width || image.height() as usize != height {
-            return Err("PNG DIMENSIONS CHANGED WHILE DECODING".to_owned());
-        }
-        let columns = width / 8;
-        let rows = height / 8;
-        let mut tiles = Vec::with_capacity(count);
-        for tile_y in 0..rows {
-            for tile_x in 0..columns {
-                let mut tile = Vec::with_capacity(64);
-                for y in 0..8 {
-                    for x in 0..8 {
-                        let pixel = image
-                            .get_pixel((tile_x * 8 + x) as u32, (tile_y * 8 + y) as u32)
-                            .0;
-                        tile.push(json!(if pixel[3] <= 127 {
-                            0
-                        } else {
-                            nearest_palette([pixel[0], pixel[1], pixel[2]], palette)
-                        }));
-                    }
-                }
-                tiles.push(Value::Array(tile));
-            }
-        }
-        let previous = self.document.clone();
-        let mut flags = self.document["flags"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        flags.resize(count, json!(0));
-        flags.truncate(count);
-        self.document["tiles"] = Value::Array(tiles);
-        self.document["flags"] = Value::Array(flags);
-        self.history.push(previous);
-        if self.history.len() > 32 {
-            self.history.remove(0);
-        }
-        self.future.clear();
+        let source = decode_png(png, PngAssetKind::TileSet).map_err(|error| error.to_string())?;
+        let document = indexed_asset(&source, PngAssetKind::TileSet, Some(&self.document))
+            .map_err(|error| error.to_string())?;
+        self.replace_document(document);
         self.tile = 0;
-        self.dirty = true;
         Ok(())
     }
 
@@ -879,20 +826,6 @@ fn integer(value: &Value) -> usize {
     value.as_u64().unwrap_or(0) as usize
 }
 
-fn nearest_palette(rgb: [u8; 3], palette: &[[u8; 3]; 256]) -> usize {
-    palette
-        .iter()
-        .enumerate()
-        .skip(1)
-        .min_by_key(|(_, color)| {
-            rgb.iter()
-                .zip(color.iter())
-                .map(|(a, b)| (i32::from(*a) - i32::from(*b)).pow(2))
-                .sum::<i32>()
-        })
-        .map_or(1, |(index, _)| index)
-}
-
 fn number_path(value: &Value, path: &str) -> f64 {
     path.split('.')
         .fold(value, |current, key| &current[key])
@@ -1211,7 +1144,7 @@ mod tests {
         let editor = AssetWorkbench::new(AssetKind::TileSet, &source).unwrap();
         let png = editor.export_tile_png(&palette).unwrap();
         let mut imported = AssetWorkbench::new(AssetKind::TileSet, &source).unwrap();
-        imported.import_tile_png(&png, &palette).unwrap();
+        imported.import_tile_png(&png).unwrap();
         assert_eq!(imported.document["tiles"], editor.document["tiles"]);
         assert_eq!(imported.document["flags"], editor.document["flags"]);
     }

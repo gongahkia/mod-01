@@ -4973,7 +4973,14 @@ function createConsoleRuntime(factory, configuration) {
       if (drawCommands.length >= HARDWARE.drawCommandsPerFrame)
         throw new RuntimeFault('M019010', 'draw-command ceiling exceeded', sourceSpan);
       drawCommands.push(command);
-      if (rendering) graphics.executeCommand(command);
+      if (rendering)
+        try {
+          graphics.executeCommand(command);
+        } catch (error) {
+          if (error instanceof TypeError || error instanceof RangeError)
+            throw new RuntimeFault('M019009', error.message, sourceSpan);
+          throw error;
+        }
       return;
     }
     if (AUDIO_CALLS.has(name)) {

@@ -27,6 +27,28 @@ const factory: CartridgeFactory = (api) => ({
 });
 
 describe('production console dispatcher', () => {
+  it('attributes invalid graphics arguments to their MODL span without mutating their device register', () => {
+    for (const debug of [false, true]) {
+      const runtime = createConsoleRuntime(
+        (api) => ({
+          ...factory(api),
+          update() {},
+          draw() {
+            api.call('palt', [255, 'not a Bool'], span);
+          },
+        }),
+        { ...configuration, debug },
+      );
+      expect(() => {
+        runtime.runFrame(emptyInputFrame());
+      }).toThrow(expect.objectContaining({ code: 'M019009', sourceSpan: span }));
+      expect(runtime.snapshot().machine.execution.fault).toEqual({ code: 9009, sourceSpan: span });
+      const mask = runtime
+        .snapshot()
+        .memory.regions.find((region) => region.address === MEMORY.transparency)?.bytes;
+      expect(mask).toEqual(Uint8Array.from({ length: 32 }, (_, index) => (index === 0 ? 1 : 0)));
+    }
+  });
   it('exposes cloned ROM/status bytes and permits debugger-only transactional RAM edits', () => {
     let observed = -1;
     const rom = Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 2, 3, 0, 0, 0, 77);
@@ -414,7 +436,7 @@ describe('production console dispatcher', () => {
       ['mem_read', [-1], 'M019020'],
       ['mem_read16', [MEMORY.size - 1], 'M019020'],
       ['mem_write', [MEMORY.palette, 0], 'M019021'],
-      ['mem_write', [MEMORY.transparency, 1], 'M019021'],
+      ['mem_write', [MEMORY.palette + 1, 1], 'M019021'],
       ['mem_write', [MEMORY.display, 0], 'M019021'],
       ['mem_write', [MEMORY.rasterLive, 0], 'M019021'],
       ['mem_write', [MEMORY.back, 256], 'M019022'],

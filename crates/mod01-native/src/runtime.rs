@@ -104,10 +104,22 @@ fn worker(
     let host_path = match host_path.canonicalize() {
         Ok(path) => path,
         Err(error) => {
-            let _ = events.send((
-                None,
-                error_event(format!("native runtime bundle is missing: {error}")),
-            ));
+            let message = format!("native runtime bundle is missing: {error}");
+            let _ = events.send((None, error_event(message.clone())));
+            // Keep the receiver alive: startup preflight may finish before the UI
+            // submits load. Every later command must get an actionable reply,
+            // not a scheduler-dependent "sending on a closed channel" failure.
+            for (generation, command) in commands {
+                if generation != active.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let reply = if command["type"] == "stop" {
+                    serde_json::json!({"type":"stopped"})
+                } else {
+                    error_event(message.clone())
+                };
+                let _ = events.send((Some(generation), reply));
+            }
             return;
         }
     };
@@ -399,6 +411,27 @@ mod tests {
                 .unwrap()
                 .contains("native runtime bundle is missing")
         );
+    }
+
+    #[test]
+    fn completed_startup_failure_keeps_load_and_stop_channels_alive_with_authoritative_replies() {
+        let bridge = RuntimeBridge::new(std::env::temp_dir().join(format!(
+            "missing-delayed-mod01-host-{}.mjs",
+            std::process::id()
+        )));
+        // Drain the global startup failure before sending anything. Previously,
+        // the worker had exited and this ordering deterministically broke send.
+        let startup = receive(&bridge);
+        assert_eq!(startup["type"], "error");
+        for _ in 0..3 {
+            bridge.send(json!({"type":"load"})).unwrap();
+            let reply = receive(&bridge);
+            assert_eq!(reply["message"], startup["message"]);
+            assert!(!bridge.has_pending());
+            bridge.send(json!({"type":"stop"})).unwrap();
+            assert_eq!(receive(&bridge)["type"], "stopped");
+            assert!(!bridge.has_pending());
+        }
     }
 
     #[test]

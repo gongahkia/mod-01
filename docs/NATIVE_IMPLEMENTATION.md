@@ -51,6 +51,12 @@ choices remain outstanding.
 
 ## Progress
 
+- Native bridge startup preflight failures no longer race the first Load command:
+  the worker keeps its command receiver alive and replies with the actual missing-
+  runtime diagnostic (or a normal Stop acknowledgement). A regression drains the
+  startup error before submitting repeated Load/Stop commands, deterministically
+  reproducing the formerly timing-dependent closed-channel failure. All five
+  bridge tests and warning-free workspace Clippy pass.
 - Shared composition operations now preflight local member addition/removal before
   returning changed source. Three core tests cover exact untouched source/metadata,
   nesting/alias/save-ID/invalid-code rejection, member 32 versus 33, and safe removal

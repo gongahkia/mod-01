@@ -327,6 +327,9 @@ pub fn rewrite_workcart(
 ) -> Result<String, CartridgeError> {
     let original = parse_workcart(source)?;
     let manifest = parse_project_manifest(manifest_source)?;
+    if manifest == original.manifest && files == &original.files {
+        return Ok(source.to_owned());
+    }
     encode_workcart(&manifest, files, &original.recipes, &original.tests)
 }
 

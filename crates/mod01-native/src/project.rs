@@ -8,8 +8,8 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
     CompileMode, ProjectManifest, compile_project, decode_cartridge, decode_cartridge_png,
-    pack_project, parse_project_manifest, rewrite_workcart, unpack_cartridge_project,
-    workcart_project_view,
+    pack_project, pack_workcart, parse_project_manifest, rewrite_workcart,
+    unpack_cartridge_project, unpack_workcart, workcart_project_view,
 };
 use serde_json::{Value, json};
 
@@ -52,9 +52,14 @@ impl NativeProject {
             } else {
                 source
             };
-            decode_cartridge(&bytes).map_err(|error| error.to_string())?;
+            let decoded = decode_cartridge(&bytes).map_err(|error| error.to_string())?;
             let unpacked = unpack_cartridge_project(&bytes).map_err(|error| error.to_string())?;
-            return Self::from_parts(None, unpacked.manifest, unpacked.files);
+            let mut project = Self::from_parts(None, unpacked.manifest, unpacked.files)?;
+            if decoded.entries.contains_key("source/workcart.m01w") {
+                project.workcart_source =
+                    Some(unpack_workcart(&bytes).map_err(|error| error.to_string())?);
+            }
+            return Ok(project);
         }
         let manifest_source = fs::read_to_string(path.join("cart.toml"))
             .map_err(|error| format!("cannot read cart.toml: {error}"))?;
@@ -244,6 +249,13 @@ impl NativeProject {
     }
 
     pub fn pack(&self) -> Result<Vec<u8>, String> {
+        if let Some(source) = &self.workcart_source {
+            let rewritten = rewrite_workcart(source, &self.manifest_source, &self.files)
+                .map_err(|error| error.to_string())?;
+            return pack_workcart(&rewritten)
+                .map(|packed| packed.bytes)
+                .map_err(|error| error.to_string());
+        }
         pack_project(&self.manifest_source, &self.files)
             .map(|packed| packed.bytes)
             .map_err(|error| error.to_string())
@@ -459,6 +471,42 @@ source = "on draw:\n  clear(1)\n"
         )
         .unwrap();
         let mut project = NativeProject::open(&path).unwrap();
+        let original = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            project.pack().unwrap(),
+            modl_core::pack_workcart(&original).unwrap().bytes
+        );
+        let mut authored = modl_core::parse_workcart(&original).unwrap();
+        authored.files.insert(
+            "notes.txt".to_owned(),
+            b"Keep this auxiliary authoring file".to_vec(),
+        );
+        authored.tests.push(modl_core::WorkcartTest {
+            name: "smoke".to_owned(),
+            path: "tests/smoke.modl".to_owned(),
+            kind: modl_core::WorkcartTestKind::Modl,
+            payload: "on start:\n  assert true\n".to_owned(),
+        });
+        let with_metadata = modl_core::encode_workcart(
+            &authored.manifest,
+            &authored.files,
+            &authored.recipes,
+            &authored.tests,
+        )
+        .unwrap();
+        fs::write(&path, with_metadata).unwrap();
+        project = NativeProject::open(&path).unwrap();
+        let packed = project.pack().unwrap();
+        let binary = root.join("test.m01c");
+        fs::write(&binary, &packed).unwrap();
+        let from_packed = NativeProject::open(&binary).unwrap();
+        assert_eq!(from_packed.pack().unwrap(), packed);
+        let retained = modl_core::parse_workcart(
+            &modl_core::unpack_workcart(&from_packed.pack().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(retained.tests.len(), 1);
+        assert!(retained.files.contains_key("notes.txt"));
         project.editor_text = "on draw:\n  clear(2)\n".to_owned();
         project.sync_editor();
         project.save().unwrap();

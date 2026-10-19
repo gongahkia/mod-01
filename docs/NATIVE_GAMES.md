@@ -37,6 +37,16 @@ is needed on the recipient's machine. Native system libraries and OS trust/signi
 rules still apply; build on the oldest supported OS baseline. Linux CI builds on
 Ubuntu 24.04. These are unsigned publisher artifacts, not notarized installers.
 
+Source workcarts, raw `.m01c` and cartridge PNG inputs all preserve the **complete
+game**, including every embedded dependency and its exact authored source. Core
+revalidates/recompiles every member before creating the output directory. Shipping
+games may exceed 1 MiB; each logical cartridge still has its own 1 MiB ROM limit.
+Studio uses main's identity for the output folder and title, even when another
+member is selected. `mod01-game.json` records the whole-game SHA-256 identity,
+shipping byte count, main ID and a catalog of alias → persistent ID / logical ROM
+bytes. The README lists every separate save identity. Transfers resolve only
+against the packaged catalog; no loose dependency files or downloads are needed.
+
 `--player`, `--node`, `--host`, and `--node-license` select explicit toolchain files.
 `--platform linux|windows|macos` supports packaging existing target binaries, **not**
 cross-compilation. Player and Node platform/architecture headers must match. Only
@@ -46,8 +56,14 @@ must first be built/provided as a target-specific 64-bit executable.
 
 `node scripts/verify-native-game.mjs` tests a native export from an unrelated
 working directory with an empty PATH: bundled Node must run, 120 display frames
-must match the original player, and packed bytes must equal the normal CLI pack.
-The macOS/Windows/Linux packaging matrix runs the same verification on each OS.
+and their PCM, routing timeline and save commits must match the original player,
+and packed bytes must equal the normal CLI pack. It checks the requested ordinary
+cartridge and a generated >1 MiB two-cartridge game that transfers every frame,
+mixes 60/30 Hz updates, passes parameters, plays actual sound and asserts separate
+save ownership. The latter must produce 60 frames from each member; shipped source
+must remain inspectable from outside the checkout. The macOS/Windows/Linux
+packaging matrix runs this same verification on each OS; cross-target file-layout
+tests alone do not demonstrate execution on another OS.
 
 For display-free QA through the **native production bridge**:
 
@@ -56,7 +72,9 @@ target/debug/mod01-studio --verify cartridges/pocket-relay --frames 120
 ```
 
 Verification loads and compiles the cartridge, checks ordered display frames and
-stereo PCM sizes, then stops the process. It prints a JSON framebuffer fingerprint
-and peak work. It does not open a window, initialize an audio device, read local
-saves or persist save commits. Frame count is bounded to 1–36,000. This is a smoke
+stereo PCM sizes, then stops the process. It prints JSON fingerprints covering all
+framebuffers, stereo PCM, producer-owned save commits and the routing timeline,
+plus per-member frame counts, whole-game identity and peak work. It does not open
+a window, initialize an audio device, read local saves or persist save commits.
+Frame count is bounded to 1–36,000. This is a smoke
 test, not a substitute for graphical/input/audio QA.

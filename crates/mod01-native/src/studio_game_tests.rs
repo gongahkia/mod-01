@@ -47,6 +47,60 @@ fn game_source() -> String {
     .unwrap()
 }
 
+#[test]
+fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is_selected() {
+    let source = game_source();
+    let mut project = NativeProject::from_source(source.clone(), None).unwrap();
+    let main_id = project.manifest.id.clone();
+    let directory = std::env::temp_dir().join(format!("mod01-native-export-{main_id}"));
+    fs::create_dir(&directory).unwrap();
+    let mut header = [0_u8; 128];
+    header[..6].copy_from_slice(b"\x7fELF\x02\x01");
+    header[18] = 62;
+    let tool = directory.join("tool");
+    let license = directory.join("Node-LICENSE");
+    fs::write(&tool, header).unwrap();
+    fs::write(&license, "Node license fixture").unwrap();
+    let tools = modl_core::NativeToolchain {
+        platform: modl_core::NativePlatform::Linux,
+        player: tool.clone(),
+        node: tool,
+        host: native_host_path(),
+        node_license: license,
+    };
+    project.select_member("arena").unwrap();
+    project
+        .editor_text
+        .push_str("// unsaved child edit must travel in the game\n");
+    let game = project.game().unwrap();
+    let child_id = project.manifest.id.clone();
+    let executable = project.export_native(&directory, &tools).unwrap();
+    let output = directory.join(format!("{main_id}-native"));
+    assert!(executable.starts_with(&output));
+    assert_eq!(fs::read(output.join("game.m01c")).unwrap(), game.bytes());
+    assert!(!directory.join(format!("{child_id}-native")).exists());
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(output.join("mod01-game.json")).unwrap()).unwrap();
+    assert_eq!(metadata["cartridgeId"], main_id);
+    assert_eq!(metadata["gameIdentity"], game.identity());
+    assert_eq!(metadata["members"]["arena"]["cartridgeId"], child_id);
+    assert_eq!(project.member_alias(), "arena");
+    assert!(project.editor_text.contains("// unsaved child edit"));
+    assert!(
+        project
+            .export_native(&directory, &tools)
+            .unwrap_err()
+            .contains("already exists")
+    );
+    project.editor_text = "on draw:\n  absent_function()\n".to_owned();
+    let invalid = directory.join("invalid");
+    let error = project.export_native(&invalid, &tools).unwrap_err();
+    assert!(error.contains("arena"), "{error}");
+    assert!(!invalid.exists());
+    assert_eq!(fs::read(output.join("game.m01c")).unwrap(), game.bytes());
+    fs::remove_dir_all(directory).unwrap();
+}
+
 fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
     let context = egui::Context::default();
     let mut app = StudioApp::new_with_devices(None, &context, false);

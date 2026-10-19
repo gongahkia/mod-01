@@ -234,8 +234,7 @@ enum NativeTarget {
 
 fn export_native_directory(arguments: &NativeExportArguments) -> ExitCode {
     let result = (|| -> Result<PathBuf, String> {
-        let (rom, cart, _) = load_headless_cartridge(&arguments.path)
-            .map_err(|()| "cannot load native cartridge".to_owned())?;
+        let game = load_game(&arguments.path).map_err(|()| "cannot load native game".to_owned())?;
         let mut tools = modl_core::NativeToolchain::discover(
             arguments.player.as_deref(),
             arguments.node.as_deref(),
@@ -251,9 +250,11 @@ fn export_native_directory(arguments: &NativeExportArguments) -> ExitCode {
             };
         }
         let output = arguments.output.clone().unwrap_or_else(|| {
-            project_output_directory(&arguments.path).join(format!("{}-native", cart.manifest.id))
+            project_output_directory(&arguments.path)
+                .join(format!("{}-native", game.entry().manifest.id))
         });
-        modl_core::export_native_game(&output, &rom, &tools).map_err(|error| error.to_string())
+        modl_core::export_native_game(&output, game.bytes(), &tools)
+            .map_err(|error| error.to_string())
     })();
     match result {
         Ok(executable) => {

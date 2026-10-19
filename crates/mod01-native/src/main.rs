@@ -1045,15 +1045,15 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        match project.pack() {
-            Ok(bytes) => {
+        match project.game() {
+            Ok(game) => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(format!("{}.m01c", project.manifest.id))
+                    .set_file_name(format!("{}.m01c", game.entry().manifest.id))
                     .add_filter("MOD-01 cartridge", &["m01c"])
                     .save_file()
                 {
-                    self.status = match fs::write(path, &bytes) {
-                        Ok(()) => format!("PACKED {} BYTES", bytes.len()),
+                    self.status = match fs::write(path, game.bytes()) {
+                        Ok(()) => format!("PACKED {} BYTES", game.bytes().len()),
                         Err(error) => error.to_string(),
                     };
                 }
@@ -1092,9 +1092,7 @@ impl StudioApp {
                 None,
             )
             .map_err(|error| error.to_string())?;
-            let output = parent.join(format!("{}-native", project.manifest.id));
-            modl_core::export_native_game(&output, &project.pack()?, &tools)
-                .map_err(|error| error.to_string())
+            project.export_native(&parent, &tools)
         })();
         self.status = match result {
             Ok(path) => format!("EXPORTED {}", path.display()),

@@ -41,8 +41,10 @@ section sizes, largest entries and a deterministic 60-frame production-core
 profile. The profile uses empty input/save and a fixed seed; use explicit
 `run --headless` input for gameplay verification.
 
-`export native` bundles the native player, canonical cartridge, shared runtime,
-Node executable and notices. Existing output directories are refused. Target
+`export native` accepts source/raw/PNG games and bundles the native player, complete
+canonical game (all logical cartridges and their source), shared runtime, Node
+executable and notices. Main owns the package title/ID; each member retains its own
+save ID and ROM capacity. Existing output directories are refused. Target
 binaries must match the selected desktop platform and architecture; see
 [native games](NATIVE_GAMES.md). There is no HTML or web-ZIP export.
 

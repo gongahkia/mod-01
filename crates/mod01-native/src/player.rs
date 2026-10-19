@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use eframe::egui;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -92,10 +93,12 @@ impl StudioApp {
 }
 
 /// Exercises the exact native child-process bridge without a display, audio device or save writes.
+#[allow(clippy::too_many_lines)] // one ordered load/frame/stop verification workflow
 pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
     let project = NativeProject::open(path)?;
+    let game = project.game()?;
     let bridge = RuntimeBridge::new(native_host_path());
-    bridge.send(project.load_command(false, &[])?)?;
+    bridge.send(NativeProject::game_command(&game, false, &BTreeMap::new())?)?;
     let receive = || -> Result<Value, String> {
         let deadline = Instant::now() + Duration::from_secs(7);
         loop {
@@ -111,36 +114,78 @@ pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
             thread::sleep(Duration::from_millis(1));
         }
     };
-    if receive()?["type"] != "loaded" {
+    let loaded = receive()?;
+    if loaded["type"] != "loaded" || loaded["identity"] != game.identity() {
         return Err("native load failed".to_owned());
     }
     let mut peak = 0;
-    let mut fingerprint = 0_u64;
+    let mut pixels_hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut audio_hash = pixels_hash;
+    let mut saves_hash = pixels_hash;
+    let mut timeline_hash = pixels_hash;
+    let mut member_frames: BTreeMap<String, u32> = BTreeMap::new();
+    let mut save_commit_frames: BTreeMap<String, u32> = BTreeMap::new();
+    let mut audio_peak = 0.0_f32;
     for frame in 0..frames {
         bridge.send(json!({"type":"frame","input":replay::empty_input()}))?;
         let value = receive()?;
         if value["type"] != "frame" || value["frame"] != frame {
             return Err("native frame sequence differs".to_owned());
         }
+        let alias = value["cartridgeAlias"]
+            .as_str()
+            .ok_or("missing frame producer")?;
+        let member = game
+            .catalog()
+            .cartridges()
+            .get(alias)
+            .ok_or("unknown frame producer")?;
+        if value["cartridgeId"] != member.manifest.id {
+            return Err("native frame producer identity differs".to_owned());
+        }
+        *member_frames.entry(alias.to_owned()).or_default() += 1;
+        fingerprint(
+            &mut timeline_hash,
+            &serde_json::to_vec(&json!({
+                "alias":alias, "id":member.manifest.id, "local":value["cartridgeFrame"],
+                "active":value["active"], "work":value["workUnits"]
+            }))
+            .map_err(|error| error.to_string())?,
+        );
         let pixels = STANDARD
             .decode(value["pixels"].as_str().ok_or("missing pixels")?)
             .map_err(|error| error.to_string())?;
         if pixels.len() != SCREEN_WIDTH * SCREEN_HEIGHT {
             return Err("invalid native frame size".to_owned());
         }
+        fingerprint(&mut pixels_hash, &pixels);
         for channel in ["left", "right"] {
-            if STANDARD
+            let pcm = STANDARD
                 .decode(value[channel].as_str().ok_or("missing PCM")?)
-                .map_err(|error| error.to_string())?
-                .len()
-                != 800 * 4
-            {
+                .map_err(|error| error.to_string())?;
+            if pcm.len() != 800 * 4 {
                 return Err("invalid native PCM frame size".to_owned());
             }
+            for bytes in pcm.chunks_exact(4) {
+                let sample = f32::from_le_bytes(bytes.try_into().expect("complete sample"));
+                if !sample.is_finite() {
+                    return Err("non-finite native PCM sample".to_owned());
+                }
+                audio_peak = audio_peak.max(sample.abs());
+            }
+            fingerprint(&mut audio_hash, &pcm);
         }
-        fingerprint = pixels.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
-        });
+        if let Some(commit) = value["saveCommit"].as_str() {
+            let save = STANDARD.decode(commit).map_err(|error| error.to_string())?;
+            if save.len() != 8192 {
+                return Err("invalid native save image size".to_owned());
+            }
+            *save_commit_frames.entry(alias.to_owned()).or_default() += 1;
+            fingerprint(&mut saves_hash, &frame.to_le_bytes());
+            fingerprint(&mut saves_hash, alias.as_bytes());
+            fingerprint(&mut saves_hash, member.manifest.id.as_bytes());
+            fingerprint(&mut saves_hash, &save);
+        }
         peak = peak.max(value["workUnits"].as_u64().unwrap_or(0));
     }
     bridge.send(json!({"type":"stop"}))?;
@@ -148,6 +193,16 @@ pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
         return Err("native stop failed".to_owned());
     }
     Ok(
-        json!({"cartridge":project.manifest.id,"frames":frames,"workPeak":peak,"framebufferFnv64":format!("{fingerprint:016x}")}),
+        json!({"cartridge":game.entry().manifest.id,"gameIdentity":game.identity(),"frames":frames,
+            "memberFrames":member_frames,"workPeak":peak,"framebufferFnv64":format!("{pixels_hash:016x}"),
+            "audioFnv64":format!("{audio_hash:016x}"),"audioPeak":audio_peak,
+            "saveCommitsFnv64":format!("{saves_hash:016x}"),"saveCommitFrames":save_commit_frames,
+            "timelineFnv64":format!("{timeline_hash:016x}")}),
     )
+}
+
+fn fingerprint(hash: &mut u64, bytes: &[u8]) {
+    *hash = bytes.iter().fold(*hash, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+    });
 }

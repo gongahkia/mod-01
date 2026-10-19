@@ -1,7 +1,8 @@
 //! Native desktop distribution. No browser, network server or external archiver is involved.
-use crate::{CartridgeError, decode_cartridge};
+use crate::{CartridgeError, game::decode_game};
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read as _,
     path::{Path, PathBuf},
@@ -122,13 +123,22 @@ struct PackageManifest<'a> {
     architecture: &'a str,
     cartridge_id: &'a str,
     cartridge_bytes: usize,
+    game_identity: &'a str,
+    members: BTreeMap<&'a str, PackageMember<'a>>,
     executable: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageMember<'a> {
+    cartridge_id: &'a str,
+    rom_bytes: usize,
 }
 
 /// Creates a new portable directory (a `.app` inside it on macOS).
 /// The exact canonical cartridge, runtime and target binaries travel together.
 /// # Errors
-/// Refuses existing destinations, malformed cartridges, missing tools, mismatched
+/// Refuses existing destinations, malformed games (including unused members), missing tools, mismatched
 /// binary platforms/architectures, and I/O errors. A failed I/O copy can leave a partial new directory.
 #[allow(clippy::too_many_lines)] // one preflight/copy workflow with an explicitly new destination
 pub fn export_native_game(
@@ -136,7 +146,10 @@ pub fn export_native_game(
     cartridge: &[u8],
     tools: &NativeToolchain,
 ) -> Result<PathBuf, CartridgeError> {
-    let cart = decode_cartridge(cartridge)?;
+    // Admission recompiles every member before creating any output. A shipping
+    // game can exceed one ROM without relaxing any logical cartridge's capacity.
+    let game = decode_game(cartridge)?;
+    let cart = game.entry();
     let architecture = binary_architecture(&tools.player, tools.platform)?;
     if architecture != binary_architecture(&tools.node, tools.platform)? {
         return Err(export_error("player and Node architectures differ"));
@@ -216,6 +229,21 @@ pub fn export_native_game(
         architecture,
         cartridge_id: id,
         cartridge_bytes: cartridge.len(),
+        game_identity: game.identity(),
+        members: game
+            .catalog()
+            .cartridges()
+            .iter()
+            .map(|(alias, member)| {
+                (
+                    alias.as_str(),
+                    PackageMember {
+                        cartridge_id: &member.manifest.id,
+                        rom_bytes: member.bytes.len(),
+                    },
+                )
+            })
+            .collect(),
         executable: &relative,
     };
     fs::write(
@@ -223,7 +251,14 @@ pub fn export_native_game(
         serde_json::to_vec_pretty(&metadata).map_err(export_error)?,
     )
     .map_err(export_error)?;
-    fs::write(output.join("README.txt"), format!("{} / MOD-01 native game\n\nRun {} (or open the .app on macOS). Keep all bundled files together.\nArrows + Z/X/A/S + Q/W + Enter. Escape pauses. SOURCE opens the complete authored cartridge in Studio.\nSaves are local to MOD-01 and keyed by cartridge id: {id}.\nThe game/runtime never needs a browser or Node installation.\nUnsigned builds may trigger OS trust prompts; distribution signing is the publisher's responsibility.\n", cart.manifest.title, relative)).map_err(export_error)?;
+    let save_ids = game
+        .catalog()
+        .cartridges()
+        .values()
+        .map(|member| member.manifest.id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    fs::write(output.join("README.txt"), format!("{} / MOD-01 native game\n\nRun {} (or open the .app on macOS). Keep all bundled files together.\nArrows + Z/X/A/S + Q/W + Enter. Escape pauses. SOURCE opens the active cartridge in the complete authored game in Studio.\nAll {} cartridge(s) and their authored source travel in game.m01c. Transfers never fetch files or code.\nSaves are local to MOD-01 and separate for each cartridge id: {save_ids}.\nGame SHA-256: {}.\nThe game/runtime never needs a browser or Node installation.\nUnsigned builds may trigger OS trust prompts; distribution signing is the publisher's responsibility.\n", cart.manifest.title, relative, game.catalog().cartridges().len(), game.identity())).map_err(export_error)?;
     let credits = output.join("licenses");
     fs::create_dir(&credits).map_err(export_error)?;
     fs::write(credits.join("Node.txt"), &node_license).map_err(export_error)?;
@@ -314,7 +349,158 @@ fn export_error(error: impl std::fmt::Display) -> CartridgeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+
+    fn fixture_tools(root: &Path, platform: NativePlatform) -> NativeToolchain {
+        fs::create_dir_all(root).unwrap();
+        let mut header = [0_u8; 128];
+        match platform {
+            NativePlatform::Linux => {
+                header[..6].copy_from_slice(b"\x7fELF\x02\x01");
+                header[18] = 62;
+            }
+            NativePlatform::Windows => {
+                header[..2].copy_from_slice(b"MZ");
+                header[60] = 80;
+                header[80..86].copy_from_slice(b"PE\0\0\x64\x86");
+            }
+            NativePlatform::Macos => {
+                header[..8].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0, 0, 1]);
+            }
+        }
+        let player = root.join("player");
+        fs::write(&player, header).unwrap();
+        let host = root.join("host.mjs");
+        fs::write(&host, "process.stdin; // native host fixture").unwrap();
+        let node_license = root.join("Node-LICENSE");
+        fs::write(&node_license, "Node license fixture").unwrap();
+        NativeToolchain {
+            platform,
+            player: player.clone(),
+            node: player,
+            host,
+            node_license,
+        }
+    }
+
+    #[test]
+    fn native_packages_keep_large_complete_games_main_identity_and_each_members_own_rom_size() {
+        let root =
+            std::env::temp_dir().join(format!("mod01-native-whole-game-{}", std::process::id()));
+        let mut main =
+            crate::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        main.files.insert(
+            "authoring/notes.txt".to_owned(),
+            (0..600_000)
+                .map(|index| b'a' + u8::try_from((index * 17 + index / 29) % 26).unwrap())
+                .collect(),
+        );
+        let mut child = main.clone();
+        child.manifest.id = "native-child".to_owned();
+        child.manifest.title = "CHILD TITLE".to_owned();
+        let source = crate::workcart::encode_workcart_with_bundle(
+            &main.manifest,
+            &main.files,
+            &[],
+            &[],
+            &[crate::bundle::BundleSource {
+                alias: "child".to_owned(),
+                source: crate::encode_workcart(&child.manifest, &child.files, &[], &[]).unwrap(),
+            }],
+        )
+        .unwrap();
+        let game = crate::game::pack_game_workcart(&source).unwrap();
+        assert!(game.bytes().len() > crate::cartridge::CARTRIDGE_CAPACITY_BYTES);
+        for platform in [
+            NativePlatform::Linux,
+            NativePlatform::Windows,
+            NativePlatform::Macos,
+        ] {
+            let directory = root.join(format!("{platform:?}"));
+            let tools = fixture_tools(&directory, platform);
+            let output = directory.join("game");
+            let executable = export_native_game(&output, game.bytes(), &tools).unwrap();
+            let binaries = executable.parent().unwrap();
+            assert_eq!(fs::read(binaries.join("game.m01c")).unwrap(), game.bytes());
+            assert_eq!(
+                fs::read(&executable).unwrap(),
+                fs::read(&tools.player).unwrap()
+            );
+            let metadata: serde_json::Value =
+                serde_json::from_slice(&fs::read(output.join("mod01-game.json")).unwrap()).unwrap();
+            assert_eq!(metadata["cartridgeId"], "blank-cart");
+            assert_eq!(metadata["gameIdentity"], game.identity());
+            assert_eq!(metadata["cartridgeBytes"], game.bytes().len());
+            assert_eq!(metadata["members"].as_object().unwrap().len(), 2);
+            for (alias, member) in game.catalog().cartridges() {
+                assert_eq!(
+                    metadata["members"][alias]["cartridgeId"],
+                    member.manifest.id
+                );
+                assert_eq!(metadata["members"][alias]["romBytes"], member.bytes.len());
+                assert!(member.bytes.len() < crate::cartridge::CARTRIDGE_CAPACITY_BYTES);
+            }
+            let readme = fs::read_to_string(output.join("README.txt")).unwrap();
+            assert!(readme.contains("BLANK CART / MOD-01"));
+            assert!(readme.contains("blank-cart"));
+            assert!(readme.contains("native-child"));
+            assert!(readme.contains(game.identity()));
+            if platform == NativePlatform::Macos {
+                let plist =
+                    fs::read_to_string(output.join("blank-cart.app/Contents/Info.plist")).unwrap();
+                assert!(plist.contains("<string>BLANK CART</string>"));
+                assert!(executable.starts_with(output.join("blank-cart.app/Contents/MacOS")));
+            }
+            assert!(export_native_game(&output, game.bytes(), &tools).is_err());
+            assert_eq!(fs::read(binaries.join("game.m01c")).unwrap(), game.bytes());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_export_rejects_rehashed_archived_javascript_not_produced_by_its_source_before_creating_output()
+     {
+        use crate::cartridge::{
+            CARTRIDGE_ARCHIVE_LIMITS, FileIntegrity, encode_archive_with_limits, sha256_hex,
+        };
+        let root = std::env::temp_dir().join(format!("mod01-native-forged-{}", std::process::id()));
+        let tools = fixture_tools(&root, NativePlatform::Linux);
+        let game =
+            crate::game::pack_game_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                .unwrap();
+        let mut decoded = crate::decode_cartridge(game.bytes()).unwrap();
+        let forged =
+            b"export default () => { throw new Error('untrusted archived build'); };".to_vec();
+        let integrity = FileIntegrity {
+            bytes: u32::try_from(forged.len()).unwrap(),
+            sha256: sha256_hex(&forged),
+        };
+        decoded
+            .manifest
+            .files
+            .insert("build/cartridge.js".to_owned(), integrity.clone());
+        decoded.manifest.compiled_program = Some(integrity);
+        decoded
+            .entries
+            .insert("build/cartridge.js".to_owned(), forged);
+        decoded.entries.insert(
+            "manifest.json".to_owned(),
+            serde_json::to_vec(&decoded.manifest).unwrap(),
+        );
+        let bytes = encode_archive_with_limits(&decoded.entries, CARTRIDGE_ARCHIVE_LIMITS).unwrap();
+        assert!(
+            crate::decode_cartridge(&bytes).is_ok(),
+            "ordinary archive integrity is valid"
+        );
+        let output = root.join("game");
+        assert_eq!(
+            export_native_game(&output, &bytes, &tools)
+                .unwrap_err()
+                .code,
+            "M014015"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn recognizes_target_headers_and_refuses_other_architectures() {

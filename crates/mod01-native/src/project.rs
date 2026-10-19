@@ -395,6 +395,17 @@ impl NativeProject {
         Ok((game.entry().manifest.id.clone(), png))
     }
 
+    pub fn export_native(
+        &self,
+        parent: &Path,
+        tools: &modl_core::NativeToolchain,
+    ) -> Result<PathBuf, String> {
+        let game = self.game()?;
+        let output = parent.join(format!("{}-native", game.entry().manifest.id));
+        modl_core::export_native_game(&output, game.bytes(), tools)
+            .map_err(|error| error.to_string())
+    }
+
     /// Fresh/disposable entry save convenience; all other members start with empty saves.
     pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
         let game = self.game()?;

@@ -51,6 +51,27 @@ choices remain outstanding.
 
 ## Progress
 
+- Native package export now admits the complete source/raw/PNG game before any
+  output is created, preserves exact shipped bytes and selects main's package
+  identity even from a child editor. Metadata records whole-game SHA-256 and every
+  member's own ROM size/save ID. Core tests cover large games and Linux/Windows/
+  macOS layouts (not cross-OS execution), rejection of rehashed foreign JavaScript
+  and refusal to overwrite. CLI and Studio integrations cover all three input
+  forms, unsaved child source, unused-member rejection and selected-child identity.
+  The production package verifier now fingerprints every display frame, PCM,
+  routing timeline and producer-owned save commit rather than only the final
+  framebuffer, and exercises a >1 MiB two-member transfer game without PATH.
+  Both members produce 60 frames/save commits and non-silent PCM in that 120-frame
+  Linux package run. Inspected `output/native-package-qa-zhnM9X` captures show the
+  exported executable launched without arguments from `/tmp` with PATH empty,
+  the native pause action entering arena, and SOURCE opening `arena/src/main.modl`
+  in a two-member Studio workspace. No source or user save files were changed.
+  The full gate passes 275 runtime, 124 core, 112 native and 27 CLI tests,
+  formatting/lint/types/all-feature Clippy/builds, nine unchanged raw/PNG pairs
+  and both 120-frame packaged Linux runs without PATH. The capture session ended
+  with external X11 window destruction (winit reported a TranslateCoordinates
+  error); this does not demonstrate graceful normal-window closure or device QA.
+  Bundle-wide analysis and the final cross-host/device audit remain open.
 - PNG export/import now carries an admitted complete game, with separate shipping
   wrapper and logical-ROM limits. Core rejects CRC-correct invalid/obsolete payloads
   and computes CRC over slices without another payload-sized temporary buffer.

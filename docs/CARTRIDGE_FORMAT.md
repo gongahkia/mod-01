@@ -118,8 +118,10 @@ Use `mod01 export png PROJECT --output game.m01c.png`.
 
 ## Native distribution
 
-`mod01 export native` bundles the same cartridge with a native player, Node
-runtime and notices. It does not change cartridge semantics or embed a browser.
+`mod01 export native` bundles the same complete admitted game with a native player,
+Node runtime and notices. All logical cartridges and their source travel together;
+main owns package presentation, while each cartridge retains its separate save ID
+and ROM capacity. It does not change cartridge semantics or embed a browser.
 See [NATIVE_GAMES.md](NATIVE_GAMES.md) for target binaries, directory/`.app`
 layouts, reproducibility boundaries and OS signing requirements.
 

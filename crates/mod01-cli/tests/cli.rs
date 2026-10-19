@@ -361,6 +361,87 @@ fn large_whole_game_png_exports_current_bytes_and_replays_identically_with_trans
 }
 
 #[test]
+fn native_export_accepts_identical_source_raw_and_png_games_without_running_node() {
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-cli-native-game-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let source = game_fixture(2, true);
+    let game = modl_core::game::pack_game_workcart(&source).unwrap();
+    let path = directory.join("cart.m01w");
+    let raw = directory.join("game.m01c");
+    let png = directory.join("game.m01c.png");
+    fs::write(&path, &source).unwrap();
+    fs::write(&raw, game.bytes()).unwrap();
+    fs::write(
+        &png,
+        modl_core::cartridge_png::encode_game_png(&game).unwrap(),
+    )
+    .unwrap();
+    let mut header = [0_u8; 128];
+    header[..6].copy_from_slice(b"\x7fELF\x02\x01");
+    header[18] = 62;
+    let tool = directory.join("tool");
+    let host = directory.join("native-host.mjs");
+    let license = directory.join("Node-LICENSE");
+    fs::write(&tool, header).unwrap();
+    fs::write(&host, "process.stdin; // toolchain fixture, never executed").unwrap();
+    fs::write(&license, "Node license fixture").unwrap();
+    for (index, input) in [&path, &raw, &png].iter().enumerate() {
+        let output = directory.join(format!("native-{index}"));
+        let result = binary()
+            .args(["export", "native"])
+            .arg(input)
+            .arg("--output")
+            .arg(&output)
+            .arg("--player")
+            .arg(&tool)
+            .arg("--node")
+            .arg(&tool)
+            .arg("--host")
+            .arg(&host)
+            .arg("--node-license")
+            .arg(&license)
+            .args(["--platform", "linux"])
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(fs::read(output.join("game.m01c")).unwrap(), game.bytes());
+        let metadata: Value =
+            serde_json::from_slice(&fs::read(output.join("mod01-game.json")).unwrap()).unwrap();
+        assert_eq!(metadata["gameIdentity"], game.identity());
+        assert_eq!(metadata["cartridgeId"], "cli-game-main");
+        assert_eq!(
+            metadata["members"]["arena"]["cartridgeId"],
+            "cli-game-member-1"
+        );
+        assert_eq!(metadata["members"].as_object().unwrap().len(), 2);
+        let inspected = binary()
+            .arg("info")
+            .arg(output.join("game.m01c"))
+            .arg("--source")
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(inspected.status.success());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&inspected.stdout).unwrap()["bundle"][0]["alias"],
+            "arena"
+        );
+    }
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+    assert_eq!(fs::read(&raw).unwrap(), game.bytes());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_need_no_node() {
     let directory = std::env::temp_dir().join(format!(
         "mod01-game-invalid-{}-{}",
@@ -418,9 +499,13 @@ fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_
         .unwrap(),
     )
     .unwrap();
-    for command in ["check", "pack", "run"] {
+    for command in ["check", "pack", "run", "export"] {
         let mut call = binary();
-        call.arg(command).arg(&path).env("PATH", "");
+        call.arg(command);
+        if command == "export" {
+            call.arg("native");
+        }
+        call.arg(&path).env("PATH", "");
         if command == "run" {
             call.arg("--headless");
         }

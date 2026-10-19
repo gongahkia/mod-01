@@ -37,6 +37,25 @@ selects a wrapped animation frame. `sprite_xform(asset, x, y, scale, quarter_tur
 uses deterministic nearest-neighbour integer scaling from 1x through 16x and rotation in exact
 quarter turns. Transformed output is charged more heavily than an ordinary blit.
 
+`sprite_region(asset, sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y)` takes a
+typed `Sprite`, eight `Int` rectangle fields and two explicit `Bool` flips.
+Source and destination rectangles use top-left pixel coordinates and extents.
+Nonpositive extents draw nothing; positive source axes are at most 128 and
+destination axes at most 2048. Destination pixel `(i,j)` samples source offset
+`(floor(i*sw/dw), floor(j*sh/dh))`; flipping reverses that offset within the
+requested source rectangle before adding `(sx,sy)`. Sampling is nearest-neighbour,
+including unequal scaling and shrinking. Source samples outside the actual
+sprite are skipped, preserving destination alignment; they are not treated as
+colour zero. The camera, clip, blit-transparency mask and palette remap apply
+normally. Primitive fill patterns do not affect asset blits.
+
+Region work is `max(1, ceil(dw*dh/4))` device units for positive extents, otherwise
+one. The whole destination area is charged even if clipped or offscreen, before
+any pixels change; exhausting the work budget faults with `M019001`. Invalid
+geometry/types fault with `M019009` at the source call. Visible iteration is
+clipped to the screen, and all sampling products fit exact integer arithmetic.
+Each call consumes one draw command and is forbidden in `on raster`.
+
 The `palt` mask affects sprites, transformed sprites, animation and map tiles.
 It tests the original indexed source colour **before** the drawing palette remap.
 For example, remapping opaque colour 2 to transparent colour 0 still draws it;

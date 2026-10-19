@@ -24,7 +24,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [ ]      |
 | Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
-| Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [ ]      |
+| Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [x]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [ ]      |
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
@@ -136,3 +136,13 @@ choices remain outstanding.
   The updated visual workcart asserts real drawing and MMIO in release/debug,
   native/headless and replay. Its running native-player frame was inspected in
   `output/native-qa-8iPAwp/pattern-visual-cartridge.png` (960×650 window).
+
+- Sprite regions: `sprite_region` provides typed source/destination rectangles,
+  nearest stretching/shrinking, independent flips, preserved out-of-source holes,
+  camera/clip/mask/remap and charged destination-area work before mutation.
+  An independent sampler compares 180 combinations; tests include integer-boundary
+  camera coordinates, transparent source colour zero, pattern exclusion, empty
+  rectangles, invalid limits and pre-draw work faults. Three compiler drawing
+  tests and 38 focused graphics/hardware tests pass, with lint/types/Clippy.
+  Real visual-cart assertions run in release/debug, native/headless and full
+  snapshot replay. Final cross-platform packaging/input/audio QA remains open.

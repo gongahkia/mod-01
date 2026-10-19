@@ -1,4 +1,44 @@
-use modl_core::{AssetCatalog, CompileMode, FileId, SourceFile, compile};
+use modl_core::{AssetCatalog, AssetKind, CompileMode, FileId, SourceFile, compile};
+
+#[test]
+fn region_blits_require_a_sprite_integer_rectangles_and_explicit_boolean_flips() {
+    let mut assets = AssetCatalog::default();
+    assets.insert("image", AssetKind::Sprite);
+    assets.insert("level", AssetKind::Map);
+    for (statement, valid) in [
+        (
+            "sprite_region(#image, 0, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            true,
+        ),
+        (
+            "sprite_region(#level, 0, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            false,
+        ),
+        (
+            "sprite_region(#image, 0.5, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            false,
+        ),
+        (
+            "sprite_region(#image, 0, 0, 4, 4, 1, 2, 8, 6, 0, true)",
+            false,
+        ),
+    ] {
+        for mode in [CompileMode::Release, CompileMode::Debug] {
+            let source = SourceFile::new(
+                FileId(0),
+                "region.modl",
+                format!("on draw:\n  {statement}\n"),
+            );
+            let result = compile(&source, &assets, mode);
+            assert_eq!(
+                result.generated.is_some(),
+                valid,
+                "{statement}: {:?}",
+                result.analysis.diagnostics
+            );
+        }
+    }
+}
 
 #[test]
 fn transparency_and_patterns_are_typed_in_both_compiler_modes() {

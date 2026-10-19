@@ -379,6 +379,23 @@ impl<'syntax> Analyzer<'syntax> {
             Type::Unit,
         );
         self.builtin(
+            "sprite_region",
+            vec![
+                Type::Asset(AssetKind::Sprite),
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Bool,
+                Type::Bool,
+            ],
+            Type::Unit,
+        );
+        self.builtin(
             "map",
             vec![Type::Asset(AssetKind::Map), Type::Int, Type::Int],
             Type::Unit,

@@ -603,6 +603,7 @@ const DRAW_CALLS = new Set([
   'clip_reset',
   'sprite',
   'sprite_xform',
+  'sprite_region',
   'animation',
   'map',
   'pal',
@@ -650,6 +651,13 @@ export function consoleWorkCost(name: string, arguments_: readonly unknown[]): n
       return 32;
     case 'sprite_xform':
       return Math.max(32, 32 * Math.abs(integer(3)) ** 2);
+    case 'sprite_region': {
+      if ([3, 4, 7, 8].some((index) => integer(index) <= 0)) return 1;
+      return Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(1, Math.ceil((integer(7) * integer(8)) / 4)),
+      );
+    }
     case 'map':
       return 128;
     case 'print':

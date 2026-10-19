@@ -455,6 +455,25 @@ export class IndexedGraphics {
         );
         return;
       }
+      case 'sprite_region': {
+        if (command.arguments.length !== 11)
+          throw new TypeError('sprite_region expects eleven arguments');
+        this.drawSpriteRegion(
+          readAssetName(command.arguments[0], 'Sprite'),
+          expectInteger(command.arguments[1]),
+          expectInteger(command.arguments[2]),
+          expectInteger(command.arguments[3]),
+          expectInteger(command.arguments[4]),
+          expectInteger(command.arguments[5]),
+          expectInteger(command.arguments[6]),
+          expectInteger(command.arguments[7]),
+          expectInteger(command.arguments[8]),
+          expectBoolean(command.arguments[9]),
+          expectBoolean(command.arguments[10]),
+          state,
+        );
+        return;
+      }
       case 'map': {
         const [handle, x, y] = command.arguments;
         this.drawMap(readAssetName(handle, 'Map'), expectInteger(x), expectInteger(y), state);
@@ -714,11 +733,74 @@ export class IndexedGraphics {
           sourceY = sprite.height - 1 - sourceY;
         }
         const color = sprite.pixels[sourceY * sprite.width + sourceX] ?? HARDWARE.transparentColor;
-        if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0) {
-          this.plot(x + outputX, y + outputY, color, state);
-        }
+        this.plotTexture(x + outputX, y + outputY, color, state);
       }
     }
+  }
+
+  private drawSpriteRegion(
+    name: string,
+    sourceX: number,
+    sourceY: number,
+    sourceWidth: number,
+    sourceHeight: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    flipX: boolean,
+    flipY: boolean,
+    state: DrawState,
+  ): void {
+    const sprite = this.assets.get(name);
+    if (sprite?.kind !== 'sprite') throw new TypeError(`missing Sprite asset '${name}'`);
+    if (sourceWidth <= 0 || sourceHeight <= 0 || width <= 0 || height <= 0) return;
+    if (
+      sourceWidth > HARDWARE.spriteMaximumAxis ||
+      sourceHeight > HARDWARE.spriteMaximumAxis ||
+      width > 2048 ||
+      height > 2048
+    )
+      throw new RangeError(
+        'sprite region source axes must be at most 128 and destination axes at most 2048',
+      );
+    if (
+      sourceX >= sprite.width ||
+      sourceY >= sprite.height ||
+      sourceX <= -sourceWidth ||
+      sourceY <= -sourceHeight
+    )
+      return;
+    const left = x - state.cameraX;
+    const top = y - state.cameraY;
+    const screenState = { ...state, cameraX: 0, cameraY: 0 };
+    const firstX = Math.max(0, Math.max(0, state.clipX) - left);
+    const firstY = Math.max(0, Math.max(0, state.clipY) - top);
+    const lastX = Math.min(width, Math.min(HARDWARE.width, state.clipX + state.clipWidth) - left);
+    const lastY = Math.min(height, Math.min(HARDWARE.height, state.clipY + state.clipHeight) - top);
+    for (let row = firstY; row < lastY; row++) {
+      let sy = Math.floor((row * sourceHeight) / height);
+      if (flipY) sy = sourceHeight - 1 - sy;
+      sy += sourceY;
+      if (sy < 0 || sy >= sprite.height) continue;
+      for (let column = firstX; column < lastX; column++) {
+        let sx = Math.floor((column * sourceWidth) / width);
+        if (flipX) sx = sourceWidth - 1 - sx;
+        sx += sourceX;
+        if (sx < 0 || sx >= sprite.width) continue;
+        this.plotTexture(
+          left + column,
+          top + row,
+          sprite.pixels[sy * sprite.width + sx] ?? 0,
+          screenState,
+        );
+      }
+    }
+  }
+
+  private plotTexture(x: number, y: number, color: number, state: DrawState): void {
+    if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
+      this.plot(x, y, color, state);
   }
 
   private drawMap(name: string, x: number, y: number, state: DrawState): void {

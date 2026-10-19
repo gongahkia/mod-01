@@ -2120,6 +2120,24 @@ var IndexedGraphics = class {
         );
         return;
       }
+      case 'sprite_region':
+        if (command.arguments.length !== 11)
+          throw new TypeError('sprite_region expects eleven arguments');
+        this.drawSpriteRegion(
+          readAssetName(command.arguments[0], 'Sprite'),
+          expectInteger$1(command.arguments[1]),
+          expectInteger$1(command.arguments[2]),
+          expectInteger$1(command.arguments[3]),
+          expectInteger$1(command.arguments[4]),
+          expectInteger$1(command.arguments[5]),
+          expectInteger$1(command.arguments[6]),
+          expectInteger$1(command.arguments[7]),
+          expectInteger$1(command.arguments[8]),
+          expectBoolean(command.arguments[9]),
+          expectBoolean(command.arguments[10]),
+          state,
+        );
+        return;
       case 'map': {
         const [handle, x, y] = command.arguments;
         this.drawMap(readAssetName(handle, 'Map'), expectInteger$1(x), expectInteger$1(y), state);
@@ -2297,9 +2315,75 @@ var IndexedGraphics = class {
         if (flipX) sourceX = sprite.width - 1 - sourceX;
         if (flipY) sourceY = sprite.height - 1 - sourceY;
         const color = sprite.pixels[sourceY * sprite.width + sourceX] ?? HARDWARE.transparentColor;
-        if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
-          this.plot(x + outputX, y + outputY, color, state);
+        this.plotTexture(x + outputX, y + outputY, color, state);
       }
+  }
+  drawSpriteRegion(
+    name,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+    x,
+    y,
+    width,
+    height,
+    flipX,
+    flipY,
+    state,
+  ) {
+    const sprite = this.assets.get(name);
+    if (sprite?.kind !== 'sprite') throw new TypeError(`missing Sprite asset '${name}'`);
+    if (sourceWidth <= 0 || sourceHeight <= 0 || width <= 0 || height <= 0) return;
+    if (
+      sourceWidth > HARDWARE.spriteMaximumAxis ||
+      sourceHeight > HARDWARE.spriteMaximumAxis ||
+      width > 2048 ||
+      height > 2048
+    )
+      throw new RangeError(
+        'sprite region source axes must be at most 128 and destination axes at most 2048',
+      );
+    if (
+      sourceX >= sprite.width ||
+      sourceY >= sprite.height ||
+      sourceX <= -sourceWidth ||
+      sourceY <= -sourceHeight
+    )
+      return;
+    const left = x - state.cameraX;
+    const top = y - state.cameraY;
+    const screenState = {
+      ...state,
+      cameraX: 0,
+      cameraY: 0,
+    };
+    const firstX = Math.max(0, Math.max(0, state.clipX) - left);
+    const firstY = Math.max(0, Math.max(0, state.clipY) - top);
+    const lastX = Math.min(width, Math.min(HARDWARE.width, state.clipX + state.clipWidth) - left);
+    const lastY = Math.min(height, Math.min(HARDWARE.height, state.clipY + state.clipHeight) - top);
+    for (let row = firstY; row < lastY; row++) {
+      let sy = Math.floor((row * sourceHeight) / height);
+      if (flipY) sy = sourceHeight - 1 - sy;
+      sy += sourceY;
+      if (sy < 0 || sy >= sprite.height) continue;
+      for (let column = firstX; column < lastX; column++) {
+        let sx = Math.floor((column * sourceWidth) / width);
+        if (flipX) sx = sourceWidth - 1 - sx;
+        sx += sourceX;
+        if (sx < 0 || sx >= sprite.width) continue;
+        this.plotTexture(
+          left + column,
+          top + row,
+          sprite.pixels[sy * sprite.width + sx] ?? 0,
+          screenState,
+        );
+      }
+    }
+  }
+  plotTexture(x, y, color, state) {
+    if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
+      this.plot(x, y, color, state);
   }
   drawMap(name, x, y, state) {
     const map = this.assets.get(name);
@@ -5073,6 +5157,7 @@ var DRAW_CALLS = /* @__PURE__ */ new Set([
   'clip_reset',
   'sprite',
   'sprite_xform',
+  'sprite_region',
   'animation',
   'map',
   'pal',
@@ -5118,6 +5203,12 @@ function consoleWorkCost(name, arguments_) {
       return 32;
     case 'sprite_xform':
       return Math.max(32, 32 * Math.abs(integer(3)) ** 2);
+    case 'sprite_region':
+      if ([3, 4, 7, 8].some((index) => integer(index) <= 0)) return 1;
+      return Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(1, Math.ceil((integer(7) * integer(8)) / 4)),
+      );
     case 'map':
       return 128;
     case 'print':

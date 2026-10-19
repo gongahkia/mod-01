@@ -88,6 +88,12 @@ on draw:
   pixel(44, 8, 7)
   assert mem_read(104364) == 7, "reset returns ordinary drawing"
   fill_pattern(65535, 255, false)
+  sprite_region(#dot, 0, 0, 1, 1, 52, 8, 6, 4, true, true)
+  assert mem_read(104372) == 23, "region ignores primitive pattern"
+  assert mem_read(105097) == 23, "stretched region reaches final pixel"
+  sprite_region(#dot, -1, 0, 2, 1, 60, 8, 4, 1, false, false)
+  assert mem_read(104380) == 0, "out of source region is skipped"
+  assert mem_read(104382) == 23, "source clipping preserves destination alignment"
 """
 
 [[asset]]

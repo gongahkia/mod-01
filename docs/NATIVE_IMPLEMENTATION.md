@@ -31,7 +31,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [x]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [x]      |
 | Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested.                                                                  | [ ]      |
-| Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [ ]      |
+| Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [x]      |
 | Examples and games            | Documented, playable and tested 2D and software-rendered 3D games demonstrate the added APIs using public facilities.                                                                                       | [x]      |
 | Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [ ]      |
 
@@ -51,16 +51,36 @@ choices remain outstanding.
 
 ## Progress
 
+- Offline native library is implemented: `docs/LIBRARY.md`, `library.rs`,
+  `library_preview.rs`, `library_store.rs` and their tests cover bundled/user
+  workcarts, packed/PNG source inspection, labels/search/favourites/recents,
+  controller/keyboard navigation, explicit bounded background folder scans,
+  read-only corruption handling and safe bookmark removal. Covers are rendered
+  offline with only the shipped font and no external/data resource resolution;
+  full dependency notices ship in both native packaging paths.
+  Real Studio/Node tests launch source/packed/PNG cartridges and preserve the
+  previous workspace on cancel, invalid manifest, failed open and save failure.
+  Bundled source remains an unsaved copy. Native screenshots inspected at 1280×800
+  and 900×600 demonstrate search, persisted favourites/labels, keyboard launch,
+  paused browsing, source inspection and the unsaved-work confirmation/cancel.
+  Captures are under `output/native-qa-8iPAwp/library-*.png`; only isolated QA
+  preferences were written, never game source. `a41847c` contains the browser;
+  `963746d` and `3afdd8e` contain the lock and small-window/label fixes.
+  Full `scripts/check.sh` passes: 230 runtime tests, 95 native tests, 22 CLI
+  integrations, all core checks, warning-free workspace Clippy/build, nine
+  reproducible raw/PNG pairs and 120 Linux packaged frames with no PATH dependency.
+  There are now 18 completed acceptance rows; multi-cart, broader platform/device
+  export verification and final audit/handoff remain open.
 - Full parallel verification exposed a library-lock lifetime race: closing a
   handle alone need not release a lock while a runtime child briefly inherits
   its file description before exec. The transaction guard now explicitly unlocks
   on every exit. Tests retain a duplicated handle while committing the next
-  transaction, and all 95 native tests pass. The full gate is being rerun.
+  transaction. All 95 native tests and the rerun full gate pass.
 - Offline-library storage foundation: five native tests prove atomic preference
   updates, favourites/labels/recents persistence, stale-instance conflict checks,
   bounded metadata and read-only corruption handling. Forgetting a bookmark never
-  deletes a cartridge. This foundation is test-only until the native browser is
-  connected; the library acceptance row remains open. Workspace Clippy passes.
+  deletes a cartridge. Initially test-only, this foundation is now connected to
+  the native browser described above. Workspace Clippy passes.
 - Scope revalidated against the actual downloaded JSON; baseline is `d9918f7`.
 - Working branch: `feat/native-consolidation`.
 - Implementation and final verification remain open.

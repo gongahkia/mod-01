@@ -674,6 +674,88 @@ fn watch_repacks_native_cartridges_without_a_server() {
 }
 
 #[test]
+fn watch_observes_only_the_single_workcart_even_with_output_inside_the_project() {
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let project = std::env::temp_dir().join(format!(
+        "mod01-watch-input-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    assert!(
+        binary()
+            .arg("new")
+            .arg(&project)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let packed = project.join("live.m01c");
+    let mut child = Running(
+        binary()
+            .arg("watch")
+            .arg(&project)
+            .arg("--output")
+            .arg(&packed)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let output = BufReader::new(child.0.stdout.take().unwrap());
+    let (send, receive) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in output.lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("packed ")
+    );
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("watching ")
+    );
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "output must not trigger another pack"
+    );
+    fs::write(project.join("unrelated.modl"), "on draw:\n  clear(3)\n").unwrap();
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "unembedded neighbouring source is not an input"
+    );
+    let before = fs::read(&packed).unwrap();
+    write_project_file(&project, "src/main.modl", "on draw:\n  clear(1)\n").unwrap();
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("packed ")
+    );
+    assert_ne!(fs::read(&packed).unwrap(), before);
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "repacked output must not feed back into watch"
+    );
+    drop(child);
+    fs::remove_dir_all(project).unwrap();
+}
+
+#[test]
 fn bundled_cartridge_headless_replays_match_golden_machine_traces() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let golden: Value = serde_json::from_slice(

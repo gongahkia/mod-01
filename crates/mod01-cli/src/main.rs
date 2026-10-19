@@ -987,45 +987,16 @@ fn watch_directory(path: &Path, output: Option<&Path>, once: bool) -> ExitCode {
 }
 
 fn directory_fingerprint(path: &Path) -> Result<u64, std::io::Error> {
-    let mut files = Vec::new();
-    if path.is_file() {
-        files.push(path.to_path_buf());
+    // All authored modules/assets/tests live inside the one current workcart.
+    // Generated output and unrelated neighbouring files are never inputs.
+    let source = if path.is_dir() {
+        path.join("cart.m01w")
     } else {
-        collect_fingerprint_files(path, path, &mut files)?;
-    }
-    files.sort();
+        path.to_path_buf()
+    };
     let mut hasher = DefaultHasher::new();
-    for file in files {
-        file.strip_prefix(path).unwrap_or(&file).hash(&mut hasher);
-        fs::read(file)?.hash(&mut hasher);
-    }
+    fs::read(source)?.hash(&mut hasher);
     Ok(hasher.finish())
-}
-
-fn collect_fingerprint_files(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-) -> Result<(), std::io::Error> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            let name = entry.file_name();
-            if !matches!(
-                name.to_str(),
-                Some(".git" | "dist" | "node_modules" | "target")
-            ) {
-                collect_fingerprint_files(root, &entry.path(), files)?;
-            }
-        } else if entry.path() != root.join("cart.m01c") {
-            files.push(entry.path());
-        }
-    }
-    Ok(())
 }
 
 fn info(path: Option<&Path>, source: bool) -> ExitCode {

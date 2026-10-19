@@ -24,10 +24,11 @@ mod01 lsp
 console core under Node and emits a JSON trace; `--output`, `--input` and `--save`
 are headless options. Headless runs do not open a window or write local saves.
 
-`watch` hashes authored bytes and repacks a canonical cartridge after changes.
+`watch` hashes the single authored workcart and repacks a canonical cartridge after changes.
 It does not serve HTTP or open a browser. Invalid edits report diagnostics and
 leave the last successful cartridge intact. `watch --once` packs once and exits.
-Use an output outside authored source, preferably the default `dist/` directory.
+Generated output and neighbouring files are not watched, including a custom
+output inside the project directory. The default output remains in `dist/`.
 
 `export png` contains the complete canonical cartridge in a validated PNG chunk.
 `info` accepts raw/PNG cartridges and reports metadata, exact packed size,

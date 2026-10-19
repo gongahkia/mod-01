@@ -36,8 +36,12 @@ pub fn playground_source(
     if input.len().saturating_add(definitions.len()) > PLAYGROUND_MAX_SOURCE_BYTES {
         return Err(error("scratchpad source exceeds 64 KiB"));
     }
-    let input = input.trim_matches([' ', '\t', '\n', '\r']);
-    if input.is_empty() {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let input = match mode {
+        PlaygroundMode::Expression => normalized.trim_matches([' ', '\t', '\n']),
+        PlaygroundMode::Statements => normalized.trim_matches('\n'),
+    };
+    if input.trim_matches([' ', '\t', '\n']).is_empty() {
         return Err(error("scratchpad input is empty"));
     }
     if mode == PlaygroundMode::Expression && input.contains(['\n', '\r']) {
@@ -55,9 +59,19 @@ pub fn playground_source(
             Some(PLAYGROUND_RESULT_NAME)
         }
         PlaygroundMode::Statements => {
+            let indentation = input
+                .lines()
+                .filter(|line| !line.trim_matches(' ').is_empty())
+                .map(|line| line.bytes().take_while(|byte| *byte == b' ').count())
+                .min()
+                .unwrap_or(0);
             for line in input.lines() {
                 source.push_str("  ");
-                source.push_str(line);
+                source.push_str(if line.trim_matches(' ').is_empty() {
+                    ""
+                } else {
+                    &line[indentation..]
+                });
                 source.push('\n');
             }
             None
@@ -151,6 +165,30 @@ mod tests {
                 ""
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn pasted_callback_bodies_preserve_relative_indentation_and_normalize_crlf() {
+        let wrapped = playground_source(
+            PlaygroundMode::Statements,
+            "  clear(25)\r\n  if true:\r\n    pixel(1, 2, 255)\r\n",
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            wrapped.source,
+            "on start:\n  clear(25)\n  if true:\n    pixel(1, 2, 255)\n  assert true\n"
+        );
+        let output = compile(
+            &SourceFile::new(FileId(0), "scratch.modl", wrapped.source),
+            &AssetCatalog::default(),
+            CompileMode::Debug,
+        );
+        assert!(
+            output.analysis.diagnostics.is_empty(),
+            "{:?}",
+            output.analysis.diagnostics
         );
     }
 }

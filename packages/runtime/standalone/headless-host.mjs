@@ -784,6 +784,12 @@ var Synthesizer = class {
   inspectVoices() {
     return structuredClone(this.voices);
   }
+  /** Native instrument audition uses the tracker's real note override and voice allocator. */
+  audition(soundName, note, volumeScale = 1) {
+    if (!audioInteger(note, 0, 127) || !audioNumber(volumeScale, 0, 1))
+      throw new RangeError('audition requires a note 0-127 and volume 0-1');
+    this.trigger(soundName, note, volumeScale);
+  }
   inspectTracker() {
     return this.tracker === null ? null : { ...this.tracker };
   }

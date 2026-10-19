@@ -81,12 +81,14 @@ describe('compiled standard library across production hosts', () => {
               [
                 {
                   type: 'load',
-                  javascript,
-                  manifest,
-                  files: {},
-                  rom: 'AQ==',
-                  save: '',
-                  debug,
+                  game: runtimeGameFixture({
+                    javascript,
+                    manifest,
+                    files: {},
+                    debug,
+                  }),
+                  parameter: '',
+                  saves: {},
                   seed: 0,
                 },
                 { type: 'frame', input: emptyInputFrame() },

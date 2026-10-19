@@ -136,13 +136,15 @@ describe('actual MODL pause actions across release, debug, native and replay', (
       const host = join(root, 'packages/runtime/standalone/native-host.mjs');
       const load = {
         type: 'load',
-        javascript,
-        manifest,
-        files: {},
-        rom: 'AQ==',
-        save: '',
+        game: runtimeGameFixture({
+          javascript,
+          manifest,
+          files: {},
+          debug,
+        }),
+        parameter: '',
+        saves: {},
         seed: 7,
-        debug,
       };
       const native = (commands: unknown[]) =>
         execFileSync(process.execPath, ['--permission', `--allow-fs-read=${host}`, host], {

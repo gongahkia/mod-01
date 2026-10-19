@@ -4,9 +4,11 @@ Status: source preservation and whole-game packing/admission are implemented in
 the shared Rust core. The production game scheduler implements boundary switching,
 asset reload, per-ID saves, input ownership and whole-game checkpoints, with real
 release/debug MODL tests. CLI `pack`, `check`, `info --source`, `watch` and
-`run --headless` now retain/admit the whole game. Native Studio/player, remaining
-export/analysis integration and cross-host verification are still being implemented;
-these workflows are not yet exposed as a complete native feature.
+`run --headless` now retain/admit the whole game. Native Studio/player use the same
+whole-game loader and scheduler, including per-ID disk saves and member-scoped
+host debugger symbols. Bundle editing/source navigation, remaining export/analysis
+integration and cross-host verification are still being implemented; these
+workflows are not yet exposed as a complete native feature.
 
 ## Authoring and admission
 

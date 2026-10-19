@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DEFAULT_SEED } from './hardware';
 import { emptyInputFrame } from './input';
 import type { HeadlessResult } from './headless';
+import { runtimeGameFixture } from './test-support/game';
 
 describe('native/CLI seeded execution parity', () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -66,18 +67,20 @@ ${source}'''
         const commands = [
           {
             type: 'load',
-            javascript,
-            debug,
-            manifest: {
-              id: 'seed-parity',
-              hardwareRevision: 2,
-              updateRate: 60,
-              display: null,
-              assets: {},
-            },
-            files: {},
-            rom: readFileSync(rom).toString('base64'),
-            save: '',
+            game: runtimeGameFixture({
+              javascript,
+              debug,
+              manifest: {
+                id: 'seed-parity',
+                updateRate: 60,
+                display: null,
+                assets: {},
+              },
+              files: {},
+              rom: readFileSync(rom),
+            }),
+            parameter: '',
+            saves: {},
             ...(seed === undefined ? {} : { seed }),
           },
           { type: 'frame', input: emptyInputFrame() },

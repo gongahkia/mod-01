@@ -338,10 +338,11 @@ mod tests {
         bridge
             .send(second.load_command(false, &[]).unwrap())
             .unwrap();
-        assert_eq!(
-            receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-second","menuItems":[]})
-        );
+        let loaded = receive(&bridge);
+        assert_eq!(loaded["type"], "loaded");
+        assert_eq!(loaded["cartridgeId"], "epoch-second");
+        assert_eq!(loaded["active"]["cartridgeAlias"], "main");
+        assert_eq!(loaded["menuItems"], json!([]));
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))
             .unwrap();
@@ -361,10 +362,11 @@ mod tests {
         bridge
             .send(first.load_command(false, &[]).unwrap())
             .unwrap();
-        assert_eq!(
-            receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-first","menuItems":[]})
-        );
+        let loaded = receive(&bridge);
+        assert_eq!(loaded["type"], "loaded");
+        assert_eq!(loaded["cartridgeId"], "epoch-first");
+        assert_eq!(loaded["active"]["cartridgeAlias"], "main");
+        assert_eq!(loaded["menuItems"], json!([]));
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))
             .unwrap();

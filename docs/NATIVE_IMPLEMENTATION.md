@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Native Studio/player now prepare every member through shared Rust and load one
+  whole-game host command, without an entry-only fallback. Frames carry global and
+  local time, producing alias/ID and next active context; snapshots bind the whole
+  game. Studio preloads every admitted ID's bounded disk save and writes successful
+  release commits to the admitted producer, never the editable project's current
+  ID or a newly active target. Six new Rust process/Studio tests exercise release
+  and source-stepped transitions, held-input release barriers, deferred target boot,
+  exact replay recording, cross-cart checkpoint restore, same-path/same-symbol-ID
+  debugger watches, save preload/isolation and invalid unused members. Bundle
+  editing, alias-qualified source navigation and complete export remain open.
 - Deferred loads now publish their separate boot framebuffer before frame zero in
   release and full-frame debug execution. Two real compiled MODL regressions
   reproduce the original failure, compare eager/loaded pixels, commands and work,

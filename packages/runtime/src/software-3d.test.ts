@@ -13,6 +13,7 @@ import { emptyInputFrame } from './input';
 import { decodeSaveValues } from './save';
 import type { ProjectAssetDeclaration } from './asset-codec';
 import type { CartridgeFactory } from './machine';
+import { runtimeGameFixture } from './test-support/game';
 
 describe('source-visible software 3D game', () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -152,22 +153,19 @@ describe('source-visible software 3D game', () => {
       const commands = [
         {
           type: 'load',
-          javascript: readFileSync(output, 'utf8'),
-          debug,
-          manifest: {
-            id: 'prism-corridor',
-            updateRate: 60,
-            display: null,
-            assets: view.manifest.assets,
-          },
-          files: Object.fromEntries(
-            Object.entries(view.files).map(([path, bytes]) => [
-              path,
-              Buffer.from(bytes).toString('base64'),
-            ]),
-          ),
-          rom: 'AQ==',
-          save: '',
+          game: runtimeGameFixture({
+            javascript: readFileSync(output, 'utf8'),
+            debug,
+            manifest: {
+              id: 'prism-corridor',
+              updateRate: 60,
+              display: null,
+              assets: view.manifest.assets,
+            },
+            files: view.files,
+          }),
+          parameter: '',
+          saves: {},
           seed: 1,
         },
         ...Array.from({ length: 416 }, (_, frame) => ({

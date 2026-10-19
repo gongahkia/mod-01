@@ -410,17 +410,14 @@ describe('public MODL hardware conformance', () => {
             [
               {
                 type: 'load',
-                javascript,
-                manifest: hostManifest,
-                files: Object.fromEntries(
-                  Object.entries(source.files).map(([path, bytes]) => [
-                    path,
-                    Buffer.from(bytes).toString('base64'),
-                  ]),
-                ),
-                rom: 'AQ==',
-                save: '',
-                debug: mode === 'debug',
+                game: runtimeGameFixture({
+                  javascript,
+                  manifest: hostManifest,
+                  files: source.files,
+                  debug: mode === 'debug',
+                }),
+                parameter: '',
+                saves: {},
                 seed: 1,
               },
               { type: 'frame', input: emptyInputFrame() },

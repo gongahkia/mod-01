@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { emptyInputFrame } from './input';
+import { runtimeGameFixture } from './test-support/game';
 
 const host = fileURLToPath(new URL('../standalone/native-host.mjs', import.meta.url));
 const javascript = `export default function createCartridge(api) {
@@ -35,6 +36,49 @@ const debugJavascript = `export default function createCartridge(api) {
 }`;
 
 describe('native process host', () => {
+  it('requires the current whole-game load command without an entry-only fallback', () => {
+    const game = runtimeGameFixture({
+      javascript,
+      manifest: { id: 'current-native', updateRate: 60, display: null, assets: {} },
+    });
+    const commands = [
+      {
+        type: 'load',
+        javascript,
+        manifest: game.members.main?.manifest,
+        files: {},
+        rom: 'AQ==',
+        save: '',
+      },
+      { type: 'load', game, parameter: '', saves: null },
+      { type: 'load', game, parameter: '', saves: { 'current-native': 'AB==' } },
+      { type: 'load', game, parameter: '', saves: {} },
+      { type: 'stop' },
+    ];
+    const replies = execFileSync(
+      process.execPath,
+      ['--permission', `--allow-fs-read=${host}`, host],
+      {
+        input: commands.map((command) => JSON.stringify(command)).join('\n') + '\n',
+      },
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(replies.map((reply) => reply.type)).toEqual([
+      'error',
+      'error',
+      'error',
+      'loaded',
+      'stopped',
+    ]);
+    expect(replies[3]).toMatchObject({
+      cartridgeAlias: 'main',
+      cartridgeId: 'current-native',
+      active: { frame: 0, cartridgeFrame: 0, booted: true },
+    });
+  });
   it('runs revision-2 frames and restores an opaque snapshot', async () => {
     const child = spawn(process.execPath, ['--permission', `--allow-fs-read=${host}`, host], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -75,17 +119,17 @@ describe('native process host', () => {
       expect(
         await request({
           type: 'load',
-          javascript,
-          manifest: {
-            id: 'native-test',
-            hardwareRevision: 2,
-            updateRate: 60,
-            display: null,
-            assets: {},
-          },
-          files: {},
-          rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
-          save: '',
+          game: runtimeGameFixture({
+            javascript,
+            manifest: {
+              id: 'native-test',
+              updateRate: 60,
+              display: null,
+              assets: {},
+            },
+          }),
+          parameter: '',
+          saves: {},
         }),
       ).toMatchObject({ type: 'loaded', cartridgeId: 'native-test' });
       const first = await request({ type: 'frame', input: emptyInputFrame() });
@@ -105,19 +149,20 @@ describe('native process host', () => {
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
       const debugCommand = {
         type: 'load',
-        javascript: debugJavascript,
-        debug: true,
-        manifest: {
-          id: 'native-debug',
-          hardwareRevision: 2,
-          updateRate: 60,
-          display: null,
-          assets: {},
-        },
-        files: {},
-        rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
-        save: '',
-        symbolNames: { s0: 'score', s1: 'health' },
+        game: runtimeGameFixture({
+          javascript: debugJavascript,
+          debug: true,
+          manifest: {
+            id: 'native-debug',
+            updateRate: 60,
+            display: null,
+            assets: {},
+          },
+          files: {},
+          symbolNames: { s0: 'score', s1: 'health' },
+        }),
+        parameter: '',
+        saves: {},
       };
       const debugLoad = await request(debugCommand);
       if (debugLoad.type === 'error') throw new Error(String(debugLoad.message));

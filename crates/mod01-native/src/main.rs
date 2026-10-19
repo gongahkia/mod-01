@@ -42,6 +42,8 @@ mod sprite;
 #[cfg(test)]
 mod studio_asset_tests;
 #[cfg(test)]
+mod studio_game_tests;
+#[cfg(test)]
 mod studio_menu_tests;
 #[cfg(test)]
 mod studio_replay_tests;
@@ -199,6 +201,8 @@ struct StudioApp {
     preview_cancelling: bool,
     preview_name: String,
     loaded: bool,
+    running_members: BTreeMap<String, String>,
+    active_alias: String,
     pending: bool,
     frame: u32,
     input_frame: u32,
@@ -311,6 +315,8 @@ impl StudioApp {
             preview_cancelling: false,
             preview_name: String::new(),
             loaded: false,
+            running_members: BTreeMap::new(),
+            active_alias: String::new(),
             pending: false,
             frame: 0,
             input_frame: 0,
@@ -1211,14 +1217,31 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let save = match read_save(&project.manifest.id) {
-            Ok(save) => save,
+        let game = match project.game() {
+            Ok(game) => game,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
-        let command = match project.load_command(debug, &save) {
+        let members = game
+            .catalog()
+            .cartridges()
+            .iter()
+            .map(|(alias, cart)| (alias.clone(), cart.manifest.id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let saves = members
+            .values()
+            .map(|id| read_save(id).map(|save| (id.clone(), save)))
+            .collect::<Result<BTreeMap<_, _>, _>>();
+        let saves = match saves {
+            Ok(saves) => saves,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let command = match NativeProject::game_command(&game, debug, &saves) {
             Ok(command) => command,
             Err(error) => {
                 self.status = error;
@@ -1232,6 +1255,8 @@ impl StudioApp {
         self.screen_rect = None;
         match self.runtime.send(command) {
             Ok(()) => {
+                self.running_members = members;
+                self.active_alias = "main".to_owned();
                 self.running = true;
                 self.keyboard_controller.quarantine();
                 self.gamepad_controller.quarantine();
@@ -1324,6 +1349,7 @@ impl StudioApp {
             }
             match event["type"].as_str() {
                 Some("loaded") => {
+                    self.accept_active(&event);
                     self.loaded = true;
                     self.status = format!(
                         "RUNNING {}",
@@ -1339,21 +1365,28 @@ impl StudioApp {
                         self.accept_frame(&event["frame"], context);
                         self.status = format!("DEBUG FRAME {} COMPLETE", self.frame);
                     } else if event["booted"] == true {
+                        self.accept_active(&event);
                         self.debug_booted = true;
                         self.debug_frame_boundary = true;
                         self.status = "DEBUG BOOT COMPLETE".to_owned();
                     } else if event["event"].is_object() {
+                        self.accept_active(&event);
                         self.debug_inspection = event["inspection"].clone();
                         self.watch_results =
                             event["watches"].as_array().cloned().unwrap_or_default();
-                        self.debug_trace.push(event["event"].clone());
+                        let mut source_event = event["event"].clone();
+                        source_event["cartridgeAlias"] = event["cartridgeAlias"].clone();
+                        source_event["cartridgeId"] = event["cartridgeId"].clone();
+                        self.debug_trace.push(source_event);
                         if self.debug_trace.len() > 4096 {
                             self.debug_trace.remove(0);
                         }
                         self.debug_event = serde_json::to_string_pretty(&event["event"])
                             .unwrap_or_else(|_| "debug event".to_owned());
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
-                        if self.hit_breakpoint(&event["event"], &event["conditions"]) {
+                        if event["cartridgeAlias"] == "main"
+                            && self.hit_breakpoint(&event["event"], &event["conditions"])
+                        {
                             self.debug_running = false;
                             self.resume_debug = false;
                             self.status = "BREAKPOINT".to_owned();
@@ -1377,6 +1410,7 @@ impl StudioApp {
                     self.status = "DEBUG SNAPSHOT CAPTURED".to_owned();
                 }
                 Some("restored") => {
+                    self.accept_active(&event);
                     self.touch_controller.clear();
                     self.keyboard_controller.quarantine();
                     self.gamepad_controller.quarantine();
@@ -1467,6 +1501,15 @@ impl StudioApp {
     }
 
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
+        let alias = event["cartridgeAlias"].as_str().unwrap_or("");
+        let id = event["cartridgeId"].as_str().unwrap_or("");
+        if self.running_members.get(alias).map(String::as_str) != Some(id) {
+            self.status = "INVALID RUNTIME FRAME OWNER".to_owned();
+            self.running = false;
+            self.loaded = false;
+            return;
+        }
+        self.accept_active(event);
         if let Some(items) = event.get("menuItems") {
             if let Err(error) = self.pause_menu.update_items(items) {
                 self.status = error;
@@ -1519,14 +1562,23 @@ impl StudioApp {
         }
         if !self.debugging
             && self.replay_playback.is_none()
-            && let (Some(project), Some(encoded)) =
-                (self.project.as_ref(), event["saveCommit"].as_str())
+            && let Some(encoded) = event["saveCommit"].as_str()
         {
             if let Ok(bytes) = STANDARD.decode(encoded) {
-                if let Err(error) = write_save(&project.manifest.id, &bytes) {
+                if let Err(error) = write_save(id, &bytes) {
                     self.status = error;
                 }
             }
+        }
+    }
+
+    fn accept_active(&mut self, event: &Value) {
+        let active = &event["active"];
+        let alias = active["cartridgeAlias"].as_str().unwrap_or("");
+        let id = active["cartridgeId"].as_str().unwrap_or("");
+        if self.running_members.get(alias).map(String::as_str) == Some(id) {
+            self.active_alias = alias.to_owned();
+            self.debug_booted = active["booted"] == true;
         }
     }
 
@@ -3676,8 +3728,25 @@ fn save_path(id: &str) -> Result<PathBuf, String> {
 
 fn read_save(id: &str) -> Result<Vec<u8>, String> {
     let path = save_path(id)?;
-    match fs::read(path) {
-        Ok(bytes) => Ok(bytes),
+    match fs::File::open(path) {
+        Ok(file) => {
+            use std::io::Read as _;
+            if !file
+                .metadata()
+                .map_err(|error| error.to_string())?
+                .is_file()
+            {
+                return Err("save is not an ordinary file".to_owned());
+            }
+            let mut bytes = Vec::new();
+            file.take(8193)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if bytes.len() > 8192 {
+                return Err(format!("save for '{id}' exceeds 8 KiB"));
+            }
+            Ok(bytes)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error.to_string()),
     }
@@ -3745,6 +3814,9 @@ fn backup_save(id: &str) -> Result<(), String> {
 }
 
 fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > 8192 {
+        return Err("save exceeds 8 KiB".to_owned());
+    }
     let path = save_path(id)?;
     let parent = path.parent().ok_or("invalid save path")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;

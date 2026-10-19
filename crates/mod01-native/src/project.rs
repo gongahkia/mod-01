@@ -1,7 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
-    CompileMode, ProjectManifest, compile_project, decode_cartridge_png, load_cartridge_program,
-    pack_workcart, parse_project_manifest, rewrite_workcart, unpack_workcart,
+    CompileMode, ProjectManifest, compile_project, decode_cartridge_png,
+    game::{MAX_GAME_PACKED_BYTES, PackedGame, decode_game, pack_game_workcart},
+    parse_project_manifest, rewrite_workcart,
+    runtime_game::prepare_runtime_game,
+    workcart::MAX_WORKCART_DOCUMENT_BYTES,
     workcart_project_view,
 };
 use serde_json::{Value, json};
@@ -12,7 +15,6 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-const MAX_PROJECT_TOTAL: u64 = 16 * 1024 * 1024;
 
 /// A disposable module/asset view backed by one authoritative current workcart.
 #[derive(Clone)]
@@ -40,20 +42,25 @@ impl NativeProject {
         }
         let file = fs::File::open(&path).map_err(|error| error.to_string())?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > MAX_PROJECT_TOTAL {
-            return Err("cartridge source exceeds 16 MiB".to_owned());
+        let is_source = path
+            .extension()
+            .is_some_and(|extension| extension == "m01w");
+        let limit = if is_source {
+            MAX_WORKCART_DOCUMENT_BYTES
+        } else {
+            MAX_GAME_PACKED_BYTES + 8 * 1024 * 1024
+        } as u64;
+        if !metadata.is_file() || metadata.len() > limit {
+            return Err("cartridge exceeds its source/game container limit".to_owned());
         }
         let mut source = Vec::new();
-        file.take(MAX_PROJECT_TOTAL + 1)
+        file.take(limit + 1)
             .read_to_end(&mut source)
             .map_err(|error| error.to_string())?;
-        if source.len() as u64 > MAX_PROJECT_TOTAL {
-            return Err("cartridge source exceeds 16 MiB".to_owned());
+        if source.len() as u64 > limit {
+            return Err("cartridge exceeds its source/game container limit".to_owned());
         }
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "m01w")
-        {
+        if is_source {
             return Self::from_source(
                 String::from_utf8(source).map_err(|error| error.to_string())?,
                 Some(path),
@@ -64,11 +71,8 @@ impl NativeProject {
         } else {
             source
         };
-        load_cartridge_program(&bytes).map_err(|error| error.to_string())?;
-        Self::from_source(
-            unpack_workcart(&bytes).map_err(|error| error.to_string())?,
-            None,
-        )
+        let game = decode_game(&bytes).map_err(|error| error.to_string())?;
+        Self::from_source(game.source().to_owned(), None)
     }
 
     pub fn create(path: &Path, id: &str) -> Result<Self, String> {
@@ -218,17 +222,29 @@ impl NativeProject {
     }
 
     pub fn pack(&self) -> Result<Vec<u8>, String> {
-        let source = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
-            .map_err(|error| error.to_string())?;
-        pack_workcart(&source)
-            .map(|packed| packed.bytes)
-            .map_err(|error| error.to_string())
+        self.game().map(PackedGame::into_bytes)
     }
 
-    pub fn javascript(&self, debug: bool) -> Result<String, String> {
-        let compilation = compile_project(
-            &self.manifest_source,
-            &self.files,
+    pub fn game(&self) -> Result<PackedGame, String> {
+        let source = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
+            .map_err(|error| error.to_string())?;
+        pack_game_workcart(&source).map_err(|error| error.to_string())
+    }
+
+    /// Fresh/disposable entry save convenience; all other members start with empty saves.
+    pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
+        let game = self.game()?;
+        let saves = BTreeMap::from([(game.entry().manifest.id.clone(), save.to_vec())]);
+        Self::game_command(&game, debug, &saves)
+    }
+
+    pub fn game_command(
+        game: &PackedGame,
+        debug: bool,
+        saves: &BTreeMap<String, Vec<u8>>,
+    ) -> Result<Value, String> {
+        let prepared = prepare_runtime_game(
+            game,
             if debug {
                 CompileMode::Debug
             } else {
@@ -236,52 +252,25 @@ impl NativeProject {
             },
         )
         .map_err(|error| error.to_string())?;
-        compilation
-            .generated
-            .map(|program| program.javascript)
-            .ok_or_else(|| {
-                compilation
-                    .analysis
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-    }
-
-    pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
-        let rom = self.pack()?;
-        let javascript = self.javascript(debug)?;
-        let symbol_names = if debug {
-            compile_project(&self.manifest_source, &self.files, CompileMode::Debug)
-                .map_err(|error| error.to_string())?
-                .analysis
-                .symbols
-                .into_iter()
-                .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
-                .collect::<BTreeMap<_, _>>()
-        } else {
-            BTreeMap::new()
-        };
-        let files: serde_json::Map<String, Value> = self
-            .manifest
-            .assets
-            .values()
-            .map(|asset| asset.path.as_str())
-            .chain(self.manifest.display.iter().map(String::as_str))
-            .filter_map(|path| {
-                self.files
-                    .get(path)
-                    .map(|bytes| (path.to_owned(), Value::String(STANDARD.encode(bytes))))
-            })
-            .collect();
+        if saves.iter().any(|(id, bytes)| {
+            bytes.len() > 8192
+                || !game
+                    .catalog()
+                    .cartridges()
+                    .values()
+                    .any(|cart| &cart.manifest.id == id)
+        }) {
+            return Err(
+                "initial saves must belong to admitted game members and fit 8 KiB".to_owned(),
+            );
+        }
+        let saves = saves
+            .iter()
+            .map(|(id, bytes)| (id.clone(), STANDARD.encode(bytes)))
+            .collect::<BTreeMap<_, _>>();
         Ok(json!({
-            "type": "load", "javascript": javascript,
-            "manifest": { "id": self.manifest.id, "hardwareRevision": self.manifest.hardware_revision,
-                "updateRate": self.manifest.update_rate, "display": self.manifest.display, "assets": self.manifest.assets },
-            "files": files, "rom": STANDARD.encode(rom), "save": STANDARD.encode(save),
-            "debug": debug, "symbolNames": symbol_names,
+            "type": "load", "game": prepared, "saves": saves,
+            "seed": modl_core::DEFAULT_SEED, "parameter": "",
         }))
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 use modl_core::bundle::BundleSource;
 use studio_replay_tests::{advance_debug_to, pump};
 
-fn game_source() -> String {
+pub(super) fn game_source() -> String {
     let suffix = format!(
         "{}-{}",
         std::process::id(),

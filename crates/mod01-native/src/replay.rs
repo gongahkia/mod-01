@@ -1,4 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Read as _,
+    path::Path,
+};
 
 use serde_json::{Value, json};
 
@@ -7,6 +11,20 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const BUTTONS: [&str; 12] = [
     "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "menu",
 ];
+
+pub fn read(path: &Path) -> Result<BTreeMap<u32, Value>, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_BYTES as u64 {
+        return Err("replay must be a regular file of at most 8 MiB".to_owned());
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    decode(&bytes)
+}
 
 pub fn encode(frames: &[(u32, Value)]) -> Result<Vec<u8>, String> {
     if frames.len() > MAX_FRAMES as usize {
@@ -43,7 +61,7 @@ pub fn encode(frames: &[(u32, Value)]) -> Result<Vec<u8>, String> {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
-    if bytes.len() < 27 || bytes.len() > MAX_BYTES {
+    if bytes.is_empty() || bytes.len() > MAX_BYTES {
         return Err("replay size is invalid".to_owned());
     }
     let value: Value = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
@@ -186,7 +204,30 @@ pub fn empty_input() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, empty_input, encode};
+    use super::{decode, empty_input, encode, read};
+
+    #[test]
+    fn replay_file_reads_are_bounded_and_accept_current_compact_empty_traces() {
+        let path = std::env::temp_dir().join(format!(
+            "mod01-replay-read-{}-{}.m01rec",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bytes = br#"{"revision":1,"frames":[]}"#;
+        assert!(decode(bytes).unwrap().is_empty());
+        std::fs::write(&path, bytes).unwrap();
+        assert!(read(&path).unwrap().is_empty());
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(super::MAX_BYTES as u64 + 1).unwrap();
+        assert!(read(&path).unwrap_err().contains("8 MiB"));
+        drop(file);
+        assert!(read(path.parent().unwrap()).is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(read(&path).is_err());
+    }
 
     #[test]
     fn records_and_replays_repeated_input() {

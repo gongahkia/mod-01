@@ -109,7 +109,17 @@ impl StudioApp {
 
 /// Exercises the exact native child-process bridge without a display, audio device or save writes.
 #[allow(clippy::too_many_lines)] // one ordered load/frame/stop verification workflow
-pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
+pub fn verify(path: &Path, frames: u32, input: Option<&Path>) -> Result<Value, String> {
+    if !(1..=36_000).contains(&frames) {
+        return Err("verification requires 1-36000 frames".to_owned());
+    }
+    let inputs = input.map(replay::read).transpose()?.unwrap_or_default();
+    if inputs
+        .last_key_value()
+        .is_some_and(|(frame, _)| *frame >= frames)
+    {
+        return Err("replay contains input outside the requested verification frames".to_owned());
+    }
     let project = NativeProject::open(path)?;
     let game = project.game()?;
     let bridge = RuntimeBridge::new(native_host_path());
@@ -138,11 +148,21 @@ pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
     let mut audio_hash = pixels_hash;
     let mut saves_hash = pixels_hash;
     let mut timeline_hash = pixels_hash;
+    let mut input_hash = pixels_hash;
     let mut member_frames: BTreeMap<String, u32> = BTreeMap::new();
     let mut save_commit_frames: BTreeMap<String, u32> = BTreeMap::new();
     let mut audio_peak = 0.0_f32;
     for frame in 0..frames {
-        bridge.send(json!({"type":"frame","input":replay::empty_input()}))?;
+        let input = inputs
+            .get(&frame)
+            .cloned()
+            .unwrap_or_else(replay::empty_input);
+        fingerprint(&mut input_hash, &frame.to_le_bytes());
+        fingerprint(
+            &mut input_hash,
+            &serde_json::to_vec(&input).map_err(|error| error.to_string())?,
+        );
+        bridge.send(json!({"type":"frame","input":input}))?;
         let value = receive()?;
         if value["type"] != "frame" || value["frame"] != frame {
             return Err("native frame sequence differs".to_owned());
@@ -203,6 +223,20 @@ pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
         }
         peak = peak.max(value["workUnits"].as_u64().unwrap_or(0));
     }
+    bridge.send(json!({"type":"snapshot"}))?;
+    let snapshot = receive()?;
+    if snapshot["type"] != "snapshot" || snapshot["frame"] != frames {
+        return Err("native final checkpoint cursor differs".to_owned());
+    }
+    let snapshot = STANDARD
+        .decode(
+            snapshot["snapshot"]
+                .as_str()
+                .ok_or("missing final checkpoint")?,
+        )
+        .map_err(|error| error.to_string())?;
+    let mut snapshot_hash = 0xcbf2_9ce4_8422_2325_u64;
+    fingerprint(&mut snapshot_hash, &snapshot);
     bridge.send(json!({"type":"stop"}))?;
     if receive()?["type"] != "stopped" {
         return Err("native stop failed".to_owned());
@@ -212,7 +246,8 @@ pub fn verify(path: &Path, frames: u32) -> Result<Value, String> {
             "memberFrames":member_frames,"workPeak":peak,"framebufferFnv64":format!("{pixels_hash:016x}"),
             "audioFnv64":format!("{audio_hash:016x}"),"audioPeak":audio_peak,
             "saveCommitsFnv64":format!("{saves_hash:016x}"),"saveCommitFrames":save_commit_frames,
-            "timelineFnv64":format!("{timeline_hash:016x}")}),
+            "timelineFnv64":format!("{timeline_hash:016x}"),
+            "inputFnv64":format!("{input_hash:016x}"), "snapshotFnv64":format!("{snapshot_hash:016x}")}),
     )
 }
 
@@ -225,6 +260,52 @@ fn fingerprint(hash: &mut u64, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_verification_replays_real_member_transitions_and_rejects_out_of_range_input_before_load()
+     {
+        let directory = std::env::temp_dir().join(format!(
+            "mod01-replay-verify-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("game.m01w");
+        let trace = directory.join("run.m01rec");
+        let source = crate::studio_game_tests::game_source();
+        std::fs::write(&path, &source).unwrap();
+        let mut transfer = replay::empty_input();
+        transfer["menuAction"] = json!(1);
+        let bytes = replay::encode(&[(1, transfer)]).unwrap();
+        std::fs::write(&trace, &bytes).unwrap();
+        let plain = verify(&path, 4, None).unwrap();
+        assert_eq!(plain["memberFrames"], json!({"main":4}));
+        let actual = verify(&path, 4, Some(&trace)).unwrap();
+        assert_eq!(actual["memberFrames"], json!({"main":2,"arena":2}));
+        assert_eq!(actual["saveCommitFrames"], json!({"main":1,"arena":1}));
+        for key in [
+            "inputFnv64",
+            "timelineFnv64",
+            "framebufferFnv64",
+            "snapshotFnv64",
+        ] {
+            assert_ne!(actual[key], plain[key]);
+        }
+        assert_eq!(actual, verify(&path, 4, Some(&trace)).unwrap());
+        assert_eq!(std::fs::read(&trace).unwrap(), bytes);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+        assert!(
+            verify(&directory.join("not-a-game"), 1, Some(&trace))
+                .unwrap_err()
+                .contains("outside")
+        );
+        assert!(verify(&path, 0, None).unwrap_err().contains("1-36000"));
+        assert!(verify(&path, 36_001, None).unwrap_err().contains("1-36000"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn audio_status_and_long_titles_leave_the_entire_framebuffer_visible_at_minimum_player_size() {

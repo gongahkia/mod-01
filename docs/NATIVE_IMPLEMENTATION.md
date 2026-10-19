@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- Native display-free verification now accepts bounded current replay input via
+  `--input REPLAY`, with ordinary Studio sharing the same ≤8 MiB file reader.
+  Unknown/repeated/missing options and inputs beyond the requested 1–36,000 frames
+  are rejected before loading a game. Reports bind consumed input and the final
+  opaque whole-game checkpoint as well as the existing pixels/PCM/routing/saves.
+  Real two-member tests compare neutral vs transferred play, repeat exact
+  fingerprints, preserve source/replay bytes and prove input-range preflight.
+  Compact current empty traces no longer depend on a trailing newline.
+  Targeted replay/launch/native-verifier tests and workspace Clippy pass; both
+  real 120-frame Linux package verifications retain identical fingerprints,
+  including the newly checked final checkpoint, without PATH.
 - Native Assets/Sprites now expose confirmed, stopped-session, member-bound
   deletion through the shared reference checker. Alias, cartridge ID, asset name,
   kind and path are rechecked before changing the selected member; other members

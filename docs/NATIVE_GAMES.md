@@ -85,12 +85,19 @@ For display-free QA through the **native production bridge**:
 
 ```sh
 target/debug/mod01-studio --verify cartridges/pocket-relay --frames 120
+target/debug/mod01-studio --verify GAME.m01c --frames 240 --input run.m01rec
 ```
 
 Verification loads and compiles the cartridge, checks ordered display frames and
 stereo PCM sizes, then stops the process. It prints JSON fingerprints covering all
 framebuffers, stereo PCM, producer-owned save commits and the routing timeline,
-plus per-member frame counts, whole-game identity and peak work. It does not open
+plus per-member frame counts, whole-game identity and peak work. Optional `--input`
+uses the same bounded current `.m01rec` decoder as Studio; unspecified frames use
+neutral input, and events beyond `--frames` are rejected before game loading.
+The report also fingerprints consumed input and the final opaque whole-game
+checkpoint (the latter is a same-Node-build comparison, not a portable snapshot
+file format). Verification accepts 1–36,000 frames and replay files up to 8 MiB.
+Studio replay imports use that same bounded reader. It does not open
 a window, initialize an audio device, read local saves or persist save commits.
 Frame count is bounded to 1–36,000. This is a smoke
 test, not a substitute for graphical/input/audio QA.

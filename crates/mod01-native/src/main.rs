@@ -1297,10 +1297,7 @@ impl StudioApp {
         else {
             return;
         };
-        self.status = match fs::read(path)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| replay::decode(&bytes))
-        {
+        self.status = match replay::read(&path) {
             Ok(frames) => {
                 self.replay_playback = Some(frames);
                 self.recording_replay = false;
@@ -4220,8 +4217,12 @@ fn main() -> eframe::Result {
         }
     };
     let (start, player_mode) = match launch {
-        launch::Launch::Verify { path, frames } => {
-            match player::verify(&path, frames) {
+        launch::Launch::Verify {
+            path,
+            frames,
+            input,
+        } => {
+            match player::verify(&path, frames, input.as_deref()) {
                 Ok(result) => println!("{result}"),
                 Err(error) => {
                     eprintln!("{error}");
@@ -4232,7 +4233,7 @@ fn main() -> eframe::Result {
         }
         launch::Launch::Help => {
             println!(
-                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N]]"
+                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N] [--input REPLAY]]"
             );
             return Ok(());
         }

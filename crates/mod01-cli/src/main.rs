@@ -1750,11 +1750,12 @@ fn format_workcart(path: &Path, check: bool) -> Result<bool, String> {
         }
     }
     if changed && !check {
-        let encoded = encode_workcart(
+        let encoded = modl_core::workcart::encode_workcart_with_bundle(
             &project.manifest,
             &project.files,
             &project.recipes,
             &project.tests,
+            &project.bundle,
         )
         .map_err(|error| error.to_string())?;
         write_workcart_atomically(path, encoded.as_bytes()).map_err(|error| error.to_string())?;

@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- Current workcarts now retain optional flat `[[bundle]]` members as exact UTF-8
+  workcart strings. Rewrites, asset deletion, recipe generation and CLI formatting
+  preserve member source, including CRLF/comments; aliases are bounded/unique and
+  `main` is reserved for the enclosing cartridge. Nested/obsolete members fail
+  with qualified diagnostics. Single-cart packing explicitly refuses dependencies
+  until the whole-game adapters are connected, rather than silently discarding
+  them. Three preservation/parser tests and all existing core checks pass.
+- The preservation integration test exposed an older generator/schema mismatch:
+  generators expected revision-1 tiles while the current validator requires 2.
+  `generator.rs` and CLI fixtures now use only current tiles; noise/WFC tests pack
+  the generated result, and the CLI test loads it through authoritative compiler
+  admission. Obsolete tile sets are rejected. This correction is `fix: generate
+maps from current tile assets and verify generated cartridges load`.
 - Bundle container preparation shares the existing canonical M01C archive codec
   with explicit container bounds; logical cartridges retain the same 1 MiB packed,
   16 MiB decoded and 4,096-entry limits. Tests cover exact bounds, corruption,

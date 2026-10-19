@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AssetKind, CartridgeError, WorkcartProject, WorkcartRecipe, encode_workcart, parse_workcart,
+    AssetKind, CartridgeError, WorkcartProject, WorkcartRecipe, parse_workcart,
+    workcart::encode_workcart_with_bundle,
 };
 
 const MAX_WFC_CELLS: usize = 4_096;
@@ -39,7 +40,13 @@ pub fn materialize_workcart_recipe(
         .clone();
     let mut files = project.files.clone();
     files.insert(output_path, payload);
-    encode_workcart(&project.manifest, &files, &project.recipes, &project.tests)
+    encode_workcart_with_bundle(
+        &project.manifest,
+        &files,
+        &project.recipes,
+        &project.tests,
+        &project.bundle,
+    )
 }
 
 fn materialize_map(

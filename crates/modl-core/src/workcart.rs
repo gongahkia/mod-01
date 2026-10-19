@@ -5,6 +5,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::bundle::{
+    BUNDLE_ENTRY, BundleSource, MAX_BUNDLE_CARTRIDGES, checked_source_size, valid_alias,
+};
 use crate::{
     AssetKind, CARTRIDGE_FORMAT_REVISION, CartridgeError, FileId, ProjectAsset, ProjectManifest,
     SourceFile, TokenKind, UnpackedProject, lex, parse_project_manifest,
@@ -12,6 +15,8 @@ use crate::{
 
 /// The authored work-cart revision supported by this compiler.
 pub const WORKCART_FORMAT_REVISION: u16 = 2;
+/// Bound for a flat source-visible game document, including escaped member source strings.
+pub const MAX_WORKCART_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
 
 type MaterializedFiles = (BTreeMap<String, ProjectAsset>, BTreeMap<String, Vec<u8>>);
 
@@ -28,6 +33,8 @@ pub struct WorkcartProject {
     pub recipes: Vec<WorkcartRecipe>,
     /// Named source and replay tests retained in the work-cart.
     pub tests: Vec<WorkcartTest>,
+    /// Flat optional local dependencies; the enclosing root cartridge is alias `main`.
+    pub bundle: Vec<BundleSource>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -45,6 +52,8 @@ struct WorkcartDocument {
     recipe: Vec<WorkcartRecipe>,
     #[serde(default)]
     test: Vec<WorkcartTest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bundle: Vec<BundleSource>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -169,6 +178,19 @@ pub enum WorkcartTestKind {
 /// Returns stable `M01402x` errors for malformed work-cart structure, duplicate authored
 /// names, invalid paths, invalid assets, or inconsistent references.
 pub fn parse_workcart(source: &str) -> Result<WorkcartProject, CartridgeError> {
+    parse_workcart_inner(source, true)
+}
+
+fn parse_workcart_inner(
+    source: &str,
+    allow_bundle: bool,
+) -> Result<WorkcartProject, CartridgeError> {
+    if source.len() > MAX_WORKCART_DOCUMENT_BYTES {
+        return Err(workcart_error(
+            "M014072",
+            "workcart document exceeds 128 MiB".to_owned(),
+        ));
+    }
     let document: WorkcartDocument = toml::from_str(source)
         .map_err(|error| workcart_error("M014020", format!("invalid .m01w: {error}")))?;
     if document.format != WORKCART_FORMAT_REVISION {
@@ -179,6 +201,43 @@ pub fn parse_workcart(source: &str) -> Result<WorkcartProject, CartridgeError> {
                 document.format
             ),
         ));
+    }
+    if !allow_bundle && !document.bundle.is_empty() {
+        return Err(workcart_error(
+            "M014073",
+            "bundle members cannot contain nested bundles".to_owned(),
+        ));
+    }
+    if document.bundle.len() >= MAX_BUNDLE_CARTRIDGES {
+        return Err(workcart_error(
+            "M014070",
+            "bundle allows at most 31 dependencies plus main".to_owned(),
+        ));
+    }
+    let mut aliases = BTreeSet::new();
+    let mut member_bytes = 0;
+    for member in &document.bundle {
+        if member.alias == BUNDLE_ENTRY
+            || !valid_alias(&member.alias)
+            || !aliases.insert(&member.alias)
+        {
+            return Err(workcart_error(
+                "M014070",
+                format!(
+                    "invalid, reserved or duplicate bundle alias '{}'",
+                    member.alias
+                ),
+            ));
+        }
+        member_bytes =
+            checked_source_size(member_bytes, member.source.len()).map_err(|mut error| {
+                error.message = format!("bundle cartridge '{}': {}", member.alias, error.message);
+                error
+            })?;
+        parse_workcart_inner(&member.source, false).map_err(|mut error| {
+            error.message = format!("bundle cartridge '{}': {}", member.alias, error.message);
+            error
+        })?;
     }
     let (assets, files) = materialize_files(&document)?;
     let manifest = manifest_from_cartridge(document.cartridge, assets)?;
@@ -197,6 +256,7 @@ pub fn parse_workcart(source: &str) -> Result<WorkcartProject, CartridgeError> {
         files,
         recipes: document.recipe,
         tests: document.test,
+        bundle: document.bundle,
     })
 }
 
@@ -215,6 +275,20 @@ pub fn encode_workcart(
     files: &BTreeMap<String, Vec<u8>>,
     recipes: &[WorkcartRecipe],
     tests: &[WorkcartTest],
+) -> Result<String, CartridgeError> {
+    encode_workcart_with_bundle(manifest, files, recipes, tests, &[])
+}
+
+/// Encodes the current workcart while retaining its flat source-visible dependencies.
+///
+/// # Errors
+/// Returns ordinary workcart errors and qualified invalid/nested/oversized member diagnostics.
+pub fn encode_workcart_with_bundle(
+    manifest: &ProjectManifest,
+    files: &BTreeMap<String, Vec<u8>>,
+    recipes: &[WorkcartRecipe],
+    tests: &[WorkcartTest],
+    bundle: &[BundleSource],
 ) -> Result<String, CartridgeError> {
     let mut modules = Vec::new();
     let mut module_paths = BTreeSet::new();
@@ -285,6 +359,7 @@ pub fn encode_workcart(
         file: files_to_embed,
         recipe: recipes.to_vec(),
         test: tests.to_vec(),
+        bundle: bundle.to_vec(),
     };
     let encoded = toml::to_string_pretty(&document)
         .map_err(|error| workcart_error("M014020", error.to_string()))?;
@@ -327,7 +402,13 @@ pub fn rewrite_workcart(
     if manifest == original.manifest && files == &original.files {
         return Ok(source.to_owned());
     }
-    encode_workcart(&manifest, files, &original.recipes, &original.tests)
+    encode_workcart_with_bundle(
+        &manifest,
+        files,
+        &original.recipes,
+        &original.tests,
+        &original.bundle,
+    )
 }
 
 /// Deletes an unreferenced asset from an `M01W/2` work-cart.
@@ -376,11 +457,12 @@ pub fn delete_workcart_asset(source: &str, name: &str) -> Result<String, Cartrid
     if !still_needed {
         project.files.remove(&asset.path);
     }
-    encode_workcart(
+    encode_workcart_with_bundle(
         &project.manifest,
         &project.files,
         &project.recipes,
         &project.tests,
+        &project.bundle,
     )
 }
 
@@ -788,6 +870,163 @@ fn utf8_payload(bytes: &[u8], path: &str, role: &str) -> Result<String, Cartridg
 
 #[cfg(test)]
 mod tests {
+    fn bundled_fixture() -> String {
+        let root = parse_workcart(CART).unwrap();
+        let child = format!(
+            "# EXACT CHILD COMMENTS\r\n{}",
+            CART.replace("workcart-test", "child-game")
+                .replace('\n', "\r\n")
+        );
+        super::encode_workcart_with_bundle(
+            &root.manifest,
+            &root.files,
+            &root.recipes,
+            &root.tests,
+            &[crate::bundle::BundleSource {
+                alias: "level".to_owned(),
+                source: child,
+            }],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn flat_bundle_members_survive_noop_editor_rewrite_asset_deletion_and_generation() {
+        let source = bundled_fixture();
+        let original = parse_workcart(&source).unwrap();
+        assert!(
+            original.bundle[0]
+                .source
+                .starts_with("# EXACT CHILD COMMENTS\r\n")
+        );
+        let manifest = toml::to_string(&original.manifest).unwrap();
+        assert_eq!(
+            crate::rewrite_workcart(&source, &manifest, &original.files).unwrap(),
+            source
+        );
+        let mut files = original.files.clone();
+        files.insert(
+            "src/main.modl".to_owned(),
+            b"on draw:\n  clear(26)\n".to_vec(),
+        );
+        let edited = crate::rewrite_workcart(&source, &manifest, &files).unwrap();
+        let after = parse_workcart(&edited).unwrap();
+        assert_eq!(after.bundle, original.bundle);
+        assert_eq!(after.recipes, original.recipes);
+        assert_eq!(after.tests, original.tests);
+        let generated = crate::materialize_workcart_recipe(&edited, "noise-world").unwrap();
+        assert_eq!(parse_workcart(&generated).unwrap().bundle, original.bundle);
+        let mut manifest = original.manifest.clone();
+        manifest.assets.insert(
+            "spare".to_owned(),
+            crate::ProjectAsset {
+                kind: crate::AssetKind::TileSet,
+                path: "assets/spare.m01g".to_owned(),
+            },
+        );
+        files.insert(
+            "assets/spare.m01g".to_owned(),
+            files["assets/tiles.m01g"].clone(),
+        );
+        let with_spare = super::encode_workcart_with_bundle(
+            &manifest,
+            &files,
+            &original.recipes,
+            &original.tests,
+            &original.bundle,
+        )
+        .unwrap();
+        let deleted = crate::delete_workcart_asset(&with_spare, "spare").unwrap();
+        let after = parse_workcart(&deleted).unwrap();
+        assert_eq!(after.bundle, original.bundle);
+        assert!(!after.manifest.assets.contains_key("spare"));
+        // Until all game adapters are connected, the single-cart API must refuse
+        // bundles rather than accidentally emit only main and lose dependencies.
+        assert_eq!(crate::pack_workcart(&source).unwrap_err().code, "M014073");
+    }
+
+    #[test]
+    fn flat_bundle_rejects_nested_reserved_duplicate_and_excess_members_without_recursing() {
+        let root = parse_workcart(CART).unwrap();
+        let member = crate::bundle::BundleSource {
+            alias: "level".to_owned(),
+            source: CART.to_owned(),
+        };
+        for members in [
+            vec![crate::bundle::BundleSource {
+                alias: "main".to_owned(),
+                ..member.clone()
+            }],
+            vec![crate::bundle::BundleSource {
+                alias: "../outside".to_owned(),
+                ..member.clone()
+            }],
+            vec![member.clone(), member.clone()],
+            vec![member.clone(); 32],
+        ] {
+            assert_eq!(
+                super::encode_workcart_with_bundle(
+                    &root.manifest,
+                    &root.files,
+                    &root.recipes,
+                    &root.tests,
+                    &members
+                )
+                .unwrap_err()
+                .code,
+                "M014070"
+            );
+        }
+        let nested = crate::bundle::BundleSource {
+            alias: "outer".to_owned(),
+            source: bundled_fixture(),
+        };
+        let failure = super::encode_workcart_with_bundle(
+            &root.manifest,
+            &root.files,
+            &root.recipes,
+            &root.tests,
+            &[nested],
+        )
+        .unwrap_err();
+        assert_eq!(failure.code, "M014073");
+        assert!(failure.message.contains("outer"));
+    }
+
+    #[test]
+    fn bundle_parser_keeps_current_member_schema_and_qualifies_unavailable_source() {
+        let root = parse_workcart(CART).unwrap();
+        for child in [
+            "not a workcart".to_owned(),
+            CART.replacen("format = 2", "format = 1", 1),
+        ] {
+            let failure = super::encode_workcart_with_bundle(
+                &root.manifest,
+                &root.files,
+                &root.recipes,
+                &root.tests,
+                &[crate::bundle::BundleSource {
+                    alias: "broken".to_owned(),
+                    source: child,
+                }],
+            )
+            .unwrap_err();
+            assert!(failure.message.contains("broken"));
+        }
+        let encoded = super::encode_workcart_with_bundle(
+            &root.manifest,
+            &root.files,
+            &root.recipes,
+            &root.tests,
+            &[],
+        )
+        .unwrap();
+        assert!(
+            !encoded.contains("bundle ="),
+            "ordinary canonical source must not change"
+        );
+    }
+
     use crate::{
         decode_cartridge, delete_workcart_asset, encode_workcart, pack_workcart, rewrite_workcart,
         unpack_cartridge_project, unpack_workcart, workcart_project_view,

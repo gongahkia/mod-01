@@ -1,4 +1,5 @@
 //! Shared admission for local multi-cartridge games. Members retain the current M01W/M01C contract.
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
@@ -14,7 +15,8 @@ pub const MAX_BUNDLE_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_MEMBER_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// One authored current-format member, named by a local alias rather than a filesystem path.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BundleSource {
     pub alias: String,
     pub source: String,
@@ -83,6 +85,12 @@ pub fn pack_bundle_workcarts(sources: &[BundleSource]) -> Result<PackedBundle, C
     // Check every member's metadata before compiling any member, including otherwise unused carts.
     for (alias, source) in &ordered {
         let project = parse_workcart(source).map_err(|error| member_error(alias, error))?;
+        if !project.bundle.is_empty() {
+            return Err(error(
+                "M014073",
+                format!("bundle cartridge '{alias}' cannot contain a nested bundle"),
+            ));
+        }
         if !identities.insert(project.manifest.id.clone()) {
             return Err(error(
                 "M014071",
@@ -111,7 +119,7 @@ pub fn pack_bundle_workcarts(sources: &[BundleSource]) -> Result<PackedBundle, C
     })
 }
 
-fn valid_alias(alias: &str) -> bool {
+pub(crate) fn valid_alias(alias: &str) -> bool {
     (1..=32).contains(&alias.len())
         && alias.as_bytes()[0].is_ascii_lowercase()
         && alias.bytes().all(|byte| {
@@ -119,7 +127,7 @@ fn valid_alias(alias: &str) -> bool {
         })
 }
 
-fn checked_source_size(total: usize, bytes: usize) -> Result<usize, CartridgeError> {
+pub(crate) fn checked_source_size(total: usize, bytes: usize) -> Result<usize, CartridgeError> {
     if bytes > MAX_MEMBER_SOURCE_BYTES {
         return Err(error("M014072", "bundle member source exceeds 16 MiB"));
     }

@@ -254,6 +254,9 @@ pub fn pack_project(
 /// Returns a stable work-cart, compilation, archive, or capacity error.
 pub fn pack_workcart(source: &str) -> Result<PackedCartridge, CartridgeError> {
     let project = crate::parse_workcart(source)?;
+    if !project.bundle.is_empty() {
+        return Err(cartridge_error("M014073", "bundled workcarts require the whole-game packing path; refusing to discard dependencies".to_owned()));
+    }
     pack_materialized_project(&project.manifest, &project.files, project.source.as_bytes())
 }
 

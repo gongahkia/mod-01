@@ -84,10 +84,11 @@ The quality gate runs formatting, lint, types, runtime/compiler/native tests,
 builds and artifact verification. The native packaging workflow also runs on
 Windows and macOS; local Linux verification does not substitute for those jobs.
 
-The approved native-consolidation work is tracked honestly in
-[the acceptance ledger](docs/NATIVE_IMPLEMENTATION.md). Unchecked rows are still
-in progress. The [decision-by-decision audit](docs/NATIVE_ACCEPTANCE.md) links all
-21 original review items to evidence and names remaining platform qualification.
+The completed native-consolidation work is tracked in
+[the acceptance ledger](docs/NATIVE_IMPLEMENTATION.md).
+The [decision-by-decision audit](docs/NATIVE_ACCEPTANCE.md) links all 21 original
+review items to evidence, including actual Windows/macOS/Linux window checks
+and the explicit hardware/release qualification limits.
 [Standard-library semantics](docs/STANDARD_LIBRARY.md) include
 deterministic math, safe number conversion, bounded text and explicit bit ops.
 

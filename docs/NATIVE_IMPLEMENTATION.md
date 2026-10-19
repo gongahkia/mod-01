@@ -14,7 +14,8 @@ Git commit. The final audit must link the evidence for every row below.
 The [decision-by-decision acceptance audit](NATIVE_ACCEPTANCE.md) maps all 21
 original review IDs to current implementation and execution evidence. Progress
 entries below are reverse-chronological history: later entries supersede older
-open/closed statements. Cross-platform export qualification remains open.
+open/closed statements. All scoped rows are complete; the audit records the
+successful desktop matrix and its explicit hardware/release limitations.
 
 | Requirement                   | Acceptance evidence                                                                                                                                                                                         | Complete |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
@@ -28,7 +29,7 @@ open/closed statements. Cross-platform export qualification remains open.
 | Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [x]      |
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [x]      |
-| Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
+| Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [x]      |
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [x]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [x]      |
 | Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
@@ -38,7 +39,7 @@ open/closed statements. Cross-platform export qualification remains open.
 | Multi-cartridge bundles       | Local packaged dependencies, cartridge transitions, asset reload, state transfer, save identity and validation are implemented and tested; [acceptance evidence](BUNDLES.md#acceptance-evidence).           | [x]      |
 | Local cartridge library       | Persistent labels/search/favourites/controller navigation/launch/source inspection cover user and bundled cartridges without a service.                                                                     | [x]      |
 | Examples and games            | Documented, playable and tested 2D and software-rendered 3D games demonstrate the added APIs using public facilities.                                                                                       | [x]      |
-| Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [ ]      |
+| Full verification and handoff | Formatting/lint/type/unit/integration/native/package checks pass; native screenshots and interaction QA inspected; worktree clean; every requirement has authoritative evidence.                            | [x]      |
 
 ## Excluded
 
@@ -56,6 +57,20 @@ choices remain outstanding.
 
 ## Progress
 
+- All scoped acceptance rows are now complete. At `fe2eefb`,
+  [CI run 39266764189](https://github.com/gongahkia/mod-01/actions/runs/39266764189)
+  passes the full gate and every Windows/macOS/Linux native job. Actual exported
+  windows are visible at 976×689 / 960×674 / 960×650, respectively; every probe
+  requires the real first committed frame/save and ordinary exit status 0.
+  The inspected successful Windows capture shows the intended colour-200 frame,
+  rectangle, HUD and cursor; its report confirms an 8192-byte save. The complete
+  game verifiers also pass on all three operating systems. The full gate now
+  includes 329 runtime/script tests in 45 files, 134 core, 151 Linux native,
+  34 CLI integration and one CLI unit test. Windows GUI qualification explicitly
+  uses CI-only Mesa llvmpipe, not a physical GPU claim. The acceptance audit
+  retains the original decisions, local interaction evidence and remaining
+  out-of-scope hardware/signing limitations. The user has authorized the push
+  and merge; main's eventual merge commit still requires its own CI run.
 - The Windows capture shows the real player correctly running the blank game;
   its missing save was a QA-fixture bug, not a runtime failure. CRLF checkout
   text prevented the multiline initializer replacement. The extracted generator

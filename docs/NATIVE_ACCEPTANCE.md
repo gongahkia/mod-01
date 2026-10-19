@@ -1,10 +1,11 @@
 # Native consolidation acceptance audit
 
-Audit date: 2026-10-19. Tested code: `7060d9b571db89dcf1c89425903c56d943bfd68d`.
-This is an evidence map, **not a declaration of cross-platform completion**.
-Native game export and final handoff remain open until actual Windows/macOS
-window startup has been qualified. The [implementation ledger](NATIVE_IMPLEMENTATION.md)
-retains those unchecked rows.
+Audit date: 2026-10-19. Tested code: `fe2eefb889312ffb82be43d3636c4b6ea2027d4b`.
+All scoped requirements in the [implementation ledger](NATIVE_IMPLEMENTATION.md)
+are complete. The desktop matrix now verifies actual Windows/macOS/Linux window
+startup, the first real frame/save and ordinary shutdown in addition to complete
+game/package equivalence. The platform receipt and hardware limitations below
+define the scope of that qualification.
 
 ## Decision authority
 
@@ -38,7 +39,7 @@ the behaviour. It does not imply physical-device or other-OS execution.
 | `authoring-repl`           | Approve immediate scratchpad                               | [Native authoring proof](#native-authoring-proof): real compiler/child execution of expressions/drawing, faults, copied assets, cancellation and disposable saves.                                                                         |
 | `native-code-workflow`     | Approve integrated editing baseline                        | The same proof covers find/replace, navigation, block shortcuts/undo, compiler-backed completion/declarations/diagnostics and code/state graph.                                                                                            |
 | `native-tracker`           | Approve full eight-channel tracker                         | The same proof covers focused keyboard entry, patterns/orders, clipped clipboard blocks, transpose, audition/transport and actual native synth execution.                                                                                  |
-| `export-native-games`      | Approve desktop packages; remove web exports               | [Export/workflow proof](#export-and-workflow-proof) and fresh Windows/macOS/Linux Rust/package CI pass. Actual Linux window startup also passes; new Windows/macOS GUI probes remain **open**.                                             |
+| `export-native-games`      | Approve desktop packages; remove web exports               | [Export/workflow proof](#export-and-workflow-proof) and [desktop qualification](#desktop-qualification-receipt): Windows/macOS/Linux Rust/package checks and actual window/frame/save/normal-close probes pass.                            |
 | `export-raspberry-pi`      | Reject                                                     | No Raspberry Pi or ARM-handheld qualification/delivery is claimed or added. Desktop macOS ARM64 is not a Pi/handheld target.                                                                                                               |
 | `graphics-region-blit`     | Approve                                                    | [Graphics proof](#graphics-proof): independently checked source/destination sampling, clipping, flips, transparency/remaps and bounded atomic work failure.                                                                                |
 | `graphics-textured-lines`  | Approve                                                    | The same proof covers every line octant, wrapping/skipping, fixed texture precision, clipped sampling and calibrated work bounds.                                                                                                          |
@@ -172,7 +173,10 @@ MODL software rendering, not a privileged scene engine.
 [examples](../examples/README.md), [starters](../templates/README.md) and the
 [first-game tutorial](TUTORIAL.md) document controls, mechanisms and remix paths.
 
-## Latest local execution receipt
+## Local execution receipt
+
+The local full-gate baseline below is `7060d9b`; the later cross-platform
+receipt records the additional GUI harness tests at the current tested code.
 
 Linux/WSL, Rust 1.98.0, Node 24.21.0 and pnpm 10.32.1:
 
@@ -209,25 +213,43 @@ from a clean clone: the current full-gate, release packaging/verifier and GUI
 receipt directory is `output/native-acceptance-qa-4BBzhi`. Reproduce the commands
 above rather than treat these local paths as a remote CI pass.
 
-## Remaining qualification
+## Desktop qualification receipt
 
-- [CI run 39257406061](https://github.com/gongahkia/mod-01/actions/runs/39257406061)
-  at `7060d9b` passed the full repository check and all Windows/macOS/Linux native
-  jobs, including real Rust/runtime tests and both bundled game verifiers. The
-  Windows host-path fix therefore has real Windows Rust/package evidence now,
-  not only the earlier isolated Windows Node probe. The old `c1da7c6` run is
-  superseded and is not being used to qualify current code.
-- Run the new [actual-window probe](../scripts/verify-native-window.mjs) through
-  the updated [desktop matrix](../.github/workflows/ci.yml). Linux/X11 locally
-  passes visible 960×650 no-argument/empty-PATH launch, first real frame/save and
-  ordinary close with exit status 0. Windows/macOS execution of this new check
-  remains open. Earlier display-free package checks and synthetic egui inputs
-  are not being counted as evidence that those windows opened.
-- Inspect those results, fix any failures in atomic commits, then
-  update this receipt and close the export/final-handoff ledger rows only when
-  their evidence is sufficient.
+[CI run 39266764189](https://github.com/gongahkia/mod-01/actions/runs/39266764189)
+at the tested code passed all four jobs: the full repository gate and native
+Windows, macOS and Linux builds. The full gate passes formatting, lint, types,
+production builds, 329 runtime/script tests in 45 files, 134 core tests, 151
+Linux native tests, 34 CLI integration tests plus one CLI unit test, all-feature
+Clippy, ten deterministic raw/PNG pairs and the Linux package comparisons.
+Platform-specific native tests also pass on Windows and macOS.
 
-The audit observed an existing push-triggered run; it did not issue a push, PR or
-workflow dispatch. Further remote writes require the user's approval. Physical touchscreen,
-controller and speaker quality, signing/notarization, Pi/handheld delivery and
-hosted discovery are not claimed by Linux automated or virtual-display checks.
+Every desktop job launches the real ordinary and >1 MiB multi-member exported
+games and verifies their frame/PCM/routing/save results. Each also compares the
+complete maintained Relay Station route across CLI/native source/raw/PNG and
+the actual standalone package. The [actual-window probe](../scripts/verify-native-window.mjs)
+then verifies a no-argument, empty-PATH launch, a visible owned OS window, the
+first real committed frame/save and a normal close with exit status 0:
+
+| Platform       | Visible window | Qualification                                |
+| -------------- | -------------- | -------------------------------------------- |
+| Linux x86-64   | 960×650        | Xvfb/X11 with software GL                    |
+| macOS ARM64    | 960×674        | Hosted runner's actual WindowServer session  |
+| Windows x86-64 | 976×689        | Pinned Mesa 26.2.4 llvmpipe, CI-only staging |
+
+The Windows `mod01-gui-qa-windows-latest` artifact contains the successful
+`report.json` and `window-ready.png`. The inspected capture shows the actual
+colour-200 frame, colour-7 rectangle, native HUD and cursor, rather than the
+unchanged blank template. The report confirms the real 8192-byte save. LF/CRLF
+fixture regressions prevent a missing initializer from silently testing the
+wrong program. Earlier failing runs are superseded, not counted as passes.
+
+The user has authorized pushing and merging the feature branch. This receipt
+qualifies the named feature commit; merge/main status must be checked against
+the eventual main commit, not inferred from this run. CI uploads Studio archives
+and separate GUI evidence; this work does not publish a signed release.
+
+Physical GPU, touchscreen, controller and speaker quality are not claimed by
+these hosted/virtual-display checks. Signing/notarization, Pi/handheld delivery
+and hosted discovery remain outside the agreed scope. Windows users still need
+an OpenGL 2.0+ capable installed driver; ordinary distributed packages do not
+ship the CI-only Mesa DLLs.

@@ -341,3 +341,11 @@ choices remain outstanding.
   81 native, 95 core and 22 CLI tests, all-feature workspace Clippy/builds,
   all nine reproducible raw/PNG pairs and the 120-frame bundled Linux player
   verification without PATH. No further golden changes were required.
+
+- Fault/pause race follow-up: a runtime fault from an already-submitted frame
+  now dismisses the pause state, clears queued actions/continuation and keeps the
+  actual error visible. A stopped/faulted game's header/touch MENU cannot mask it
+  again with a paused label. A real Studio/Node regression faults precisely after
+  opening the menu around the second submitted frame; no extra input is accepted.
+  All 82 native tests, all-feature workspace Clippy, native build and the
+  120-frame bundled Linux verification pass after this correction.

@@ -25,11 +25,14 @@ impl StudioApp {
                             .map_or("MOD-01", |project| &project.manifest.title),
                     );
                     if ui
-                        .button(if self.player_paused {
-                            "RESUME"
-                        } else {
-                            "PAUSE"
-                        })
+                        .add_enabled(
+                            self.running,
+                            egui::Button::new(if self.player_paused {
+                                "RESUME"
+                            } else {
+                                "PAUSE"
+                            }),
+                        )
                         .clicked()
                     {
                         self.set_player_paused(!self.player_paused);
@@ -64,7 +67,7 @@ impl StudioApp {
                         && self.replay_playback.is_none(),
                 );
             });
-        if self.touch_controller.take_menu_request() {
+        if self.touch_controller.take_menu_request() && self.running {
             self.set_player_paused(!self.player_paused);
         }
         egui::CentralPanel::default()

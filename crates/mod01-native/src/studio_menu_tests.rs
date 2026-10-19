@@ -193,3 +193,26 @@ fn a_breakpoint_in_an_already_submitted_step_cannot_be_resumed_by_closing_the_me
     assert_eq!(app.input_frame, 1);
     app.stop();
 }
+
+#[test]
+fn a_fault_in_an_already_submitted_frame_closes_pause_and_keeps_the_actual_error_visible() {
+    let (mut app, context) = fixture(false);
+    app.project.as_mut().unwrap().editor_text = "state count: Int = 0\non update:\n  count += 1\n  if count == 2:\n    assert false, \"fault while paused\"\non draw:\n  clear(0)\n".to_owned();
+    app.run_mode(false);
+    pump(&mut app, &context);
+    app.send_input(&context, "frame");
+    pump(&mut app, &context);
+    app.send_input(&context, "frame");
+    app.set_player_paused(true);
+    let deadline = Instant::now() + Duration::from_secs(7);
+    while app.pending {
+        app.process_events(&context);
+        assert!(Instant::now() < deadline, "{}", app.status);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!app.running && !app.loaded && !app.player_paused && !app.debug_running);
+    assert!(app.pending_menu_action.is_none());
+    assert!(app.status.contains("fault while paused"), "{}", app.status);
+    assert_eq!(app.input_frame, 1);
+    app.stop();
+}

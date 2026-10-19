@@ -1427,6 +1427,10 @@ impl StudioApp {
                 }
                 Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
+                    self.set_player_paused(false);
+                    self.debug_running = false;
+                    self.resume_debug = false;
+                    self.pending_menu_action = None;
                     self.status = event["message"]
                         .as_str()
                         .unwrap_or("runtime error")

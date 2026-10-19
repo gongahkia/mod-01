@@ -13,6 +13,33 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mod01"))
 }
 
+#[test]
+fn graph_is_static_original_source_compiler_data_and_does_not_need_a_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = binary()
+        .arg("graph")
+        .arg(root.join("examples/api-tour/cart.m01w"))
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(model["sources"].as_array().unwrap().len(), 2);
+    assert!(!model["edges"].as_array().unwrap().is_empty());
+    assert!(
+        model["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["kind"] == "Callback")
+    );
+    assert!(model["diagnostics"].as_array().unwrap().is_empty());
+}
+
 fn write_project_file(root: &Path, relative: &str, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
     let path = root.join("cart.m01w");
     let source = fs::read_to_string(&path)?;

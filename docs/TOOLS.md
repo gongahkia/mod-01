@@ -13,6 +13,7 @@ mod01 run my-cart
 mod01 run my-cart --headless --frames 120 --input replay.json
 mod01 pack my-cart --output dist/my-cart.m01c
 mod01 info dist/my-cart.m01c
+mod01 graph my-cart
 mod01 export png my-cart --output dist/my-cart.m01c.png
 mod01 export native my-cart --output dist/my-cart-game
 mod01 lsp
@@ -52,6 +53,12 @@ MODL source is ASCII-only, so source byte columns match LSP UTF-16 columns.
 API completion/hover/signatures are derived from the compiler's complete builtin
 registrations, including memory, math, text and bit helpers. Standard API names
 are reserved consistently at module scope; there is no lazy historical-name path.
+
+`graph WORKCART` emits read-only compiler JSON: original module text/IDs, typed
+definitions, source-mapped diagnostics/references, callbacks, globals, routines,
+and resolved call/start/read/write/asset edges. It never runs the cartridge or
+requires Node. Invalid source returns diagnostics, a nonzero status and no
+executable graph. It is not a scene format or an additional game engine.
 
 See [Studio](STUDIO.md), [standard library](STANDARD_LIBRARY.md), and the
 [native implementation acceptance ledger](NATIVE_IMPLEMENTATION.md).

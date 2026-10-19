@@ -14,13 +14,15 @@ pub mod parser;
 pub mod sema;
 pub mod span;
 pub mod token;
+pub mod tooling;
 pub mod types;
 pub mod workcart;
 
 pub use cartridge::{
     CartridgeError, DecodedCartridge, PackedCartridge, PackedManifest, ProjectAsset,
-    ProjectManifest, UnpackedProject, compile_project, decode_cartridge, load_cartridge_program,
-    pack_project, pack_workcart, parse_project_manifest, unpack_cartridge_project, unpack_workcart,
+    ProjectManifest, UnpackedProject, analyze_project_model, compile_project, decode_cartridge,
+    load_cartridge_program, pack_project, pack_workcart, parse_project_manifest,
+    unpack_cartridge_project, unpack_workcart,
 };
 pub use cartridge_png::{
     CartridgePng, CartridgePngMetadata, decode_cartridge_png, encode_cartridge_png,

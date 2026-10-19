@@ -94,7 +94,7 @@ impl SourceOriginMap {
         Self { sources, ranges }
     }
 
-    fn map_span(&self, span: Span) -> Span {
+    pub(crate) fn map_span(&self, span: Span) -> Span {
         let Some(range) = self
             .ranges
             .iter()

@@ -141,6 +141,11 @@ enum Command {
         #[arg(long)]
         source: bool,
     },
+    /// Emit compiler-derived definitions, diagnostics and call/state/asset relationships as JSON.
+    Graph {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     /// Run the MODL/1 language server over standard input/output.
     Lsp,
 }
@@ -290,7 +295,27 @@ fn main() -> ExitCode {
         }
         Command::Watch { path, output, once } => watch_directory(&path, output.as_deref(), once),
         Command::Info { path, source } => info(path.as_deref(), source),
+        Command::Graph { path } => graph_project(&path),
         Command::Lsp => lsp::run(),
+    }
+}
+
+fn graph_project(path: &Path) -> ExitCode {
+    let Ok(project) = load_project(path) else {
+        return ExitCode::FAILURE;
+    };
+    match modl_core::analyze_project_model(&project.manifest_source, &project.files) {
+        Ok(model) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&model).expect("compiler model serializes")
+            );
+            status(!model.diagnostics.is_empty())
+        }
+        Err(error) => {
+            eprintln!("{}: {error}", path.display());
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -404,6 +404,32 @@ struct ProjectModule {
     syntax: Module,
 }
 
+/// Derives navigation, diagnostics and code/state relationships from the actual linked compiler IR.
+///
+/// # Errors
+/// Returns a current metadata/link diagnostic when project structure is invalid.
+pub fn analyze_project_model(
+    manifest_source: &str,
+    project_files: &BTreeMap<String, Vec<u8>>,
+) -> Result<crate::tooling::ProjectModel, CartridgeError> {
+    let manifest = parse_project_manifest(manifest_source)?;
+    let model = crate::tooling::source_model(project_files)?;
+    if !model.diagnostics.is_empty() {
+        return Ok(model);
+    }
+    let linked = link_project_sources(&manifest.entry, project_files)?;
+    let mut assets = AssetCatalog::default();
+    for (name, asset) in &manifest.assets {
+        assets.insert(name, asset.kind);
+    }
+    let analysis = crate::analyze_module(&linked.source, &assets);
+    Ok(crate::tooling::ProjectModel::from_analysis(
+        model.sources,
+        &analysis,
+        &linked.origins,
+    ))
+}
+
 struct LinkedProject {
     source: SourceFile,
     origins: SourceOriginMap,

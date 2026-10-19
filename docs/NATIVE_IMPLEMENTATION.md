@@ -255,3 +255,11 @@ choices remain outstanding.
   bundled player verifies 120 frames without PATH. No replay golden refresh was
   needed for the tracker/asset-tooling work. The remaining touch/menu/bundle/
   library/platform acceptance rows are still open.
+
+- Native runtime session boundaries now discard superseded queued commands and
+  responses before they reach Studio. This closes the reload race where an old
+  frame/save/audio reply could be applied after selecting a new project. Tests
+  cover already-queued stale payloads and stop/snapshot replies, missing-host
+  startup errors, and rapid real cartridge loads with distinct framebuffer/save
+  commits. Existing preview/playground cancellation tests still pass. This is
+  host isolation infrastructure, not completion of multi-cartridge gameplay.

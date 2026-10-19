@@ -102,6 +102,10 @@ Keyboard port one uses arrows plus Z/X/A/S, Q/W and Enter. Native gamepads fill
 four logical ports. Pointer coordinates map to indexed display pixels. Runtime
 frames return indexed pixels, stereo PCM and complete committed save bytes.
 The host never receives a cartridge-selected filesystem path.
+Runtime loads, stops and isolated previews carry private native session generations;
+queued replies/commands from an abandoned session cannot update a new cartridge's
+frame, audio, debugger or committed save. The child-process JSON protocol is
+unchanged. Missing-bundle startup errors remain visible across generation changes.
 
 Debug compilation supports source statement stepping, breakpoint conditions,
 watches, memory inspection/editing, state/tasks and snapshot restore. It uses the

@@ -1713,7 +1713,7 @@ mod tests {
         assert_eq!(decode_archive(&bytes, limits).unwrap(), entries);
         let exact = ArchiveLimits {
             packed: bytes.len(),
-            unpacked: 1038,
+            unpacked: entries.values().map(Vec::len).sum(),
             entries: 2,
         };
         assert_eq!(encode_archive_with_limits(&entries, exact).unwrap(), bytes);
@@ -1723,7 +1723,7 @@ mod tests {
                 ..exact
             },
             ArchiveLimits {
-                unpacked: 1037,
+                unpacked: exact.unpacked - 1,
                 ..exact
             },
             ArchiveLimits {

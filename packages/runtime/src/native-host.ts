@@ -271,6 +271,7 @@ input.on('line', (line) => {
         type: 'error',
         code: error instanceof RuntimeFault ? error.code : 'M019100',
         message: error instanceof Error ? error.message : 'native host failure',
+        ...(error instanceof RuntimeFault ? { sourceSpan: error.sourceSpan } : {}),
       });
     }
   });

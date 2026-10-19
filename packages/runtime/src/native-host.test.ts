@@ -146,6 +146,14 @@ describe('native process host', () => {
         code: 'M019100',
         message: 'scratchpad requires a freshly loaded debug program',
       });
+      expect(await request(debugCommand)).toMatchObject({ type: 'loaded' });
+      expect(
+        await request({ type: 'memory-edit', address: 0x200000, bytes: 'AA==' }),
+      ).toMatchObject({
+        type: 'error',
+        code: 'M019021',
+        sourceSpan: { start: 0, end: 0 },
+      });
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
     } finally {
       output.close();

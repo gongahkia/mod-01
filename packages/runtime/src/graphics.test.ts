@@ -55,7 +55,7 @@ describe('indexed graphics hardware', () => {
     graphics.executeCommand(command('sprite_xform', [handle, 0, 8, 1, 0, false, false]));
     graphics.executeCommand(command('pixel', [200, 0, 7]));
     const frame = graphics.finishFrame();
-    for (let offsetY of [0, 4, 8])
+    for (const offsetY of [0, 4, 8])
       for (let color = 0; color < 256; color++)
         expect(frame.indexedPixels[(offsetY + Math.floor(color / 128)) * 240 + (color % 128)]).toBe(
           color % 2 === 1 ? 32 : color === 2 ? 7 : color,

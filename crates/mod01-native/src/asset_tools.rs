@@ -3,6 +3,7 @@
 use crate::tracker::{Action, TrackerEditor};
 use eframe::egui::{self, Color32, Sense};
 use modl_core::AssetKind;
+use modl_core::assets::integer_value;
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -163,7 +164,9 @@ impl AssetWorkbench {
             }
             for y in 0..8 {
                 for x in 0..8 {
-                    let color = pixels[y * 8 + x].as_u64().unwrap_or(0).min(255) as usize;
+                    let color = integer_value(&pixels[y * 8 + x], 0, 255)
+                        .ok_or("tile colors must be integers in 0..=255")?
+                        as usize;
                     let [r, g, b] = palette[color];
                     image.put_pixel(
                         ((index % columns) * 8 + x) as u32,
@@ -418,7 +421,7 @@ impl AssetWorkbench {
         for y in 0..rows {
             for x in 0..columns {
                 let index = (self.map_origin[1] + y) * width + self.map_origin[0] + x;
-                let tile_index = cells.get(index).and_then(Value::as_u64).unwrap_or(0) as usize;
+                let tile_index = cells.get(index).and_then(unsigned).unwrap_or(0) as usize;
                 let color = tile_colors
                     .and_then(|tiles| tiles.get(tile_index))
                     .map_or_else(
@@ -550,7 +553,7 @@ impl AssetWorkbench {
         let current = raster.iter().position(|row| integer(&row["line"]) == line);
         if let Some(index) = current {
             for (label, key) in [("SCROLL X", "scrollX"), ("SCROLL Y", "scrollY")] {
-                let mut value = raster[index][key].as_i64().unwrap_or(0);
+                let mut value = integer_value(&raster[index][key], -32768, 32767).unwrap_or(0);
                 ui.horizontal(|ui| {
                     ui.label(label);
                     if ui
@@ -568,8 +571,8 @@ impl AssetWorkbench {
         });
         let key = if self.raster_default { None } else { current };
         let mut mapped = key
-            .and_then(|index| raster[index]["remap"][self.logical_color].as_u64())
-            .or_else(|| self.document["remap"][self.logical_color].as_u64())
+            .and_then(|index| unsigned(&raster[index]["remap"][self.logical_color]))
+            .or_else(|| unsigned(&self.document["remap"][self.logical_color]))
             .unwrap_or(self.logical_color as u64)
             .min(255);
         ui.horizontal(|ui| {
@@ -654,8 +657,7 @@ impl AssetWorkbench {
                 }
             }
         });
-        let mut flag = self.document["flags"][self.tile]
-            .as_u64()
+        let mut flag = unsigned(&self.document["flags"][self.tile])
             .unwrap_or(0)
             .min(255);
         ui.horizontal(|ui| {
@@ -939,7 +941,11 @@ impl AssetWorkbench {
 }
 
 fn integer(value: &Value) -> usize {
-    value.as_u64().unwrap_or(0) as usize
+    unsigned(value).unwrap_or(0) as usize
+}
+
+fn unsigned(value: &Value) -> Option<u64> {
+    integer_value(value, 0, 65535).map(|number| number as u64)
 }
 
 fn number_path(value: &Value, path: &str) -> Option<f64> {
@@ -974,7 +980,7 @@ fn rgb_for_tile(tile: &Value, palette: &[[u8; 3]; 256]) -> [u8; 3] {
     let index = tile
         .as_array()
         .and_then(|pixels| pixels.get(27))
-        .and_then(Value::as_u64)
+        .and_then(unsigned)
         .unwrap_or(0) as usize;
     palette[index.min(255)]
 }
@@ -985,7 +991,7 @@ fn color_for_tile(tile: &Value, palette: &[[u8; 3]; 256]) -> Color32 {
 }
 
 fn flood_fill(cells: &mut [Value], width: usize, height: usize, start: usize, tile: u64) {
-    let Some(target) = cells.get(start).and_then(Value::as_u64) else {
+    let Some(target) = cells.get(start).and_then(unsigned) else {
         return;
     };
     if target == tile {
@@ -993,7 +999,7 @@ fn flood_fill(cells: &mut [Value], width: usize, height: usize, start: usize, ti
     }
     let mut stack = vec![start];
     while let Some(index) = stack.pop() {
-        if cells[index].as_u64() != Some(target) {
+        if unsigned(&cells[index]) != Some(target) {
             continue;
         }
         cells[index] = json!(tile);
@@ -1153,7 +1159,7 @@ fn draw_font_preview(ui: &mut egui::Ui, document: &Value, sample: &str) {
         if let Some(glyph) = glyph {
             for y in 0..height {
                 for x in 0..width {
-                    if glyph["pixels"][y * width + x].as_u64().unwrap_or(0) != 0 {
+                    if unsigned(&glyph["pixels"][y * width + x]).unwrap_or(0) != 0 {
                         painter.rect_filled(
                             egui::Rect::from_min_size(
                                 response.rect.min
@@ -1191,7 +1197,7 @@ fn pixel_grid<const N: usize>(
     for y in 0..height {
         for x in 0..width {
             let index = y * width + x;
-            let selected = pixels.get(index).and_then(Value::as_u64).unwrap_or(0) as usize;
+            let selected = pixels.get(index).and_then(unsigned).unwrap_or(0) as usize;
             let [r, g, b] = palette[selected.min(N - 1)];
             let rect = egui::Rect::from_min_size(
                 response.rect.min + egui::vec2(x as f32 * side, y as f32 * side),
@@ -1274,6 +1280,149 @@ mod tests {
         imported.import_tile_png(&png).unwrap();
         assert_eq!(imported.document["tiles"], editor.document["tiles"]);
         assert_eq!(imported.document["flags"], editor.document["flags"]);
+    }
+
+    #[test]
+    fn integer_asset_spellings_export_real_tile_colors_and_fill_equivalent_cells() {
+        let colors = crate::sprite::palette();
+        let document =
+            json!({"revision":2.0,"kind":"tile_set","tiles":[vec![255.0;64]],"flags":[7.0]});
+        let source = document.to_string();
+        let mut editor = AssetWorkbench::new(AssetKind::TileSet, &source).unwrap();
+        let bytes = editor.export_tile_png(&colors).unwrap();
+        let image = image::load_from_memory(&bytes).unwrap().to_rgba8();
+        assert_eq!(
+            image.get_pixel(0, 0).0,
+            [colors[255][0], colors[255][1], colors[255][2], 255]
+        );
+        assert_eq!(editor.document, document);
+        assert!(!editor.dirty && editor.history.is_empty());
+        for bad in [
+            json!(1.5),
+            json!(-1.0),
+            json!(256.0),
+            json!(false),
+            json!("7"),
+        ] {
+            editor.document["tiles"][0][0] = bad;
+            assert!(
+                editor.export_tile_png(&colors).is_err(),
+                "cannot silently export invalid colors"
+            );
+        }
+        let mut cells = vec![json!(1.0), json!(1), json!(2.0), json!(1.0)];
+        flood_fill(&mut cells, 2, 2, 0, 3);
+        assert_eq!(cells, vec![json!(3), json!(3), json!(2.0), json!(3)]);
+    }
+
+    #[test]
+    fn integer_asset_spellings_render_valid_banks_identically_without_source_edits() {
+        use eframe::egui;
+        use serde_json::Value;
+        fn floats(value: &Value) -> Value {
+            match value {
+                Value::Number(number) => json!(number.as_f64().unwrap()),
+                Value::Array(values) => Value::Array(values.iter().map(floats).collect()),
+                Value::Object(values) => Value::Object(
+                    values
+                        .iter()
+                        .map(|(key, value)| (key.clone(), floats(value)))
+                        .collect(),
+                ),
+                _ => value.clone(),
+            }
+        }
+        let tiles =
+            json!({"revision":2,"kind":"tile_set","tiles":[vec![23;64],vec![11;64]],"flags":[3,0]});
+        let map = json!({"revision":1,"kind":"map","layers":[{"width":2,"height":2,"cells":[0,1,1,0],"tileSet":"tiles"}]});
+        let font = json!({"revision":1,"kind":"font","glyphWidth":2,"glyphHeight":2,"baseline":1,"advanceX":3,"advanceY":3,"missingGlyph":63,"glyphs":[{"code":63,"pixels":[1,0,0,1]},{"code":65,"pixels":[0,1,1,0]}]});
+        let display = json!({"revision":2,"kind":"display","remap":(0..32).collect::<Vec<_>>(),"raster":[{"line":0,"scrollX":-3,"scrollY":8,"remap":(0..32).map(|number|255-number).collect::<Vec<_>>()}]});
+        let assets = [
+            ("tiles", AssetKind::TileSet, tiles.clone()),
+            ("map", AssetKind::Map, map),
+            ("font", AssetKind::Font, font),
+        ];
+        let mut project =
+            modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        for (name, kind, value) in &assets {
+            let path = format!("assets/{name}.json");
+            project.manifest.assets.insert(
+                (*name).to_owned(),
+                modl_core::ProjectAsset {
+                    kind: *kind,
+                    path: path.clone(),
+                },
+            );
+            project
+                .files
+                .insert(path, serde_json::to_vec(&floats(value)).unwrap());
+        }
+        project.manifest.display = Some("assets/display.json".to_owned());
+        project.files.insert(
+            "assets/display.json".to_owned(),
+            serde_json::to_vec(&floats(&display)).unwrap(),
+        );
+        let report = modl_core::assets::analyze_project_assets(&project.manifest, &project.files);
+        assert!(report.is_valid(), "{:?}", report.diagnostics);
+        let workcart =
+            modl_core::encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+        modl_core::game::pack_game_workcart(&workcart).unwrap();
+        let render = |document: &Value, kind, display: bool, tile_bank: &Value| {
+            let context = egui::Context::default();
+            crate::ui_assets::install_font(&context);
+            crate::ui_theme::install(&context);
+            let mut editor = if display {
+                AssetWorkbench::new_display(&document.to_string())
+            } else {
+                AssetWorkbench::new(kind, &document.to_string())
+            }
+            .unwrap();
+            let mut evidence = (Vec::new(), Vec::new());
+            for _ in 0..3 {
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(900.0, 1200.0),
+                        )),
+                        time: Some(0.0),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert!(!editor.ui(
+                            ui,
+                            &crate::sprite::palette(),
+                            &[("tiles".to_owned(), tile_bank.clone())],
+                            &[],
+                            None
+                        ));
+                    },
+                );
+                evidence.0.clear();
+                evidence.1.clear();
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        egui::Shape::Rect(rect) => evidence.0.push((rect.rect, rect.fill)),
+                        egui::Shape::Text(text) => evidence.1.push(text.galley.job.text.clone()),
+                        _ => {}
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(editor.document, *document);
+            assert!(!editor.dirty && editor.history.is_empty() && editor.future.is_empty());
+            evidence
+        };
+        for (name, kind, value) in assets
+            .into_iter()
+            .chain([("display", AssetKind::Map, display)])
+        {
+            assert!(
+                render(&value, kind, name == "display", &tiles)
+                    == render(&floats(&value), kind, name == "display", &floats(&tiles)),
+                "{name} must display the same valid numbers/colors"
+            );
+        }
     }
 
     #[test]

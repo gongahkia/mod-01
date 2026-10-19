@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Native asset number readers now reuse the shared Rust admission helper instead
+  of serde_json's storage-specific integer accessors. Regressions first reproduced
+  valid `2.0` sprite rejection, `255.0` tile export as transparent black and a
+  disabled `240.0`/`60.0` tracker. Real-font tile/map/font/display UI output now
+  matches integral-spelling banks without source/history changes; the same float
+  bank passes whole-game packing. Sprite colours, PNG alpha/colour, map fill,
+  tracker note display/transposition and signed raster scroll use numeric meaning.
+  Invalid PNG colours are rejected rather than silently clamped/defaulted. Four
+  native regressions and the shared reader boundary test pass. All 141 native
+  and 133 core tests plus warning-free all-feature workspace Clippy pass.
 - Requirement-specific bundle audit is complete against the reviewed local
   dependency/transition/reload/state/save/validation contract. The bundle guide
   now links admission, scheduler, native editor/debugger and cross-host/package

@@ -11,6 +11,38 @@ fn project() -> (ProjectManifest, BTreeMap<String, Vec<u8>>) {
     (project.manifest, project.files)
 }
 
+#[test]
+fn asset_integer_values_use_numeric_meaning_without_rounding_or_repair() {
+    use modl_core::assets::integer_value;
+    for source in ["2", "2.0", "2e0"] {
+        let value: Value = serde_json::from_str(source).unwrap();
+        assert_eq!(integer_value(&value, 0, 255), Some(2));
+    }
+    for (source, expected) in [("-0.0", 0), ("-32768.0", -32768), ("32767e0", 32767)] {
+        let value: Value = serde_json::from_str(source).unwrap();
+        assert_eq!(integer_value(&value, -32768, 32767), Some(expected));
+    }
+    for value in [
+        json!(0.5),
+        json!(-1),
+        json!(256.0),
+        json!(true),
+        json!("2"),
+        Value::Null,
+    ] {
+        assert!(integer_value(&value, 0, 255).is_none());
+    }
+    assert_eq!(
+        integer_value(&json!(i32::MAX), i32::MIN, i32::MAX),
+        Some(i32::MAX)
+    );
+    assert_eq!(
+        integer_value(&json!(i32::MIN), i32::MIN, i32::MAX),
+        Some(i32::MIN)
+    );
+    assert!(integer_value(&json!(1), 2, 0).is_none());
+}
+
 fn add(
     manifest: &mut ProjectManifest,
     files: &mut BTreeMap<String, Vec<u8>>,

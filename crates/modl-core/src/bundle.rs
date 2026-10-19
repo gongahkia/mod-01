@@ -102,21 +102,27 @@ pub fn pack_bundle_workcarts(sources: &[BundleSource]) -> Result<PackedBundle, C
         }
     }
     let mut cartridges = BTreeMap::new();
-    let mut identity = String::from("MOD-01 local cartridge catalog/1\n");
     for (alias, source) in ordered {
         let packed = pack_workcart(source).map_err(|error| member_error(alias, error))?;
-        // Aliases cannot contain ':' or newlines; the 64-digit hash commits every byte,
-        // including the exact authored source, current hardware metadata and compiler output.
+        cartridges.insert(alias.to_owned(), packed);
+    }
+    Ok(admitted_catalog(cartridges))
+}
+
+/// Only call after current member admission and alias/save-identity validation.
+pub(crate) fn admitted_catalog(cartridges: BTreeMap<String, PackedCartridge>) -> PackedBundle {
+    let mut identity = String::from("MOD-01 local cartridge catalog/1\n");
+    for (alias, packed) in &cartridges {
+        // Admitted aliases cannot contain ':' or newlines. Hashes commit exact member bytes.
         identity.push_str(alias);
         identity.push(':');
         identity.push_str(&sha256_hex(&packed.bytes));
         identity.push('\n');
-        cartridges.insert(alias.to_owned(), packed);
     }
-    Ok(PackedBundle {
+    PackedBundle {
         cartridges,
         identity: sha256_hex(identity.as_bytes()),
-    })
+    }
 }
 
 pub(crate) fn valid_alias(alias: &str) -> bool {

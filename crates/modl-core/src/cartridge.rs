@@ -1092,6 +1092,30 @@ pub(crate) fn decode_archive(
     Ok(entries)
 }
 
+pub(crate) fn first_archive_path(bytes: &[u8]) -> Result<&str, CartridgeError> {
+    let mut reader = Reader::new(bytes);
+    if reader.take(MAGIC.len())? != MAGIC || reader.u32()? == 0 {
+        return Err(cartridge_error(
+            "M014010",
+            "invalid current archive header".to_owned(),
+        ));
+    }
+    let length = usize::from(reader.u16()?);
+    if length == 0 || length > 1024 {
+        return Err(cartridge_error(
+            "M014010",
+            "archive path length is invalid".to_owned(),
+        ));
+    }
+    reader.u32()?;
+    reader.u32()?;
+    reader.take(32)?;
+    let path = std::str::from_utf8(reader.take(length)?)
+        .map_err(|_| cartridge_error("M014010", "archive path is not UTF-8".to_owned()))?;
+    normalize_archive_path(path)?;
+    Ok(path)
+}
+
 /// Reconstructs the Git-friendly project representation from a validated cartridge.
 ///
 /// # Errors
@@ -1124,7 +1148,13 @@ pub fn unpack_workcart(bytes: &[u8]) -> Result<String, CartridgeError> {
             "revision-2 work-cart source is not valid UTF-8".to_owned(),
         )
     })?;
-    crate::parse_workcart(source)?;
+    if !crate::parse_workcart(source)?.bundle.is_empty() {
+        return Err(cartridge_error(
+            "M014073",
+            "a logical cartridge cannot conceal bundle dependencies outside a game container"
+                .to_owned(),
+        ));
+    }
     Ok(source.to_owned())
 }
 

@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- Whole-game Rust packing/admission is implemented in `game.rs`: ordinary game
+  bytes remain unchanged; a flat bundle uses the same canonical M01C/2 archive
+  encoding with a bounded index, exact enclosing source and 2–32 ordinary current
+  cartridges. Eight tests prove a 32-member source/packed round trip and reject
+  hash-recomputed alias/source/build substitution, unknown/missing files, nested
+  compositions and historical headers. A forged compiled member passes structural
+  inventory checks but is rejected by authoritative whole-game reconstruction,
+  without executing JavaScript. Concealed dependencies in entry-only archives
+  are rejected too. Console ROM remains a single ≤1 MiB member.
+  `docs/BUNDLES.md` distinguishes this completed core from pending runtime,
+  CLI/Studio, replay/debugger and native integration; the acceptance row stays open.
 - Current workcarts now retain optional flat `[[bundle]]` members as exact UTF-8
   workcart strings. Rewrites, asset deletion, recipe generation and CLI formatting
   preserve member source, including CRLF/comments; aliases are bounded/unique and

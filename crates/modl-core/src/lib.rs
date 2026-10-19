@@ -9,6 +9,7 @@ pub mod cartridge_png;
 pub mod codegen;
 pub mod diagnostic;
 pub mod formatter;
+pub mod game;
 pub mod generator;
 pub mod hardware;
 pub mod ir;

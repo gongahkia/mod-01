@@ -42,7 +42,7 @@ repeat. Runs of at least four bytes use repeated packets. Decoding re-encodes
 each payload and rejects alternate encodings. There are no timestamps, host
 paths, permissions or platform fields.
 
-Only these physical entries are allowed:
+Inside a logical cartridge, only these physical entries are allowed:
 
 - `manifest.json`: canonical JSON metadata and sorted size/hash inventory.
 - `source/workcart.m01w`: the exact authored source, including all embedded data.
@@ -57,7 +57,7 @@ when build products are present, compares them with the recompiled JS/map.
 Changing an archived program and recomputing its inventory does not authorize
 execution of that program.
 
-Packed bytes are limited to 1 MiB. Decoding bounds total expansion to 16 MiB
+Each logical cartridge is limited to 1 MiB packed. Decoding bounds total expansion to 16 MiB
 and entry count to 4,096, validates lengths, canonical paths/JSON/RLE, hashes,
 metadata/source agreement and the exact entry set, and rejects trailing bytes.
 Packing decodes the completed artifact before returning it.
@@ -66,6 +66,35 @@ Unpacking restores the exact workcart. Studio's no-op save/pack preserves its
 authored text; actual edits preserve all unrelated modules, auxiliary files,
 recipes and tests. `mod01 info FILE --source` exposes a read-only materialized
 JSON view for inspection, not an additional authoring format.
+
+## Flat game composition
+
+The shared Rust whole-game APIs, `game::pack_game_workcart` and
+`game::decode_game`, also compose up to 32 current logical cartridges. They use
+the same M01C/2 header, inventory encoding, canonical RLE and hashes, not a
+historical format or alternate hardware profile. Ordinary games retain exactly
+the existing single-cartridge bytes.
+
+A composition contains only `bundle.json`, the exact enclosing
+`source/workcart.m01w`, and `cartridges/ALIAS.m01c` for every declared member.
+The canonical index records format revision 2, kind `bundle`, entry `main`,
+catalog identity and every source/member size/hash. Each member independently
+passes the ordinary cartridge compiler, asset and capacity admission. Unknown,
+unlisted, missing, nested or rebound members are rejected. Admission recompiles
+the complete enclosing source and requires byte-for-byte package agreement;
+recomputing ordinary hashes cannot authorize forged compiled JavaScript.
+
+The shipping container is not mapped into console ROM. Only an active member's
+ordinary ≤1 MiB cartridge may be mapped there. Container limits account separately
+for the ≤128 MiB escaped source document, ≤32 MiB member bytes, a ≤64 KiB index
+and canonical RLE/header overhead. A catalog has at most 64 MiB total member
+source and 16 MiB per member. This does not enlarge any member's machine capacity.
+Game identity includes the entire shipping artifact and exact enclosing source;
+catalog identity covers sorted aliases and exact logical cartridge bytes.
+
+These are implemented core APIs; CLI/Studio/runtime bundle integration remains
+in progress. Single-cartridge APIs explicitly refuse bundled source instead of
+silently dropping dependencies. See [bundle implementation](BUNDLES.md).
 
 ## Cartridge PNG
 

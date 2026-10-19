@@ -22,6 +22,7 @@
 mod asset_tools;
 mod audio;
 mod launch;
+mod live_audio;
 mod player;
 mod playground;
 mod project;
@@ -55,6 +56,12 @@ use ui_assets::PixelCursors;
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
+#[derive(Clone, Copy)]
+enum AudioPreviewMode {
+    Song,
+    Pattern,
+    Note,
+}
 const fn manual_topics() -> [(&'static str, &'static str); 13] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
@@ -110,6 +117,7 @@ struct StudioApp {
     view: View,
     runtime: RuntimeBridge,
     preview_runtime: RuntimeBridge,
+    live_audio: live_audio::AudioPreview,
     playground: playground::Playground,
     show_playground: bool,
     audio: Option<AudioOutput>,
@@ -156,10 +164,9 @@ struct StudioApp {
     recording_replay: bool,
     replay_frames: Vec<(u32, Value)>,
     replay_playback: Option<BTreeMap<u32, Value>>,
-    preview_wav: Vec<u8>,
-    preview_offset: usize,
-    preview_export: bool,
     preview_pending: bool,
+    preview_cancelling: bool,
+    preview_name: String,
     loaded: bool,
     pending: bool,
     frame: u32,
@@ -193,6 +200,7 @@ impl StudioApp {
             view: View::Code,
             runtime: RuntimeBridge::new(host_path.clone()),
             preview_runtime: RuntimeBridge::new(host_path),
+            live_audio: live_audio::AudioPreview::new(),
             playground: playground::Playground::new(),
             show_playground: false,
             audio: AudioOutput::new().ok(),
@@ -239,10 +247,9 @@ impl StudioApp {
             recording_replay: false,
             replay_frames: Vec::new(),
             replay_playback: None,
-            preview_wav: Vec::new(),
-            preview_offset: 0,
-            preview_export: false,
             preview_pending: false,
+            preview_cancelling: false,
+            preview_name: String::new(),
             loaded: false,
             pending: false,
             frame: 0,
@@ -982,55 +989,113 @@ impl StudioApp {
         };
     }
 
-    fn render_asset_wav(&mut self, export: bool) {
-        let Some(project) = &self.project else {
-            return;
-        };
-        let Some(declaration) = project.manifest.assets.get(&self.asset_name) else {
-            return;
-        };
-        if !matches!(
-            declaration.kind,
-            modl_core::AssetKind::Sound | modl_core::AssetKind::Music
-        ) {
+    fn selected_audio_document(&self) -> Result<Value, String> {
+        self.asset_workbench.as_ref().map_or_else(
+            || serde_json::from_str(&self.asset_text).map_err(|error| error.to_string()),
+            |editor| Ok(editor.document.clone()),
+        )
+    }
+
+    fn start_live_audio(&mut self, mode: AudioPreviewMode) {
+        let prepared = (|| {
+            let project = self.project.as_ref().ok_or("no project is open")?;
+            let document = self.selected_audio_document()?;
+            let cursor = self
+                .asset_workbench
+                .as_ref()
+                .and_then(AssetWorkbench::tracker_cursor);
+            let pattern = if matches!(mode, AudioPreviewMode::Pattern) {
+                Some(
+                    cursor
+                        .as_ref()
+                        .ok_or("select a tracker pattern")?
+                        .0
+                        .as_str(),
+                )
+            } else {
+                None
+            };
+            let bank = live_audio::project_bank(project, &self.asset_name, &document, pattern)?;
+            let note = if matches!(mode, AudioPreviewMode::Note) {
+                if document["kind"] == "music" {
+                    let (pattern, row, channel) = cursor.as_ref().ok_or("select a tracker cell")?;
+                    let cell = &document["patterns"][pattern]["rows"][*row][*channel];
+                    let sound = cell["sound"]
+                        .as_str()
+                        .ok_or("select a non-empty tracker cell")?
+                        .to_owned();
+                    let note = cell["note"]
+                        .as_f64()
+                        .ok_or("tracker note must be numeric")?;
+                    let volume = cell.get("volume").map_or(Ok(1.0), |value| {
+                        value.as_f64().ok_or("tracker volume must be numeric")
+                    })?;
+                    Some((sound, note, volume))
+                } else {
+                    Some((
+                        self.asset_name.clone(),
+                        document["note"]
+                            .as_f64()
+                            .ok_or("patch note must be numeric")?,
+                        1.0,
+                    ))
+                }
+            } else {
+                None
+            };
+            Ok::<_, String>((bank, note, cursor.map_or(0, |cursor| cursor.1)))
+        })();
+        match prepared {
+            Ok((bank, Some((sound, note, volume)), _)) => {
+                self.live_audio.audition(bank, &sound, note, volume)
+            }
+            Ok((bank, None, row)) => self.live_audio.play(
+                bank,
+                &self.asset_name,
+                0,
+                if matches!(mode, AudioPreviewMode::Pattern) {
+                    row
+                } else {
+                    0
+                },
+            ),
+            Err(error) => self.status = format!("AUDIO PREVIEW ERROR: {error}"),
+        }
+    }
+
+    fn render_asset_wav(&mut self) {
+        if self.preview_pending || self.preview_cancelling {
             return;
         }
-        let mut asset: Value = match self
-            .asset_workbench
-            .as_ref()
-            .map(AssetWorkbench::source)
-            .transpose()
-            .and_then(|source| {
-                serde_json::from_str(source.as_deref().unwrap_or(&self.asset_text))
-                    .map_err(|error| error.to_string())
-            }) {
-            Ok(value) => value,
+        let prepared = (|| {
+            let project = self.project.as_ref().ok_or("no project is open")?;
+            let selected = self.selected_audio_document()?;
+            let bank = live_audio::project_bank(project, &self.asset_name, &selected, None)?;
+            let asset = bank
+                .iter()
+                .find(|asset| asset["name"] == self.asset_name)
+                .cloned()
+                .ok_or("selected audio asset is missing")?;
+            let sounds = bank
+                .into_iter()
+                .filter(|asset| asset["kind"] == "sound")
+                .collect::<Vec<_>>();
+            Ok::<_, String>((asset, sounds))
+        })();
+        let (asset, sounds) = match prepared {
+            Ok(values) => values,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
-        asset["name"] = json!(self.asset_name);
-        let sounds = project
-            .manifest
-            .assets
-            .iter()
-            .filter_map(|(name, declared)| {
-                if declared.kind != modl_core::AssetKind::Sound {
-                    return None;
-                }
-                let mut value: Value =
-                    serde_json::from_slice(project.files.get(&declared.path)?).ok()?;
-                value["name"] = json!(name);
-                Some(value)
-            })
-            .collect::<Vec<_>>();
-        self.preview_export = export;
+        let kind = asset["kind"].clone();
         self.preview_pending = true;
-        self.status = "RENDERING PRODUCTION SYNTH AUDIO".to_owned();
-        if let Err(error) = self.preview_runtime.send(json!({"type":"render-wav",
-            "kind":if declaration.kind == modl_core::AssetKind::Sound { "sound" } else { "music" },
-            "asset":asset,"sounds":sounds}))
+        self.preview_name = self.asset_name.clone();
+        self.status = "RENDERING PRODUCTION SYNTH WAV".to_owned();
+        if let Err(error) = self
+            .preview_runtime
+            .send(json!({"type":"render-wav", "kind":kind, "asset":asset, "sounds":sounds}))
         {
             self.status = error;
             self.preview_pending = false;
@@ -1039,13 +1104,13 @@ impl StudioApp {
 
     fn process_preview(&mut self, context: &egui::Context) {
         while let Some(event) = self.preview_runtime.poll() {
-            self.preview_pending = false;
             match event["type"].as_str() {
-                Some("wav") => {
-                    let decoded = event["bytes"]
+                Some("wav") if self.preview_pending => {
+                    self.preview_pending = false;
+                    let Some(bytes) = event["bytes"]
                         .as_str()
-                        .and_then(|encoded| STANDARD.decode(encoded).ok());
-                    let Some(bytes) = decoded else {
+                        .and_then(|encoded| STANDARD.decode(encoded).ok())
+                    else {
                         self.status = "INVALID WAV RESPONSE".to_owned();
                         continue;
                     };
@@ -1053,49 +1118,28 @@ impl StudioApp {
                         self.status = "INVALID WAV HEADER".to_owned();
                         continue;
                     }
-                    if self.preview_export {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("{}.wav", self.asset_name))
-                            .save_file()
-                        {
-                            self.status = match fs::write(path, bytes) {
-                                Ok(()) => "WAV SAVED".to_owned(),
-                                Err(error) => error.to_string(),
-                            };
-                        }
-                    } else {
-                        if let Some(audio) = &self.audio {
-                            audio.clear();
-                        }
-                        self.preview_wav = bytes;
-                        self.preview_offset = 44;
-                        self.status = "PREVIEWING AUDIO".to_owned();
-                        context.request_repaint();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(format!("{}.wav", self.preview_name))
+                        .save_file()
+                    {
+                        self.status = match fs::write(path, bytes) {
+                            Ok(()) => "WAV SAVED".to_owned(),
+                            Err(error) => error.to_string(),
+                        };
                     }
                 }
-                Some("error") => {
+                Some("error") if self.preview_pending => {
+                    self.preview_pending = false;
                     self.status = event["message"]
                         .as_str()
-                        .unwrap_or("AUDIO PREVIEW FAILED")
-                        .to_owned()
+                        .unwrap_or("WAV EXPORT FAILED")
+                        .to_owned();
                 }
+                Some("stopped") => self.preview_cancelling = false,
                 _ => {}
             }
         }
-        if self.preview_pending {
-            context.request_repaint_after(Duration::from_millis(16));
-        }
-        if self.preview_offset + 4 <= self.preview_wav.len() {
-            let end = (self.preview_offset + 800 * 4).min(self.preview_wav.len());
-            let aligned = self.preview_offset + ((end - self.preview_offset) / 4) * 4;
-            if let Some(audio) = &self.audio {
-                if let Err(error) =
-                    audio.push_pcm16_stereo(&self.preview_wav[self.preview_offset..aligned])
-                {
-                    self.status = error;
-                }
-            }
-            self.preview_offset = aligned;
+        if self.preview_pending || self.preview_cancelling {
             context.request_repaint_after(Duration::from_millis(16));
         }
     }
@@ -1167,6 +1211,12 @@ impl StudioApp {
     }
 
     fn stop(&mut self) {
+        self.live_audio.stop();
+        if self.preview_pending && !self.preview_cancelling {
+            self.preview_pending = false;
+            self.preview_cancelling = true;
+            let _ = self.preview_runtime.send(json!({"type":"stop"}));
+        }
         self.running = false;
         self.player_paused = false;
         self.debug_running = false;
@@ -1777,7 +1827,10 @@ impl StudioApp {
             }
             ui.separator();
             if ui
-                .add_enabled(self.running, egui::Button::new("STOP"))
+                .add_enabled(
+                    self.running || self.live_audio.active() || self.preview_pending,
+                    egui::Button::new("STOP"),
+                )
                 .clicked()
             {
                 self.stop();
@@ -2658,6 +2711,10 @@ impl eframe::App for StudioApp {
         let context = root.ctx().clone();
         self.process_events(&context);
         self.process_preview(&context);
+        if (self.player_mode || self.view != View::Assets) && self.live_audio.active() {
+            self.live_audio.stop();
+        }
+        self.live_audio.poll(&context, self.audio.as_ref());
         self.playground.poll(&context);
         if self.player_mode {
             self.player_ui(root);
@@ -2957,13 +3014,49 @@ impl eframe::App for StudioApp {
                             })
                         {
                             ui.horizontal(|ui| {
-                                if ui.button("PREVIEW AUDIO").clicked() {
-                                    self.render_asset_wav(false);
+                                let music = self
+                                    .project
+                                    .as_ref()
+                                    .and_then(|project| {
+                                        project.manifest.assets.get(&self.asset_name)
+                                    })
+                                    .is_some_and(|asset| asset.kind == modl_core::AssetKind::Music);
+                                if music && ui.button("LIVE SONG").clicked() {
+                                    self.start_live_audio(AudioPreviewMode::Song);
                                 }
-                                if ui.button("EXPORT WAV").clicked() {
-                                    self.render_asset_wav(true);
+                                if music && ui.button("PATTERN FROM CURSOR").clicked() {
+                                    self.start_live_audio(AudioPreviewMode::Pattern);
+                                }
+                                if ui
+                                    .button(if music {
+                                        "AUDITION CELL"
+                                    } else {
+                                        "PREVIEW PATCH"
+                                    })
+                                    .clicked()
+                                {
+                                    self.start_live_audio(AudioPreviewMode::Note);
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.live_audio.active(),
+                                        egui::Button::new("STOP AUDIO"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.live_audio.stop();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        !self.preview_pending && !self.preview_cancelling,
+                                        egui::Button::new("EXPORT WAV"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.render_asset_wav();
                                 }
                             });
+                            self.live_audio.telemetry_ui(ui);
                         }
                         ui.collapsing("EDIT RAW JSON", |ui| {
                             if let Some(workbench) = &self.asset_workbench {

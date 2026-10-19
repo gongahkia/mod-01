@@ -95,6 +95,23 @@ impl AssetWorkbench {
             .map_err(|error| error.to_string())
     }
 
+    pub fn tracker_cursor(&self) -> Option<(String, usize, usize)> {
+        if self.kind != AssetKind::Music {
+            return None;
+        }
+        let patterns = self.document["patterns"].as_object()?;
+        let pattern = if patterns.contains_key(&self.pattern) {
+            self.pattern.clone()
+        } else {
+            patterns.keys().next()?.clone()
+        };
+        let rows = patterns[&pattern]["rows"].as_array()?;
+        if rows.is_empty() {
+            return None;
+        }
+        Some((pattern, self.row.min(rows.len() - 1), self.channel.min(7)))
+    }
+
     pub fn export_tile_png(&self, palette: &[[u8; 3]; 256]) -> Result<Vec<u8>, String> {
         if self.kind != AssetKind::TileSet || self.display {
             return Err("OPEN A TILE SET FIRST".to_owned());

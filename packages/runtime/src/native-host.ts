@@ -7,7 +7,13 @@ import type { InputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import { RuntimeFault } from './errors';
 import { renderMusicWav, renderSoundWav } from './wav';
-import type { MusicAsset, SoundAsset } from './audio';
+import {
+  AudioAssetStore,
+  Synthesizer,
+  type AudioAsset,
+  type MusicAsset,
+  type SoundAsset,
+} from './audio';
 import { evaluateWatch } from './debugger';
 import { MEMORY } from './bus';
 
@@ -36,6 +42,10 @@ type Command =
   | { type: 'restore'; snapshot: string }
   | { type: 'memory'; address: number; length: number }
   | { type: 'memory-edit'; address: number; bytes: string }
+  | { type: 'audio-preview-load'; assets: AudioAsset[] }
+  | { type: 'audio-preview-play'; music: string; orderIndex: number; row: number }
+  | { type: 'audio-preview-audition'; sound: string; note: number; volume?: number }
+  | { type: 'audio-preview-frame' }
   | {
       type: 'render-wav';
       kind: 'sound' | 'music';
@@ -45,6 +55,7 @@ type Command =
   | { type: 'stop' };
 
 let runtime: ConsoleRuntime | undefined;
+let audioPreview: Synthesizer | undefined;
 let scratchFresh = false;
 let cartridgeId: string | undefined;
 let symbolNames: Readonly<Record<string, string>> = {};
@@ -99,6 +110,47 @@ function evaluateExpressions(
 
 async function handle(command: Command): Promise<unknown> {
   switch (command.type) {
+    case 'audio-preview-load': {
+      runtime = undefined;
+      audioPreview = undefined;
+      scratchFresh = false;
+      cartridgeId = undefined;
+      symbolNames = {};
+      if (
+        !Array.isArray(command.assets) ||
+        command.assets.length > 4096 ||
+        Buffer.byteLength(JSON.stringify(command.assets), 'utf8') > 16 * 1024 * 1024
+      )
+        throw new RangeError('audio preview requires at most 4096 assets and 16 MiB');
+      audioPreview = new Synthesizer(new AudioAssetStore(command.assets));
+      return { type: 'audio-preview-loaded' };
+    }
+    case 'audio-preview-play':
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      audioPreview.playMusic(command.music, command.orderIndex, command.row);
+      return { type: 'audio-preview-playing', position: audioPreview.inspectTracker() };
+    case 'audio-preview-audition':
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      audioPreview.audition(command.sound, command.note, command.volume);
+      return { type: 'audio-preview-auditioned' };
+    case 'audio-preview-frame': {
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      const frame = audioPreview.snapshot().frame;
+      const position = audioPreview.inspectTracker();
+      const result = audioPreview.finishFrame();
+      return {
+        type: 'audio-preview-frame',
+        frame,
+        position,
+        nextPosition: result.tracker,
+        left: encoded(result.left),
+        right: encoded(result.right),
+        activeVoices: result.activeVoices,
+        voices: audioPreview.inspectVoices(),
+        peakLeft: result.left.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+        peakRight: result.right.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+      };
+    }
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
@@ -112,6 +164,7 @@ async function handle(command: Command): Promise<unknown> {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2 * 1024 * 1024)
         throw new TypeError('invalid compiled cartridge');
       runtime = undefined;
+      audioPreview = undefined;
       scratchFresh = false;
       const module: unknown = await import(
         `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
@@ -254,6 +307,7 @@ async function handle(command: Command): Promise<unknown> {
       return { type: 'memory-edited' };
     case 'stop':
       runtime = undefined;
+      audioPreview = undefined;
       scratchFresh = false;
       cartridgeId = undefined;
       return { type: 'stopped' };

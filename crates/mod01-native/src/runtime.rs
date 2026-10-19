@@ -61,7 +61,10 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
     };
     let mut child: Option<HostProcess> = None;
     for command in commands {
-        if command["type"] == "load" || command["type"] == "render-wav" {
+        if command["type"] == "load"
+            || command["type"] == "render-wav"
+            || command["type"] == "audio-preview-load"
+        {
             if let Some(old) = child.take() {
                 old.stop();
             }
@@ -183,4 +186,55 @@ fn read_replies(stdout: ChildStdout, replies: Sender<Result<Value, String>>) {
 
 fn error_event(message: String) -> Value {
     serde_json::json!({ "type": "error", "message": message })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde_json::json;
+    use std::time::Instant;
+
+    #[test]
+    fn live_audio_preview_runs_in_an_isolated_native_child_and_restarts_its_clock() {
+        let runtime = RuntimeBridge::new(crate::native_host_path());
+        let request = |command| {
+            runtime.send(command).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(7);
+            loop {
+                if let Some(event) = runtime.poll() {
+                    return event;
+                }
+                assert!(Instant::now() < deadline, "live audio preview timed out");
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let load = json!({"type":"audio-preview-load","assets":[{
+            "kind":"sound","name":"tone","waveform":"triangle","note":60,
+            "durationFrames":4,"volume":0.5,"pan":0,
+            "envelope":{"attackFrames":0,"decayFrames":0,"sustainLevel":1,"releaseFrames":1},
+            "pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}
+        }]});
+        assert_eq!(request(load.clone())["type"], "audio-preview-loaded");
+        assert_eq!(
+            request(json!({"type":"audio-preview-audition","sound":"tone","note":64,"volume":0.5}))
+                ["type"],
+            "audio-preview-auditioned"
+        );
+        let frame = request(json!({"type":"audio-preview-frame"}));
+        assert_eq!(frame["type"], "audio-preview-frame");
+        assert_eq!(frame["frame"], 0);
+        assert_eq!(frame["voices"][0]["note"], 64);
+        let left = STANDARD.decode(frame["left"].as_str().unwrap()).unwrap();
+        assert_eq!(left.len(), 800 * 4);
+        assert!(left.iter().any(|byte| *byte != 0));
+        assert!(frame.get("saveCommit").is_none());
+        assert!(frame["position"].is_null());
+        assert_eq!(request(json!({"type":"stop"}))["type"], "stopped");
+        assert_eq!(request(load)["type"], "audio-preview-loaded");
+        let fresh = request(json!({"type":"audio-preview-frame"}));
+        assert_eq!(fresh["frame"], 0);
+        assert_eq!(fresh["activeVoices"], 0);
+        assert_eq!(request(json!({"type":"stop"}))["type"], "stopped");
+    }
 }

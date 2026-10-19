@@ -5657,6 +5657,7 @@ function truthy(value) {
 //#endregion
 //#region src/native-host.ts
 var runtime;
+var audioPreview;
 var scratchFresh = false;
 var cartridgeId;
 var symbolNames = {};
@@ -5705,6 +5706,49 @@ function evaluateExpressions(expressions, state, locals, booleanOnly = false) {
 }
 async function handle(command) {
   switch (command.type) {
+    case 'audio-preview-load':
+      runtime = void 0;
+      audioPreview = void 0;
+      scratchFresh = false;
+      cartridgeId = void 0;
+      symbolNames = {};
+      if (
+        !Array.isArray(command.assets) ||
+        command.assets.length > 4096 ||
+        Buffer.byteLength(JSON.stringify(command.assets), 'utf8') > 16777216
+      )
+        throw new RangeError('audio preview requires at most 4096 assets and 16 MiB');
+      audioPreview = new Synthesizer(new AudioAssetStore(command.assets));
+      return { type: 'audio-preview-loaded' };
+    case 'audio-preview-play':
+      if (audioPreview === void 0) throw new Error('no audio preview is loaded');
+      audioPreview.playMusic(command.music, command.orderIndex, command.row);
+      return {
+        type: 'audio-preview-playing',
+        position: audioPreview.inspectTracker(),
+      };
+    case 'audio-preview-audition':
+      if (audioPreview === void 0) throw new Error('no audio preview is loaded');
+      audioPreview.audition(command.sound, command.note, command.volume);
+      return { type: 'audio-preview-auditioned' };
+    case 'audio-preview-frame': {
+      if (audioPreview === void 0) throw new Error('no audio preview is loaded');
+      const frame = audioPreview.snapshot().frame;
+      const position = audioPreview.inspectTracker();
+      const result = audioPreview.finishFrame();
+      return {
+        type: 'audio-preview-frame',
+        frame,
+        position,
+        nextPosition: result.tracker,
+        left: encoded(result.left),
+        right: encoded(result.right),
+        activeVoices: result.activeVoices,
+        voices: audioPreview.inspectVoices(),
+        peakLeft: result.left.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+        peakRight: result.right.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+      };
+    }
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
@@ -5720,6 +5764,7 @@ async function handle(command) {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2097152)
         throw new TypeError('invalid compiled cartridge');
       runtime = void 0;
+      audioPreview = void 0;
       scratchFresh = false;
       const module = await import(
         `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
@@ -5869,6 +5914,7 @@ async function handle(command) {
       return { type: 'memory-edited' };
     case 'stop':
       runtime = void 0;
+      audioPreview = void 0;
       scratchFresh = false;
       cartridgeId = void 0;
       return { type: 'stopped' };

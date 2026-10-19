@@ -276,6 +276,47 @@ impl NativeProject {
             self.editor_text.as_bytes().to_vec(),
         );
     }
+
+    pub fn add_member(&mut self, alias: &str, source: &str) -> Result<(), String> {
+        let source = modl_core::workcart::add_workcart_member(&self.source()?, alias, source)
+            .map_err(|error| error.to_string())?;
+        self.replace_composition(source, alias)
+    }
+
+    pub fn remove_member(&mut self, alias: &str) -> Result<(), String> {
+        let source = modl_core::workcart::remove_workcart_member(&self.source()?, alias)
+            .map_err(|error| error.to_string())?;
+        let selected = if self.member_alias == alias {
+            "main".to_owned()
+        } else {
+            self.member_alias.clone()
+        };
+        self.replace_composition(source, &selected)
+    }
+
+    fn replace_composition(&mut self, source: String, selected: &str) -> Result<(), String> {
+        let mut candidate = Self::from_source(source, self.workcart_path.clone())?;
+        candidate.root.clone_from(&self.root);
+        candidate.member_paths = self.member_paths.clone();
+        candidate
+            .member_paths
+            .insert(self.member_alias.clone(), self.selected_file.clone());
+        candidate
+            .member_paths
+            .retain(|alias, _| candidate.member_ids.contains_key(alias));
+        if let Some(path) = candidate
+            .member_paths
+            .get("main")
+            .cloned()
+            .filter(|path| candidate.files.contains_key(path))
+        {
+            candidate.select_source(&path)?;
+        }
+        candidate.select_member(selected)?;
+        candidate.dirty = true;
+        *self = candidate;
+        Ok(())
+    }
     pub fn source_paths(&self) -> Vec<String> {
         self.files
             .keys()

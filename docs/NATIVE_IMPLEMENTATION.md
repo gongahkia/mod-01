@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- Native GAME CARTRIDGES now imports exact local source/packed members, creates
+  blank members with unique IDs and confirms reference-safe removal through shared
+  composition validation. Composition changes require stopped execution and valid
+  applied buffers; Save still targets only the enclosing game. Removed aliases
+  lose cached source/asset history and breakpoints so re-import cannot resurrect
+  old edits. Three new Studio integrations verify exact source/packed imports,
+  unchanged input files, duplicate/nested/running/draft/reference rejection, blank
+  creation/removal and stale-history isolation. All 110 native tests and workspace
+  Clippy pass. Inspected native captures at 1280×800 and 900×600 show add, successful
+  remove, reachable confirmation controls and the qualified refusal for a live
+  source reference. Whole-game export/analysis and cross-host audit remain open.
 - Native bridge startup preflight failures no longer race the first Load command:
   the worker keeps its command receiver alive and replies with the actual missing-
   runtime diagnostic (or a normal Stop acknowledgement). A regression drains the

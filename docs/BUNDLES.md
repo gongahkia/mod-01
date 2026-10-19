@@ -13,7 +13,12 @@ whole game and Run starts `main`, whichever member is selected for editing.
 Asset history and source widget identities include the member alias, and invalid
 asset/manifest drafts block switching without discarding text. Breakpoints, watches,
 source events and source navigation are member-scoped, using the launched source
-snapshot when authored code changes. Member composition controls, remaining
+snapshot when authored code changes. MANAGE MEMBERS opens native GAME CARTRIDGES:
+import a local workcart/packed cartridge or add a blank member with a distinct ID,
+then edit it through the ordinary workspace. Stop execution before adding/removing
+members. Removal requires confirmation, drops that member's editor history and
+breakpoints, and never deletes imported files or player saves. Unsaved asset or
+manifest drafts must be applied before composition changes. Remaining
 export/analysis integration and cross-host verification are still being implemented; these
 workflows are not yet exposed as a complete native feature.
 

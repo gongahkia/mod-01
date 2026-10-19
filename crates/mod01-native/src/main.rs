@@ -252,6 +252,10 @@ struct StudioApp {
     new_id: String,
     show_new: bool,
     show_new_asset: bool,
+    show_members: bool,
+    member_alias_input: String,
+    member_id_input: String,
+    member_remove: Option<String>,
     new_asset_name: String,
     new_asset_kind: modl_core::AssetKind,
     show_manual: bool,
@@ -367,6 +371,10 @@ impl StudioApp {
             new_id: "new-cart".to_owned(),
             show_new: false,
             show_new_asset: false,
+            show_members: false,
+            member_alias_input: "level-1".to_owned(),
+            member_id_input: "new-level".to_owned(),
+            member_remove: None,
             new_asset_name: "new_asset".to_owned(),
             new_asset_kind: modl_core::AssetKind::TileSet,
             show_manual: false,
@@ -519,6 +527,155 @@ impl StudioApp {
             });
         if next != selected {
             self.select_member(&next);
+        }
+        if ui.small_button("MANAGE MEMBERS").clicked() {
+            self.show_members = true;
+        }
+    }
+
+    fn composition_ready(&mut self) -> bool {
+        if self.running {
+            self.status = "STOP THE GAME BEFORE CHANGING ITS COMPOSITION".to_owned();
+            return false;
+        }
+        let Some(project) = &self.project else {
+            return false;
+        };
+        if self.manifest_text != project.manifest_source {
+            self.status = "APPLY OR REVERT MANIFEST DRAFT BEFORE CHANGING COMPOSITION".to_owned();
+            return false;
+        }
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return false;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return false;
+        }
+        true
+    }
+
+    fn install_composition(&mut self, project: NativeProject) {
+        self.cache_asset_editors();
+        self.asset_meter = asset_meter::AssetMeter::default();
+        self.source_editor.dismiss_completion();
+        self.manifest_text = project.manifest_source.clone();
+        self.project = Some(project);
+        self.live_audio.stop();
+        self.view = View::Code;
+    }
+
+    fn add_member_source(&mut self, alias: &str, source: &str) {
+        if !self.composition_ready() {
+            return;
+        }
+        let Some(mut candidate) = self.project.clone() else {
+            return;
+        };
+        match candidate.add_member(alias, source) {
+            Ok(()) => {
+                self.install_composition(candidate);
+                self.status = format!("ADDED {alias} / SAVE KEEPS THE WHOLE GAME");
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn import_member_path(&mut self, alias: &str, path: &std::path::Path) {
+        let source = NativeProject::open(path).and_then(|project| project.source());
+        match source {
+            Ok(source) => self.add_member_source(alias, &source),
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn add_blank_member(&mut self) {
+        let source = (|| {
+            let mut project =
+                modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                    .map_err(|error| error.to_string())?;
+            project.manifest.id = self.member_id_input.clone();
+            project.manifest.title = "NEW MEMBER".to_owned();
+            modl_core::encode_workcart(&project.manifest, &project.files, &[], &[])
+                .map_err(|error| error.to_string())
+        })();
+        match source {
+            Ok(source) => self.add_member_source(&self.member_alias_input.clone(), &source),
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn remove_member(&mut self, alias: &str, context: &egui::Context) {
+        if !self.composition_ready() {
+            return;
+        }
+        let Some(mut candidate) = self.project.clone() else {
+            return;
+        };
+        let mut removed = candidate.clone();
+        if let Err(error) = removed
+            .select_member(alias)
+            .and_then(|()| candidate.remove_member(alias))
+        {
+            self.status = error;
+            return;
+        }
+        self.install_composition(candidate);
+        self.asset_sessions.discard_member(alias);
+        self.source_editor.forget_member(context, &removed);
+        self.breakpoints.retain(|point| point.member != alias);
+        self.member_remove = None;
+        self.status = format!("REMOVED {alias} FROM GAME / PLAYER SAVES UNCHANGED");
+    }
+
+    fn members_window(&mut self, context: &egui::Context) {
+        if !self.show_members {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("GAME CARTRIDGES").open(&mut open).default_size([580.0, 480.0])
+            .max_height((context.content_rect().height() - 80.0).max(220.0)).vscroll(true).show(context, |ui| {
+            ui.label("Local aliases are embedded source, never filesystem paths or downloads.");
+            if self.running { ui.colored_label(ui_theme::AMBER, "STOP THE GAME TO ADD OR REMOVE MEMBERS"); }
+            let members = self.project.as_ref().map_or_else(Vec::new, NativeProject::members);
+            egui::ScrollArea::vertical().id_salt("member-roster").max_height(180.0).show(ui, |ui| {
+                for (alias, id) in &members {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(alias).color(ui_theme::AMBER)); ui.label(id);
+                        if ui.small_button("EDIT").clicked() { self.select_member(alias); }
+                        if ui.add_enabled(!self.running && alias != "main", egui::Button::new("REMOVE")).clicked() { self.member_remove = Some(alias.clone()); }
+                    });
+                }
+            });
+            ui.separator();
+            ui.label(format!("{}/32 CARTRIDGES INCLUDING MAIN", members.len()));
+            ui.add_enabled_ui(!self.running && members.len() < 32, |ui| {
+                ui.horizontal_wrapped(|ui| { ui.label("NEW LOCAL ALIAS"); ui.add(egui::TextEdit::singleline(&mut self.member_alias_input).char_limit(32).desired_width(190.0)); });
+                ui.label("Import preserves the cartridge's ID; duplicate IDs and nested games are refused.");
+                if ui.button("IMPORT LOCAL WORKCART / CARTRIDGE").clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Single MOD-01 cartridge", &["m01w", "m01c", "png"]).pick_file() {
+                    self.import_member_path(&self.member_alias_input.clone(), &path);
+                }
+                ui.horizontal_wrapped(|ui| { ui.label("BLANK MEMBER ID"); ui.add(egui::TextEdit::singleline(&mut self.member_id_input).char_limit(64).desired_width(190.0)); });
+                if ui.button("ADD BLANK MEMBER").clicked() { self.add_blank_member(); }
+            });
+            if let Some(alias) = self.member_remove.clone() {
+                ui.separator();
+                ui.colored_label(ui_theme::CORAL, format!("REMOVE {alias} FROM THIS GAME?"));
+                ui.label("Unsaved source in this member is removed too. No input file or player save is deleted. References/computed request targets may block removal.");
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!self.running, egui::Button::new("CONFIRM REMOVE")).clicked() { self.remove_member(&alias, context); }
+                    if ui.button("CANCEL").clicked() { self.member_remove = None; }
+                });
+            }
+            ui.separator();
+            ui.label(&self.status);
+        });
+        self.show_members = open;
+        if !open {
+            self.member_remove = None;
         }
     }
 
@@ -2271,6 +2428,8 @@ impl StudioApp {
 
     // Discard project-local UI state when replacing the current cartridge.
     fn reset_asset_editors(&mut self) {
+        self.show_members = false;
+        self.member_remove = None;
         self.asset_sessions.clear();
         self.asset_meter = asset_meter::AssetMeter::default();
         self.asset_workbench = None;
@@ -3320,6 +3479,7 @@ impl eframe::App for StudioApp {
             self.show_new_asset &= open;
         }
         self.help_windows(&context);
+        self.members_window(&context);
         if self.show_playground {
             self.playground
                 .ui(&context, &mut self.show_playground, self.project.as_ref());

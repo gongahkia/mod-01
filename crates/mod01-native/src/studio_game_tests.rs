@@ -613,3 +613,166 @@ fn system_source_inspection_selects_the_active_member_not_the_last_edited_one() 
     assert!(matches!(app.view, View::Code));
     assert_eq!(app.status, "SOURCE INSPECTION / arena / STOPPED");
 }
+
+fn composition_app(source: String) -> (StudioApp, egui::Context) {
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(None, &context, false);
+    let project = NativeProject::from_source(source, None).unwrap();
+    app.manifest_text = project.manifest_source.clone();
+    app.project = Some(project);
+    (app, context)
+}
+
+#[test]
+fn studio_imports_exact_local_source_and_packed_members_without_touching_inputs_or_replacing_aliases()
+ {
+    let (mut app, context) =
+        composition_app(include_str!("../../../templates/blank/cart.m01w").to_owned());
+    let mut child =
+        modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+    child.manifest.id = "native-composition-import".to_owned();
+    let source = format!(
+        "# exact local source\r\n{}",
+        modl_core::encode_workcart(&child.manifest, &child.files, &[], &[])
+            .unwrap()
+            .replace('\n', "\r\n")
+    );
+    let packed = modl_core::game::pack_game_workcart(&source)
+        .unwrap()
+        .into_bytes();
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-compose-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    let workcart = directory.join("local.m01w");
+    let cartridge = directory.join("local.m01c");
+    fs::write(&workcart, &source).unwrap();
+    fs::write(&cartridge, &packed).unwrap();
+    app.import_member_path("local", &workcart);
+    let project = app.project.as_ref().unwrap();
+    assert_eq!(project.member_alias(), "local", "{}", app.status);
+    assert_eq!(
+        modl_core::parse_workcart(&project.source().unwrap())
+            .unwrap()
+            .bundle[0]
+            .source,
+        source
+    );
+    assert!(project.dirty && project.workcart_path.is_none());
+    let before = project.source().unwrap();
+    app.import_member_path("local", &cartridge);
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    assert!(app.status.contains("M014070"));
+    app.add_member_source("nested", &before);
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    assert!(app.status.contains("M014073"));
+    app.remove_member("main", &context);
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    app.remove_member("local", &context);
+    assert_eq!(app.project.as_ref().unwrap().members().len(), 1);
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "main");
+    app.import_member_path("packed", &cartridge);
+    let project = app.project.as_ref().unwrap();
+    assert_eq!(project.member_alias(), "packed", "{}", app.status);
+    assert_eq!(project.game().unwrap().catalog().cartridges().len(), 2);
+    assert_eq!(
+        modl_core::parse_workcart(&project.source().unwrap())
+            .unwrap()
+            .bundle[0]
+            .source,
+        source
+    );
+    let source_after = fs::read_to_string(&workcart).unwrap();
+    let bytes_after = fs::read(&cartridge).unwrap();
+    // The directory and these two fixture files were created solely by this test.
+    fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(source_after, source);
+    assert_eq!(bytes_after, packed);
+}
+
+#[test]
+fn studio_composition_refuses_running_or_invalid_drafts_and_referenced_removal_transactionally() {
+    let (mut app, context) = composition_app(game_source());
+    let before = app.project.as_ref().unwrap().source().unwrap();
+    app.remove_member("arena", &context);
+    assert!(app.status.contains("M014075"));
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    app.running = true;
+    app.add_blank_member();
+    assert!(app.status.starts_with("STOP THE GAME"));
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    app.running = false;
+    app.manifest_text.push_str("\ninvalid = [\n");
+    app.add_blank_member();
+    assert!(app.status.starts_with("APPLY OR REVERT MANIFEST DRAFT"));
+    assert_eq!(app.project.as_ref().unwrap().source().unwrap(), before);
+    app.manifest_text = app.project.as_ref().unwrap().manifest_source.clone();
+    app.member_alias_input = "bonus".to_owned();
+    app.member_id_input = "native-bonus".to_owned();
+    app.add_blank_member();
+    assert_eq!(
+        app.project.as_ref().unwrap().member_alias(),
+        "bonus",
+        "{}",
+        app.status
+    );
+    assert_eq!(app.project.as_ref().unwrap().manifest.id, "native-bonus");
+    app.remove_member("bonus", &context);
+    let project = app.project.as_ref().unwrap();
+    assert_eq!(project.member_alias(), "main");
+    assert_eq!(project.members().len(), 2);
+    assert_eq!(
+        modl_core::parse_workcart(&project.source().unwrap())
+            .unwrap()
+            .bundle,
+        modl_core::parse_workcart(&before).unwrap().bundle
+    );
+}
+
+#[test]
+fn removing_and_reimporting_an_alias_cannot_resurrect_deleted_asset_history_or_breakpoints() {
+    let (mut app, context) =
+        composition_app(include_str!("../../../templates/blank/cart.m01w").to_owned());
+    let mut child =
+        modl_core::parse_workcart(include_str!("../../../examples/api-tour/cart.m01w")).unwrap();
+    child.manifest.id = "composition-history-member".to_owned();
+    let child =
+        modl_core::encode_workcart(&child.manifest, &child.files, &child.recipes, &child.tests)
+            .unwrap();
+    app.add_member_source("child", &child);
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    let mut changed = editor.document.clone();
+    changed["framesPerRow"] = json!(99);
+    editor.replace_document(changed);
+    app.breakpoints.push(SourceBreakpoint {
+        member: "child".to_owned(),
+        source: "src/main.modl".to_owned(),
+        line: 1,
+        condition: String::new(),
+    });
+    app.remove_member("child", &context);
+    assert!(app.breakpoints.is_empty());
+    assert_eq!(
+        app.project.as_ref().unwrap().member_alias(),
+        "main",
+        "{}",
+        app.status
+    );
+    app.add_member_source("child", &child);
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    assert_eq!(editor.document["framesPerRow"], 12);
+    editor.undo();
+    editor.redo();
+    assert_eq!(
+        editor.document["framesPerRow"], 12,
+        "removed member history must never return"
+    );
+    app.project.as_ref().unwrap().pack().unwrap();
+}

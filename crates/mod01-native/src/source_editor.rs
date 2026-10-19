@@ -55,6 +55,21 @@ enum EditAction {
 }
 
 impl SourceEditor {
+    pub fn forget_member(&mut self, context: &egui::Context, project: &NativeProject) {
+        for path in project.source_paths() {
+            let id = egui::Id::unique((
+                "native-modl-source",
+                project.member_alias(),
+                &project.manifest.id,
+                &path,
+            ));
+            if let Some(mut state) = egui::TextEdit::load_state(context, id) {
+                state.clear_undoer();
+                state.store(context, id);
+            }
+        }
+        self.pending = None;
+    }
     pub fn reveal(
         &mut self,
         project: &mut NativeProject,

@@ -46,6 +46,14 @@ impl AssetSessions {
         self.generation
     }
 
+    pub fn discard_member(&mut self, alias: &str) {
+        for index in (0..self.sessions.len()).rev() {
+            if self.sessions[index].key.member == alias {
+                self.remove(index);
+            }
+        }
+    }
+
     pub fn stash_structured(
         &mut self,
         project: &NativeProject,

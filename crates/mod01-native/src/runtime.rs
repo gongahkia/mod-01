@@ -83,11 +83,13 @@ impl RuntimeBridge {
             if generation
                 .is_none_or(|generation| generation == self.generation.load(Ordering::Relaxed))
             {
-                self.pending.set(if event["type"] == "error" {
-                    0
-                } else {
-                    self.pending.get().saturating_sub(1)
-                });
+                self.pending.set(
+                    if event["type"] == "error" && event["recoverable"] != true {
+                        0
+                    } else {
+                        self.pending.get().saturating_sub(1)
+                    },
+                );
                 return Some(event);
             }
         }
@@ -188,7 +190,7 @@ fn worker(
         };
         match exchange(running, &command) {
             Ok(reply) => {
-                let faulted = reply["type"] == "error";
+                let faulted = reply["type"] == "error" && reply["recoverable"] != true;
                 let _ = publish(reply);
                 if faulted {
                     if let Some(failed) = child.take() {
@@ -296,6 +298,24 @@ mod tests {
         events.send((Some(1), json!({"type":"memory"}))).unwrap();
         assert_eq!(bridge.poll().unwrap()["type"], "memory");
         assert!(bridge.has_pending());
+        events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
+        assert!(!bridge.has_pending());
+        bridge.send(json!({"type":"memory"})).unwrap();
+        bridge.send(json!({"type":"snapshot"})).unwrap();
+        assert_eq!(received.recv().unwrap().0, 1);
+        assert_eq!(received.recv().unwrap().0, 1);
+        events
+            .send((
+                Some(1),
+                json!({"type":"error","recoverable":true,"message":"read rejected"}),
+            ))
+            .unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "error");
+        assert!(
+            bridge.has_pending(),
+            "a rejection acknowledges only its own request"
+        );
         events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
         assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
         assert!(!bridge.has_pending());

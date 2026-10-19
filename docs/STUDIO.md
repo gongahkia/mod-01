@@ -163,13 +163,21 @@ release; Ctrl/Cmd/Alt shortcuts do not become gameplay. Escape is host-only.
 The host never receives a cartridge-selected filesystem path.
 Runtime loads, stops and isolated previews carry private native session generations;
 queued replies/commands from an abandoned session cannot update a new cartridge's
-frame, audio, debugger or committed save. The child-process JSON protocol is
-unchanged. Missing-bundle startup errors remain visible across generation changes.
+frame, audio, debugger or committed save. Generations stay private to the bridge;
+missing-bundle startup errors remain visible across generation changes.
 
 Debug compilation supports source statement stepping, breakpoint conditions,
 watches, memory inspection/editing, state/tasks and snapshot restore. It uses the
 same compiler IR and device implementation as ordinary play. A paused debugger
 does not advance machine frame time.
+Malformed/foreign checkpoints and invalid memory reads/edits report
+`DEBUG REQUEST REJECTED` without killing a healthy native host or changing its
+suspended source, input, replay cursor, menu or memory. Auto-stepping pauses so
+the diagnostic can be inspected; manual stepping/resume remains available. Only
+read-only debugger requests and the shared core's transactional validation errors
+are recoverable. Errors outside those operations, including execution faults,
+unexpected write failures and transport errors, still stop the session. Restore and edit bytes must use bounded canonical
+base64, not Node's permissive decoder.
 
 RECORD REPLAY starts a fresh run (using the current save), clears loaded playback
 and records one input per completed display frame, including frame zero exactly

@@ -130,6 +130,52 @@ fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
 }
 
 #[test]
+fn rejected_debug_requests_preserve_a_real_members_suspended_source_and_input_timeline() {
+    let (mut app, context, inputs) = fixture(true);
+    advance_debug_to(&mut app, &context, 2);
+    for _ in 0..128 {
+        app.send_input(&context, "step");
+        pump(&mut app, &context);
+        if app.debug_booted && app.frame_input.is_some() && app.debug_source.is_some() {
+            break;
+        }
+    }
+    assert_eq!(app.input_frame, 2);
+    assert_eq!(app.active_alias, "arena");
+    assert!(app.debug_booted && !app.debug_frame_boundary && app.frame_input.is_some());
+    let state = |app: &StudioApp| {
+        json!({
+            "alias":app.active_alias, "frame":app.frame, "next":app.input_frame,
+            "input":app.frame_input, "source":app.debug_source, "trace":app.debug_trace,
+            "inspection":app.debug_inspection,"event":app.debug_event,"watches":app.watch_results,
+            "booted":app.debug_booted,"boundary":app.debug_frame_boundary,
+            "recording":app.replay_frames,"pixels":app.last_pixels,
+        })
+    };
+    let before = state(&app);
+    for command in [
+        json!({"type":"restore","snapshot":"AA=="}),
+        json!({"type":"memory","address":0x0040_0000,"length":1}),
+        json!({"type":"memory-edit","address":0x0010_0000,"bytes":"AA=="}),
+        json!({"type":"memory-edit","address":0,"bytes":"@@=="}),
+    ] {
+        app.runtime.send(command).unwrap();
+        app.pending = true;
+        pump(&mut app, &context);
+        assert!(
+            app.status.starts_with("DEBUG REQUEST REJECTED:"),
+            "{}",
+            app.status
+        );
+        assert_eq!(state(&app), before);
+    }
+    advance_debug_to(&mut app, &context, 7);
+    assert_eq!(app.last_pixels[0], 1);
+    assert_eq!(app.replay_frames, inputs.into_iter().collect::<Vec<_>>());
+    app.stop();
+}
+
+#[test]
 fn losing_audio_output_does_not_stop_or_rewind_the_real_game_or_its_replay_timeline() {
     let (mut app, context, _) = fixture(false);
     for _ in 0..3 {

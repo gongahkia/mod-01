@@ -1,10 +1,12 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { deserialize, serialize } from 'node:v8';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { emptyInputFrame } from './input';
 import { runtimeGameFixture } from './test-support/game';
+import type { GameSnapshot } from './game-runtime';
 
 const host = fileURLToPath(new URL('../standalone/native-host.mjs', import.meta.url));
 const javascript = `export default function createCartridge(api) {
@@ -189,6 +191,18 @@ describe('native process host', () => {
       expect(Buffer.from(first.left as string, 'base64').length).toBe(800 * 4);
       const snapshot = await request({ type: 'snapshot' });
       expect(snapshot).toMatchObject({ type: 'snapshot', frame: 1, booted: true });
+      const checkpoint = deserialize(
+        Buffer.from(snapshot.snapshot as string, 'base64'),
+      ) as GameSnapshot;
+      for (const candidate of [
+        { ...checkpoint, identity: '0'.repeat(64) },
+        { ...checkpoint, console: { ...checkpoint.console, memory: { revision: 1, regions: [] } } },
+      ]) {
+        expect(
+          await request({ type: 'restore', snapshot: serialize(candidate).toString('base64') }),
+        ).toMatchObject({ type: 'error', code: 'M019103', recoverable: true });
+        expect((await request({ type: 'snapshot' })).snapshot).toBe(snapshot.snapshot);
+      }
       const second = await request({ type: 'frame', input: emptyInputFrame() });
       expect(await request({ type: 'restore', snapshot: snapshot.snapshot })).toMatchObject({
         type: 'restored',
@@ -250,7 +264,40 @@ describe('native process host', () => {
       ).toMatchObject({
         type: 'error',
         code: 'M019021',
+        recoverable: true,
         sourceSpan: { start: 0, end: 0 },
+      });
+      // Last front-buffer byte followed by reserved padding: no partial write.
+      expect(await request({ type: 'memory-edit', address: 0x186ff, bytes: 'AQI=' })).toMatchObject(
+        {
+          type: 'error',
+          code: 'M019021',
+          recoverable: true,
+        },
+      );
+      expect(await request({ type: 'memory', address: 0x186ff, length: 1 })).toMatchObject({
+        type: 'memory',
+        bytes: 'AA==',
+      });
+      expect(await request({ type: 'memory-edit', address: 0, bytes: 'AB==' })).toMatchObject({
+        type: 'error',
+        code: 'M019100',
+        recoverable: true,
+      });
+      expect(await request({ type: 'memory-edit', address: 0, bytes: 'Bw==' })).toMatchObject({
+        type: 'memory-edited',
+      });
+      expect(await request({ type: 'memory', address: 0, length: 1 })).toMatchObject({
+        type: 'memory',
+        bytes: 'Bw==',
+      });
+      expect(await request({ type: 'restore', snapshot: 'AA==' })).toMatchObject({
+        type: 'error',
+        recoverable: true,
+      });
+      // Rejected restore must not consume the fresh scratchpad session either.
+      expect(await request({ type: 'scratch', input: emptyInputFrame() })).toMatchObject({
+        type: 'scratch',
       });
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
     } finally {

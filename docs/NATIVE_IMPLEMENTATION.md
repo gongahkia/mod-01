@@ -51,6 +51,21 @@ choices remain outstanding.
 
 ## Progress
 
+- Native debugger request rejection now preserves the healthy host and Studio's
+  live source/input/replay/menu context. The regression first proved a malformed
+  restore killed the real suspended two-member game. Recovery is explicitly
+  limited to read-only requests and proven transactional restore/edit validation;
+  actual execution, unexpected write and transport failures remain fatal.
+  Rejections acknowledge only their own pending request; invalid restore does
+  not consume a fresh scratchpad. Canonical bounded snapshot/edit decoding
+  replaces permissive byte repair. Production host tests cover foreign/deeply
+  invalid checkpoints with byte-identical before/after snapshots, cross-region
+  edit rollback, invalid/valid reads and edits, plus scratchpad continuation.
+  The real Studio regression resumes the same arena statement/input and replays
+  all seven frames after four rejected requests without changing recorded inputs.
+  The full gate passes 278 runtime, 128 core, 126 native, 33 CLI integration and
+  one CLI report-unit test, all formatting/lint/types/Clippy/build steps, nine
+  unchanged raw/PNG pairs and both real 120-frame Linux package verifications.
 - Native WAV export now passes its existing 8 MiB transport bound into shared
   renderers, which preflight exact PCM16 bytes before executing synth frames.
   No output is truncated and the renderers' default capacity is unchanged.

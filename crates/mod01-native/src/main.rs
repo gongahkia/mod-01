@@ -1750,6 +1750,20 @@ impl StudioApp {
                 }
                 Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
+                    if event["recoverable"] == true && self.running && self.loaded {
+                        // Rejected debugger operations did not mutate the VM. Keep the
+                        // suspended source/input/replay/menu state; pause auto-stepping
+                        // so the user can inspect the diagnostic before resuming.
+                        self.debug_running = false;
+                        self.resume_debug = false;
+                        self.status = format!(
+                            "DEBUG REQUEST REJECTED: {}",
+                            event["message"]
+                                .as_str()
+                                .unwrap_or("invalid debugger request")
+                        );
+                        continue;
+                    }
                     if let Some(alias) = event["active"]["cartridgeAlias"].as_str()
                         && let Some(member) = self.running_members.get(alias)
                         && event["sourceSpan"].is_object()

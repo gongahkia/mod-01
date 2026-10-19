@@ -6750,12 +6750,22 @@ var input = createInterface({
   input: process.stdin,
   crlfDelay: Infinity,
 });
-function bytes(encoded) {
-  if (typeof encoded !== 'string' || encoded.length > 25165824)
-    throw new TypeError('invalid native host byte payload');
-  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
-  if (decoded.length > 16777216) throw new RangeError('native host byte payload exceeds 16 MiB');
-  return decoded;
+var DebugRequestRejected = class extends Error {
+  failure;
+  constructor(failure) {
+    super('debug request rejected');
+    this.failure = failure;
+  }
+};
+/** Only read-only operations and proven transactional validation can recover. */
+function debugRequest(operation, codes) {
+  try {
+    return operation();
+  } catch (error) {
+    if (codes !== void 0 && !(error instanceof RuntimeFault && codes.includes(error.code)))
+      throw error;
+    throw new DebugRequestRejected(error);
+  }
 }
 function encoded(value) {
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64');
@@ -6983,35 +6993,45 @@ async function handle(command) {
         ),
       };
     }
-    case 'snapshot':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
+    case 'snapshot': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = debugRequest(() => current.snapshot());
         return {
           type: 'snapshot',
           snapshot: serialize(snapshot).toString('base64'),
           frame: snapshot.frame,
           booted: snapshot.console.machine.execution.booted,
-          active: runtime.inspect(),
+          active: current.inspect(),
         };
       }
-    case 'restore':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
+    }
+    case 'restore': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest(() =>
+        deserialize(decodeRuntimeBytes(command.snapshot, 16777216)),
+      );
+      debugRequest(() => {
+        current.restore(candidate);
+      }, ['M019103']);
       scratchFresh = false;
-      runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
       {
-        const snapshot = runtime.snapshot();
+        const snapshot = current.snapshot();
         return {
           type: 'restored',
           frame: snapshot.frame,
           booted: snapshot.console.machine.execution.booted,
-          active: runtime.inspect(),
-          menuItems: runtime.inspectMenu(),
+          active: current.inspect(),
+          menuItems: current.inspectMenu(),
         };
       }
+    }
     case 'memory': {
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
-      const result = runtime.inspectMemory(command.address, command.length);
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const result = debugRequest(() => current.inspectMemory(command.address, command.length));
       return {
         type: 'memory',
         address: result.address,
@@ -7019,10 +7039,15 @@ async function handle(command) {
         regions: result.regions,
       };
     }
-    case 'memory-edit':
-      if (runtime === void 0) throw new Error('no cartridge is loaded');
-      runtime.editMemory(command.address, bytes(command.bytes));
+    case 'memory-edit': {
+      const current = runtime;
+      if (current === void 0) throw new Error('no cartridge is loaded');
+      const candidate = debugRequest(() => decodeRuntimeBytes(command.bytes, 256));
+      debugRequest(() => {
+        current.editMemory(command.address, candidate);
+      }, ['M019020', 'M019021', 'M019022', 'M019104']);
       return { type: 'memory-edited' };
+    }
     case 'stop':
       runtime = void 0;
       audioPreview = void 0;
@@ -7037,12 +7062,15 @@ input.on('line', (line) => {
     try {
       respond(await handle(JSON.parse(line)));
     } catch (error) {
+      const rejected = error instanceof DebugRequestRejected;
+      const failure = rejected ? error.failure : error;
       respond({
         type: 'error',
-        code: error instanceof RuntimeFault ? error.code : 'M019100',
-        message: error instanceof Error ? error.message : 'native host failure',
+        code: failure instanceof RuntimeFault ? failure.code : 'M019100',
+        message: failure instanceof Error ? failure.message : 'native host failure',
+        ...(rejected ? { recoverable: true } : {}),
         ...(runtime === void 0 ? {} : { active: runtime.inspect() }),
-        ...(error instanceof RuntimeFault ? { sourceSpan: error.sourceSpan } : {}),
+        ...(failure instanceof RuntimeFault ? { sourceSpan: failure.sourceSpan } : {}),
       });
     }
   });

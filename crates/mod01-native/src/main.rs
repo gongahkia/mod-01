@@ -26,6 +26,8 @@ mod audio;
 mod gamepad_controller;
 mod keyboard_controller;
 mod launch;
+#[cfg(test)]
+mod library_store;
 mod live_audio;
 mod pause_menu;
 mod player;

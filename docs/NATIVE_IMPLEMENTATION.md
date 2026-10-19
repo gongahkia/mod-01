@@ -51,6 +51,11 @@ choices remain outstanding.
 
 ## Progress
 
+- Offline-library storage foundation: five native tests prove atomic preference
+  updates, favourites/labels/recents persistence, stale-instance conflict checks,
+  bounded metadata and read-only corruption handling. Forgetting a bookmark never
+  deletes a cartridge. This foundation is test-only until the native browser is
+  connected; the library acceptance row remains open. Workspace Clippy passes.
 - Scope revalidated against the actual downloaded JSON; baseline is `d9918f7`.
 - Working branch: `feat/native-consolidation`.
 - Implementation and final verification remain open.

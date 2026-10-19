@@ -1637,7 +1637,7 @@ impl StudioApp {
             ui.separator();
             ui_theme::legend(ui, "COLOR DEVELOPMENT UNIT");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui_theme::legend(ui, "REV. 01  /  1999");
+                ui_theme::legend(ui, "REV. 02  /  1999");
             });
         });
         ui.add_space(3.0);
@@ -2770,7 +2770,7 @@ impl eframe::App for StudioApp {
                 .show(root, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(34.0);
-                        ui_theme::legend(ui, "MOD-01 / SYSTEM ROM / REVISION 01");
+                        ui_theme::legend(ui, "MOD-01 / SYSTEM ROM / REVISION 02");
                         ui.add_space(15.0);
                         ui.heading(RichText::new("COLOR DEVELOPMENT UNIT").color(ui_theme::CREAM));
                         ui.add_space(8.0);

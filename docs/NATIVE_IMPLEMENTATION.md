@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- Save I/O regression first reproduced a predictable `.tmp` symlink overwriting
+  an owned foreign fixture and publishing that link as the save. Native storage
+  now uses distinct create-new image/schema stages, sync-before-rename and cleanup
+  of only its own failed stage. Shared bounded readers cover images (8 KiB),
+  schemas (64 bytes) and imported containers (17 KiB); known linked files and
+  managed save/recovery directories are refused, including dangling links and
+  the recovery root. Invalid data is not repaired or migrated. Tests cover actual
+  Studio commit wiring, preserved foreign/old-temp files, bounded sparse files,
+  invalid schemas, ordinary replacement and eight concurrent image/schema writers.
+  This is per-file local storage hygiene, not an adversarial directory sandbox
+  or an atomic transaction across two separate files. All 149 native tests and
+  warning-free all-feature workspace Clippy pass; existing save-container bytes,
+  IDs, paths and schema are unchanged.
 - Hardware Gauntlet no longer labels the current machine as R1. Its public-API
   showcase now renders R2 with an actual `2` bitmap glyph and a current-machine
   source comment. A regression first failed the old label and now derives the

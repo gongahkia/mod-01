@@ -1,4 +1,4 @@
-//! Local `.m01save` export and import.
+//! Bounded native save storage, recovery and current `.m01save` import/export.
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -6,11 +6,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAX_SAVE_BYTES: usize = 8192;
 const MAX_CONTAINER_BYTES: usize = MAX_SAVE_BYTES * 2 + 1024;
+const MAX_SCHEMA_BYTES: usize = 64;
+static STAGING_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -80,6 +83,161 @@ pub fn storage_path(data: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(data.join("saves").join(format!("{stem}.bin")))
 }
 
+pub fn read_image(path: &Path) -> Result<Vec<u8>, String> {
+    if !ordinary_directory(parent(path)?, false)? {
+        return Ok(Vec::new());
+    }
+    Ok(read_bounded(path, MAX_SAVE_BYTES, "save image (8 KiB)")?.unwrap_or_default())
+}
+
+pub fn write_image(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_SAVE_BYTES {
+        return Err("save exceeds 8 KiB".to_owned());
+    }
+    atomic_write(path, bytes)
+}
+
+pub fn read_schema(path: &Path) -> Result<u16, String> {
+    if !ordinary_directory(parent(path)?, false)? {
+        return Ok(1);
+    }
+    let Some(bytes) = read_bounded(
+        &path.with_extension("schema"),
+        MAX_SCHEMA_BYTES,
+        "save schema",
+    )?
+    else {
+        return Ok(1);
+    };
+    std::str::from_utf8(&bytes)
+        .map_err(|error| error.to_string())?
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| error.to_string())
+}
+
+pub fn write_schema(path: &Path, schema: u16) -> Result<(), String> {
+    atomic_write(
+        &path.with_extension("schema"),
+        schema.to_string().as_bytes(),
+    )
+}
+
+pub fn clear_schema(path: &Path) -> Result<(), String> {
+    if !ordinary_directory(parent(path)?, false)? {
+        return Ok(());
+    }
+    let path = path.with_extension("schema");
+    if ordinary_file(&path)?.is_none() {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| error.to_string())
+}
+
+pub fn import_file(id: &str, path: &Path) -> Result<(u16, Vec<u8>), String> {
+    let source = read_bounded(path, MAX_CONTAINER_BYTES, "save container")?
+        .ok_or("save container does not exist")?;
+    import(id, &source)
+}
+
+fn parent(path: &Path) -> Result<&Path, String> {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "invalid save parent".to_owned())
+}
+
+/// Check only managed directories, not every ancestor of the user's application-data root.
+fn ordinary_directory(path: &Path, create: bool) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err("save directories must be ordinary directories, not links".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if !create {
+                return Ok(false);
+            }
+            fs::create_dir_all(path).map_err(|error| error.to_string())?;
+            ordinary_directory(path, false)
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn ordinary_file(path: &Path) -> Result<Option<fs::Metadata>, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            Ok(Some(metadata))
+        }
+        Ok(_) => Err("save files must be ordinary files, not links or directories".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn read_bounded(path: &Path, maximum: usize, label: &str) -> Result<Option<Vec<u8>>, String> {
+    let Some(metadata) = ordinary_file(path)? else {
+        return Ok(None);
+    };
+    if metadata.len() > maximum as u64 {
+        return Err(format!("{label} exceeds {maximum} bytes"));
+    }
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    if !file
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err(format!("{label} is not an ordinary file"));
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > maximum {
+        return Err(format!("{label} exceeds {maximum} bytes"));
+    }
+    Ok(Some(bytes))
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let directory = parent(path)?;
+    ordinary_directory(directory, true)?;
+    ordinary_file(path)?;
+    for _ in 0..32 {
+        // Preserve the full filename so image/schema stages never share a basename.
+        let mut name = path
+            .file_name()
+            .ok_or("invalid save filename")?
+            .to_os_string();
+        name.push(format!(
+            ".stage-{}-{}.tmp",
+            std::process::id(),
+            STAGING_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = directory.join(name);
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let result = file.write_all(bytes).and_then(|()| file.sync_all());
+        drop(file); // Windows publication also needs the staging handle closed.
+        let result = result.map_err(|error| error.to_string()).and_then(|()| {
+            ordinary_directory(directory, false)?;
+            ordinary_file(path)?;
+            fs::rename(&temporary, path).map_err(|error| error.to_string())
+        });
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result;
+    }
+    Err("save staging names are busy; existing files were not overwritten".to_owned())
+}
+
 /// Keeps ten valid backups for this ID only. The caller must complete this before
 /// replacing/resetting/deleting a save. Existing old-layout files are never migrated.
 pub fn backup(save_file: &Path, id: &str, schema: u16, bytes: &[u8]) -> Result<PathBuf, String> {
@@ -99,16 +257,12 @@ fn backup_at(
 ) -> Result<PathBuf, String> {
     let stem = modl_core::cartridge::cartridge_file_stem(id).map_err(|error| error.to_string())?;
     let exported = export(id, schema, bytes)?;
-    let directory = save_file
-        .parent()
-        .ok_or("invalid save path")?
-        .join("recovery")
-        .join(format!("{stem}.saves"));
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let metadata = fs::symlink_metadata(&directory).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("save recovery must use an ordinary per-cartridge directory".to_owned());
-    }
+    let base = parent(save_file)?;
+    ordinary_directory(base, true)?;
+    let recovery = base.join("recovery");
+    ordinary_directory(&recovery, true)?;
+    let directory = recovery.join(format!("{stem}.saves"));
+    ordinary_directory(&directory, true)?;
     let created = create_recovery(&directory, stamp, &exported)?;
     let mut revisions = Vec::new();
     for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
@@ -211,6 +365,185 @@ mod tests {
             .map(Result::unwrap)
             .filter_map(|entry| owned_revision(&entry, id).map(|(_, path)| path))
             .collect()
+    }
+
+    #[test]
+    fn native_storage_reads_and_replaces_current_images_and_schemas_without_shared_stages() {
+        let root = temporary("storage");
+        let path = storage_path(&root, "storage-cart").unwrap();
+        assert!(read_image(&path).unwrap().is_empty());
+        assert_eq!(read_schema(&path).unwrap(), 1);
+        assert!(
+            !path.parent().unwrap().exists(),
+            "reads cannot create directories"
+        );
+        write_image(&path, &vec![3; MAX_SAVE_BYTES]).unwrap();
+        write_schema(&path, u16::MAX).unwrap();
+        assert_eq!(read_image(&path).unwrap(), vec![3; MAX_SAVE_BYTES]);
+        assert_eq!(read_schema(&path).unwrap(), u16::MAX);
+        write_image(&path, &[7, 8]).unwrap();
+        write_schema(&path, 4).unwrap();
+        assert_eq!(read_image(&path).unwrap(), [7, 8]);
+        assert_eq!(read_schema(&path).unwrap(), 4);
+        assert_eq!(
+            fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            2,
+            "successful replacement leaves no stages"
+        );
+        clear_schema(&path).unwrap();
+        clear_schema(&path).unwrap();
+        assert_eq!(read_schema(&path).unwrap(), 1);
+        assert_eq!(read_image(&path).unwrap(), [7, 8]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_storage_bounds_images_schema_and_import_before_allocating_or_replacing() {
+        let root = temporary("bounded");
+        let path = storage_path(&root, "bounded-cart").unwrap();
+        assert!(write_image(&path, &vec![0; MAX_SAVE_BYTES + 1]).is_err());
+        assert!(!path.parent().unwrap().exists());
+        write_image(&path, &[9]).unwrap();
+        assert!(write_image(&path, &vec![0; MAX_SAVE_BYTES + 1]).is_err());
+        assert_eq!(read_image(&path).unwrap(), [9]);
+        let schema = path.with_extension("schema");
+        for bytes in [b"65536".as_slice(), b"bad", b"", &[255], b"1.5"] {
+            fs::write(&schema, bytes).unwrap();
+            assert!(read_schema(&path).is_err());
+            assert_eq!(
+                fs::read(&schema).unwrap(),
+                bytes,
+                "invalid schemas are not repaired"
+            );
+        }
+        let file = OpenOptions::new().write(true).open(&schema).unwrap();
+        file.set_len(MAX_SCHEMA_BYTES as u64 + 1).unwrap();
+        drop(file);
+        assert!(read_schema(&path).unwrap_err().contains("exceeds"));
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(MAX_SAVE_BYTES as u64 + 1).unwrap();
+        drop(file);
+        assert!(read_image(&path).unwrap_err().contains("8 KiB"));
+        let container = root.join("export.m01save");
+        let bytes = export("bounded-cart", 7, &[1, 2, 3]).unwrap();
+        fs::write(&container, &bytes).unwrap();
+        assert_eq!(
+            import_file("bounded-cart", &container).unwrap(),
+            (7, vec![1, 2, 3])
+        );
+        let file = OpenOptions::new().write(true).open(&container).unwrap();
+        file.set_len(MAX_CONTAINER_BYTES as u64 + 1).unwrap();
+        drop(file);
+        assert!(
+            import_file("bounded-cart", &container)
+                .unwrap_err()
+                .contains("exceeds")
+        );
+        assert!(import_file("bounded-cart", &root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_storage_never_reuses_or_removes_a_previous_predictable_temporary_file() {
+        let root = temporary("previous-stage");
+        let path = storage_path(&root, "previous-stage").unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let previous = path.with_extension("tmp");
+        fs::write(&previous, b"owned unrelated previous file").unwrap();
+        write_image(&path, &[4, 5]).unwrap();
+        write_schema(&path, 7).unwrap();
+        assert_eq!(read_image(&path).unwrap(), [4, 5]);
+        assert_eq!(read_schema(&path).unwrap(), 7);
+        assert_eq!(
+            fs::read(&previous).unwrap(),
+            b"owned unrelated previous file"
+        );
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_image_and_schema_writers_publish_complete_files_and_leave_no_stages() {
+        let root = temporary("concurrent");
+        let path = storage_path(&root, "concurrent-cart").unwrap();
+        write_image(&path, &vec![0; MAX_SAVE_BYTES]).unwrap();
+        let writers = (1..=8_u8)
+            .map(|number| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..4 {
+                        write_image(&path, &vec![number; MAX_SAVE_BYTES]).unwrap();
+                        write_schema(&path, u16::from(number)).unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let image = read_image(&path).unwrap();
+        assert_eq!(image.len(), MAX_SAVE_BYTES);
+        assert!((1..=8).contains(&image[0]));
+        assert!(image.iter().all(|byte| *byte == image[0]));
+        assert!((1..=8).contains(&read_schema(&path).unwrap()));
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_storage_refuses_linked_files_dangling_links_and_linked_managed_directories() {
+        use std::os::unix::fs::symlink;
+        let root = temporary("storage-links");
+        let path = storage_path(&root, "linked-cart").unwrap();
+        let foreign = root.join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::create_dir(path.parent().unwrap()).unwrap();
+        let target = foreign.join("keep");
+        fs::write(&target, b"never overwrite").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(read_image(&path).is_err());
+        assert!(write_image(&path, &[1]).is_err());
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&path).unwrap();
+        let schema = path.with_extension("schema");
+        symlink(&target, &schema).unwrap();
+        assert!(read_schema(&path).is_err());
+        assert!(write_schema(&path, 2).is_err());
+        assert!(clear_schema(&path).is_err());
+        assert!(
+            fs::symlink_metadata(&schema)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(&schema).unwrap();
+        let absent = foreign.join("absent");
+        symlink(&absent, &path).unwrap();
+        assert!(write_image(&path, &[1]).is_err());
+        assert!(!absent.exists());
+        fs::remove_file(&path).unwrap();
+        let recovery = path.parent().unwrap().join("recovery");
+        symlink(&foreign, &recovery).unwrap();
+        assert!(backup(&path, "linked-cart", 1, &[]).is_err());
+        assert_eq!(fs::read_dir(&foreign).unwrap().count(), 1);
+        fs::remove_file(&recovery).unwrap();
+        fs::remove_dir(path.parent().unwrap()).unwrap();
+        symlink(&foreign, path.parent().unwrap()).unwrap();
+        assert!(read_image(&path).is_err());
+        assert!(read_schema(&path).is_err());
+        assert!(write_image(&path, &[1]).is_err());
+        assert!(write_schema(&path, 2).is_err());
+        assert!(clear_schema(&path).is_err());
+        assert!(backup(&path, "linked-cart", 1, &[]).is_err());
+        assert_eq!(fs::read_dir(&foreign).unwrap().count(), 1);
+        assert_eq!(fs::read(&target).unwrap(), b"never overwrite");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

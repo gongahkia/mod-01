@@ -1038,9 +1038,7 @@ impl StudioApp {
                     .add_filter("MOD-01 save", &["m01save"])
                     .pick_file()
                 {
-                    let result = fs::read(path)
-                        .map_err(|error| error.to_string())
-                        .and_then(|encoded| save_manager::import(id, &encoded));
+                    let result = save_manager::import_file(id, &path);
                     self.status = match result.and_then(|(schema, bytes)| {
                         self.stop();
                         backup_save(id)?;
@@ -4138,55 +4136,19 @@ fn save_path(id: &str) -> Result<PathBuf, String> {
 }
 
 fn read_save(id: &str) -> Result<Vec<u8>, String> {
-    let path = save_path(id)?;
-    match fs::File::open(path) {
-        Ok(file) => {
-            use std::io::Read as _;
-            if !file
-                .metadata()
-                .map_err(|error| error.to_string())?
-                .is_file()
-            {
-                return Err("save is not an ordinary file".to_owned());
-            }
-            let mut bytes = Vec::new();
-            file.take(8193)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            if bytes.len() > 8192 {
-                return Err(format!("save for '{id}' exceeds 8 KiB"));
-            }
-            Ok(bytes)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::read_image(&save_path(id)?).map_err(|error| format!("save for '{id}': {error}"))
 }
 
 fn read_save_schema(id: &str) -> Result<u16, String> {
-    let path = save_path(id)?.with_extension("schema");
-    match fs::read_to_string(path) {
-        Ok(value) => value
-            .trim()
-            .parse::<u16>()
-            .map_err(|error| error.to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(1),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::read_schema(&save_path(id)?)
 }
 
 fn write_save_schema(id: &str, schema: u16) -> Result<(), String> {
-    let path = save_path(id)?.with_extension("schema");
-    fs::write(path, schema.to_string()).map_err(|error| error.to_string())
+    save_manager::write_schema(&save_path(id)?, schema)
 }
 
 fn clear_save_schema(id: &str) -> Result<(), String> {
-    let path = save_path(id)?.with_extension("schema");
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    save_manager::clear_schema(&save_path(id)?)
 }
 
 fn backup_save(id: &str) -> Result<(), String> {
@@ -4197,15 +4159,7 @@ fn backup_save(id: &str) -> Result<(), String> {
 }
 
 fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
-    if bytes.len() > 8192 {
-        return Err("save exceeds 8 KiB".to_owned());
-    }
-    let path = save_path(id)?;
-    let parent = path.parent().ok_or("invalid save path")?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, &path).map_err(|error| error.to_string())
+    save_manager::write_image(&save_path(id)?, bytes)
 }
 
 fn main() -> eframe::Result {

@@ -161,6 +161,17 @@ foreign, malformed, oversized and linked files are not pruned. Recovery creation
 uses [atomic create-new](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.create_new)
 so timestamp collisions cannot overwrite an existing file.
 
+Image/schema reads are bounded to 8 KiB/64 bytes; save-container imports are
+bounded to 17 KiB before decoding. Missing data uses an empty image/schema 1;
+malformed or oversized data reports an error, not a repaired default. Existing
+linked files and managed save/recovery directories are refused. Commits stage
+through exclusively created, distinct image/schema filenames, sync their bytes,
+then [rename into place](https://doc.rust-lang.org/std/fs/fn.rename.html).
+Concurrent commits cannot share a staging file; failure cleans up only the
+transaction's own stage. Old `.tmp` paths are never reused or removed. This is
+per-file atomic replacement, not a cross-file schema/image transaction or a
+security sandbox against an adversary replacing application-data directories.
+
 There is no old-path fallback or automatic data migration. Existing unprefixed
 development `.bin`/`.schema` files and flat recovery files are left untouched.
 To retain an earlier development save, export/import its current `.m01save`

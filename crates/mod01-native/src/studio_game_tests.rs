@@ -47,6 +47,42 @@ pub(super) fn game_source() -> String {
     .unwrap()
 }
 
+#[cfg(unix)]
+#[test]
+fn save_commits_never_follow_or_publish_a_predictable_temporary_symlink() {
+    let project = NativeProject::from_source(game_source(), None).unwrap();
+    let path = save_path(&project.manifest.id).unwrap();
+    let temporary = path.with_extension("tmp");
+    let foreign = path.with_extension("foreign-qa");
+    for candidate in [&path, &temporary, &foreign] {
+        assert!(
+            fs::symlink_metadata(candidate).is_err(),
+            "test IDs must not overlap existing data"
+        );
+    }
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&foreign, b"owned foreign fixture: never overwrite").unwrap();
+    std::os::unix::fs::symlink(&foreign, &temporary).unwrap();
+    let written = write_save(&project.manifest.id, &[1, 2, 3]);
+    let foreign_after = fs::read(&foreign);
+    let image = fs::read(&path);
+    let published_link =
+        fs::symlink_metadata(&path).map(|metadata| metadata.file_type().is_symlink());
+    // Every path contains this test's newly generated ID; unlink only those files.
+    for candidate in [&path, &temporary, &foreign] {
+        if let Err(error) = fs::remove_file(candidate) {
+            assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        }
+    }
+    written.unwrap();
+    assert_eq!(
+        foreign_after.unwrap(),
+        b"owned foreign fixture: never overwrite"
+    );
+    assert_eq!(image.unwrap(), [1, 2, 3]);
+    assert!(!published_link.unwrap());
+}
+
 #[test]
 fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is_selected() {
     let source = game_source();

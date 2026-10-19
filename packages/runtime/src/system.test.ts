@@ -197,7 +197,7 @@ describe('authoritative system registers and execution snapshots', () => {
     expect(isMachineSnapshot(machine.snapshot())).toBe(true);
   });
 
-  it('migrates frame-only legacy snapshots with explicit defaults and normalizes their old RNG range', () => {
+  it('rejects frame-only snapshots instead of inventing scheduler and RNG defaults', () => {
     const machine = new DeterministicMachine(empty, { ...configuration, updateRate: 30 });
     const initial = machine.snapshot();
     const legacy = {
@@ -208,21 +208,18 @@ describe('authoritative system registers and execution snapshots', () => {
       input: initial.input,
       previousInput: initial.previousInput,
     };
-    machine.restore(legacy);
-    const migrated = machine.snapshot();
-    expect(isMachineSnapshot(migrated)).toBe(true);
-    expect(migrated.execution).toEqual({
-      booted: true,
-      updates: 2,
-      phase: 'idle',
-      rasterLine: null,
-      fault: null,
-    });
-    expect(migrated.budget).toEqual({ revision: 1, limit: 100, used: 0, attribution: [] });
-    expect(migrated.rngState).toBeGreaterThan(0);
+    expect(isMachineSnapshot(legacy)).toBe(false);
+    expect(() => {
+      machine.restore(legacy);
+    }).toThrow(/snapshot/);
+    expect(machine.snapshot()).toEqual(initial);
+    expect(() => {
+      machine.restore({ ...initial, rngState: 0 });
+    }).toThrow(/snapshot/);
+    expect(machine.snapshot()).toEqual(initial);
     machine.runFrame(emptyInputFrame());
-    expect(machine.frame).toBe(4);
-    expect(machine.snapshot().execution.updates).toBe(2);
+    expect(machine.frame).toBe(1);
+    expect(machine.snapshot().execution.updates).toBe(1);
   });
 
   it('rolls back a cartridge restore failure and rejects snapshots taken during active callbacks', () => {

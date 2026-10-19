@@ -3717,6 +3717,7 @@ impl eframe::App for StudioApp {
                                         !self.preview_pending && !self.preview_cancelling,
                                         egui::Button::new("EXPORT WAV"),
                                     )
+                                    .on_hover_text("Offline stereo PCM16, at most 8 MiB (about 43.7 seconds, including a sound's release). Longer exports are rejected, never truncated; shorten the patch or music order.")
                                     .clicked()
                                 {
                                     self.render_asset_wav();

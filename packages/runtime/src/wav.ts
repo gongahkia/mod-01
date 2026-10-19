@@ -41,9 +41,14 @@ export function encodeAudioFramesWav(frames: readonly AudioFrame[]): Uint8Array 
   return output;
 }
 
-export function renderSoundWav(sound: SoundAsset): Uint8Array {
-  const synth = new Synthesizer(new AudioAssetStore([sound]));
+export function renderSoundWav(
+  sound: SoundAsset,
+  maximumBytes = Number.MAX_SAFE_INTEGER,
+): Uint8Array {
+  const assets = new AudioAssetStore([sound]);
   const frames = sound.durationFrames + sound.envelope.releaseFrames;
+  admitWavSize(frames, maximumBytes);
+  const synth = new Synthesizer(assets);
   return encodeAudioFramesWav(
     Array.from({ length: frames }, (_, frame) =>
       synth.executeFrame(frame === 0 ? [audioCommand('sfx', sound.name, 'Sound')] : []),
@@ -51,18 +56,32 @@ export function renderSoundWav(sound: SoundAsset): Uint8Array {
   );
 }
 
-export function renderMusicWav(music: MusicAsset, sounds: readonly SoundAsset[]): Uint8Array {
+export function renderMusicWav(
+  music: MusicAsset,
+  sounds: readonly SoundAsset[],
+  maximumBytes = Number.MAX_SAFE_INTEGER,
+): Uint8Array {
   const frames =
     music.framesPerRow *
     music.order.reduce((total, name) => total + (music.patterns[name]?.rows.length ?? 0), 0);
-  if (frames < 1 || frames > HARDWARE.frameRate * 60 * 10)
+  if (!Number.isSafeInteger(frames) || frames < 1 || frames > HARDWARE.frameRate * 60 * 10)
     throw new RangeError('music WAV duration must be between one frame and ten minutes');
+  admitWavSize(frames, maximumBytes);
   const synth = new Synthesizer(new AudioAssetStore([...sounds, music]));
   return encodeAudioFramesWav(
     Array.from({ length: frames }, (_, frame) =>
       synth.executeFrame(frame === 0 ? [audioCommand('music', music.name, 'Music')] : []),
     ),
   );
+}
+
+/** Preflight the exact fixed-rate stereo PCM16 size before synth frame allocation. */
+function admitWavSize(frames: number, maximumBytes: number): void {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 44)
+    throw new RangeError('maximum WAV bytes must be a safe integer of at least 44');
+  const bytes = 44 + frames * (HARDWARE.audioSampleRate / HARDWARE.frameRate) * 4;
+  if (!Number.isSafeInteger(bytes) || bytes > maximumBytes)
+    throw new RangeError(`WAV output exceeds ${String(maximumBytes)}-byte limit`);
 }
 
 function audioCommand(name: string, asset: string, kind: 'Sound' | 'Music'): ConsoleCommand {

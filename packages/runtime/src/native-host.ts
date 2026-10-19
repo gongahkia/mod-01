@@ -166,8 +166,8 @@ async function handle(command: Command): Promise<unknown> {
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
-          ? renderSoundWav(command.asset as SoundAsset)
-          : renderMusicWav(command.asset as MusicAsset, command.sounds);
+          ? renderSoundWav(command.asset as SoundAsset, 8 * 1024 * 1024)
+          : renderMusicWav(command.asset as MusicAsset, command.sounds, 8 * 1024 * 1024);
       if (wav.byteLength > 8 * 1024 * 1024)
         throw new RangeError('native WAV preview exceeds 8 MiB');
       return { type: 'wav', bytes: encoded(wav) };

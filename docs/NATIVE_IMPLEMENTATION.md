@@ -51,6 +51,18 @@ choices remain outstanding.
 
 ## Progress
 
+- Native WAV export now passes its existing 8 MiB transport bound into shared
+  renderers, which preflight exact PCM16 bytes before executing synth frames.
+  No output is truncated and the renderers' default capacity is unchanged.
+  Tests cover exact/header/release boundaries, invalid budgets/assets, the
+  largest admitted native frame count, the next rejected frame and zero synth
+  execution on oversized requests. The generated production host rejects both
+  long sounds and otherwise valid tracker songs, then serves a valid WAV in the
+  same process. Studio documents the limit and exposes it on the export tooltip.
+  The full gate passes 278 runtime, 128 core, 125 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/all-feature Clippy/builds, nine
+  unchanged raw/PNG pairs and both 120-frame Linux package verifications without
+  PATH. Remaining cross-host/product audit and physical/platform QA stay open.
 - Native sound controls no longer write fractional MIDI/frame values or clamp
   valid long envelopes on opening. Integer fields cover the full current schema,
   float fields preserve full precision on focus/Enter, and malformed source is

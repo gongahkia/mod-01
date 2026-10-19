@@ -112,6 +112,12 @@ their patch bank is unchanged. STOP AUDIO, leaving Assets, opening another
 project or running the cartridge stops and discards queued preview audio.
 Without an audio device the same preview runs silently. EXPORT WAV is a separate
 offline render and never starts playback.
+Native WAV export is limited to 8 MiB (2,621 complete 60 Hz synth frames, about
+43.7 seconds), including a sound's release. The exact size is checked before
+rendering any PCM, not after allocating a long file. Oversized output is rejected
+without truncation; shorten the patch/release or music order and retry. This
+native transport limit does not reduce the runtime library's existing default
+sound/music renderer capacity.
 
 The `AUD`/`SILENT` status indicator reports native device availability; hover it
 for the latest device notice. The current

@@ -36,6 +36,57 @@ const debugJavascript = `export default function createCartridge(api) {
 }`;
 
 describe('native process host', () => {
+  it('rejects oversized sound/music exports and still answers a valid export in the same process', () => {
+    const patch = {
+      kind: 'sound',
+      name: 'tone',
+      waveform: 'triangle',
+      note: 60,
+      durationFrames: 1,
+      volume: 0.5,
+      pan: 0,
+      envelope: { attackFrames: 0, decayFrames: 0, sustainLevel: 1, releaseFrames: 0 },
+      pitch: { slideSemitonesPerFrame: 0, vibratoDepthSemitones: 0, vibratoPeriodFrames: 0 },
+    };
+    const commands = [
+      { type: 'render-wav', kind: 'sound', asset: { ...patch, durationFrames: 3600 }, sounds: [] },
+      {
+        type: 'render-wav',
+        kind: 'music',
+        asset: {
+          kind: 'music',
+          name: 'song',
+          framesPerRow: 240,
+          order: ['A'],
+          loop: false,
+          patterns: { A: { rows: Array.from({ length: 128 }, () => Array<null>(8).fill(null)) } },
+        },
+        sounds: [patch],
+      },
+      { type: 'render-wav', kind: 'sound', asset: patch, sounds: [] },
+      { type: 'stop' },
+    ];
+    const replies = execFileSync(
+      process.execPath,
+      ['--permission', `--allow-fs-read=${host}`, host],
+      {
+        input: commands.map((command) => JSON.stringify(command)).join('\n') + '\n',
+        timeout: 5000,
+      },
+    )
+      .toString()
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(replies.map((reply) => reply.type)).toEqual(['error', 'error', 'wav', 'stopped']);
+    for (const reply of replies.slice(0, 2)) {
+      expect(reply.code).toBe('M019100');
+      expect(reply.message).toBe('WAV output exceeds 8388608-byte limit');
+    }
+    const wav = Buffer.from(replies[2]?.bytes as string, 'base64');
+    expect(wav.byteLength).toBe(44 + 800 * 4);
+    expect(wav.subarray(0, 4).toString()).toBe('RIFF');
+  });
   it('requires the current whole-game load command without an entry-only fallback', () => {
     const game = runtimeGameFixture({
       javascript,

@@ -110,6 +110,10 @@ file format). Verification accepts 1–36,000 frames and replay files up to 8 Mi
 encoding, and final SHA-256 fields cover canonical state, checkpoint and saves.
 These permit direct cross-host comparisons; they do not change game execution
 or turn JSON reports into restorable checkpoints.
+Use canonical SHA-256 fields for restore/replay equivalence. Opaque V8 checkpoint
+bytes are transport data, not a canonical state encoding: even equal values can
+produce different serialized bytes, as documented by
+[Node's serialization API](https://github.com/nodejs/node/blob/main/doc/api/v8.md#serialization-api).
 Studio replay imports use that same bounded reader. It does not open
 a window, initialize an audio device, read local saves or persist save commits.
 Frame count is bounded to 1–36,000. This is a smoke

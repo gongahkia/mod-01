@@ -258,6 +258,160 @@ fn complete_game_crosses_native_release_and_source_step_boundaries_on_one_input_
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one maintained route through release, source steps and rewind
+fn relay_station_studio_source_steps_and_night_bank_checkpoint_replay_match_release_frames() {
+    let maintained = include_str!("../../../cartridges/relay-station/cart.m01w");
+    let mut project = modl_core::parse_workcart(maintained).unwrap();
+    let suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    // Keep the actual maintained programs/assets, but never read/write a user's game saves.
+    project.manifest.id = format!("relay-qa-main-{suffix}");
+    for member in &mut project.bundle {
+        let mut child = modl_core::parse_workcart(&member.source).unwrap();
+        child.manifest.id = format!("relay-qa-{}-{suffix}", member.alias);
+        member.source =
+            modl_core::encode_workcart(&child.manifest, &child.files, &child.recipes, &child.tests)
+                .unwrap();
+    }
+    let source = modl_core::workcart::encode_workcart_with_bundle(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+        &project.bundle,
+    )
+    .unwrap();
+    let inputs =
+        replay::decode(include_bytes!("../../../tests/replays/relay-station.json")).unwrap();
+    let expected_inputs = (0..110)
+        .map(|frame| {
+            (
+                frame,
+                inputs
+                    .get(&frame)
+                    .cloned()
+                    .unwrap_or_else(replay::empty_input),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut release = Vec::new();
+    let checkpoint_checks = |app: &StudioApp| {
+        assert!(!app.pending);
+        app.runtime.send(json!({"type":"snapshot"})).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(7);
+        loop {
+            if let Some(reply) = app.runtime.poll() {
+                assert_eq!(reply["type"], "snapshot");
+                assert!(reply["checks"].is_object());
+                return reply["checks"].clone();
+            }
+            assert!(Instant::now() < deadline, "checkpoint response timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    for debug in [false, true] {
+        let context = egui::Context::default();
+        let mut app = StudioApp::new_with_devices(None, &context, false);
+        app.project = Some(NativeProject::from_source(source.clone(), None).unwrap());
+        app.manifest_text = app.project.as_ref().unwrap().manifest_source.clone();
+        app.select_member("night");
+        app.replay_playback = Some(inputs.clone());
+        app.recording_replay = true;
+        app.run_mode(debug);
+        pump(&mut app, &context);
+        assert_eq!(
+            app.active_alias, "main",
+            "editor selection cannot choose the entry"
+        );
+        let mut night_checkpoint = None;
+        let mut seen_source = std::collections::BTreeSet::new();
+        for frame in 0..110 {
+            if debug {
+                advance_debug_to(&mut app, &context, frame + 1);
+                if let Some(event) = app.debug_trace.last() {
+                    let alias = event["cartridgeAlias"].as_str().unwrap();
+                    assert_ne!(alias, "night", "data donors must never execute");
+                    assert_eq!(event["cartridgeId"], app.running_members[alias].id);
+                    assert_eq!(event["sourceSpan"]["source"], "src/main.modl");
+                    seen_source.insert(alias.to_owned());
+                }
+            } else {
+                app.send_input(&context, "frame");
+                pump(&mut app, &context);
+            }
+            assert_eq!(app.frame, frame);
+            assert_eq!(app.input_frame, frame + 1);
+            let evidence = (app.work, app.last_pixels.clone(), app.active_alias.clone());
+            if debug {
+                assert!(
+                    evidence == release[frame as usize],
+                    "source-step frame {frame}"
+                );
+            } else {
+                release.push(evidence);
+            }
+            if debug && frame == 22 {
+                assert_eq!(app.active_alias, "vault");
+                app.runtime.send(json!({"type":"snapshot"})).unwrap();
+                app.pending = true;
+                pump(&mut app, &context);
+                night_checkpoint = app.snapshot.clone();
+            }
+        }
+        assert_eq!(app.replay_frames, expected_inputs);
+        assert_eq!(app.active_alias, "main");
+        assert_eq!(app.project.as_ref().unwrap().member_alias(), "night");
+        if debug {
+            assert_eq!(
+                seen_source,
+                std::collections::BTreeSet::from(["main".to_owned(), "vault".to_owned()])
+            );
+            let final_checks = checkpoint_checks(&app);
+            app.runtime
+                .send(json!({"type":"restore","snapshot":night_checkpoint.unwrap()}))
+                .unwrap();
+            app.pending = true;
+            pump(&mut app, &context);
+            assert_eq!(app.input_frame, 23);
+            assert_eq!(app.active_alias, "vault");
+            assert_eq!(app.replay_frames.len(), 23);
+            for frame in 23..110 {
+                advance_debug_to(&mut app, &context, frame + 1);
+                assert!(
+                    (app.work, app.last_pixels.clone(), app.active_alias.clone())
+                        == release[frame as usize],
+                    "restored night-bank frame {frame}"
+                );
+            }
+            assert_eq!(app.replay_frames, expected_inputs);
+            assert_eq!(
+                checkpoint_checks(&app),
+                final_checks,
+                "restored live bank, tasks, RNG and saves must finish at the same canonical checkpoint"
+            );
+        }
+        for member in app.running_members.values() {
+            assert!(
+                read_save(&member.id).unwrap().is_empty(),
+                "debug/replay must not persist commits"
+            );
+        }
+        assert_eq!(
+            app.project.as_mut().unwrap().game().unwrap().source(),
+            source
+        );
+        app.stop();
+    }
+    assert_eq!(release.iter().map(|frame| frame.0).max(), Some(25_024));
+}
+
+#[test]
 fn native_game_checkpoint_restores_alias_and_global_input_without_recording_target_boot() {
     let (mut app, context, _) = fixture(true);
     advance_debug_to(&mut app, &context, 2);

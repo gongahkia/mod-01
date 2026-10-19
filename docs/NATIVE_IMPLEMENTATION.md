@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Actual Studio runs the maintained Relay Station programs/assets in release and
+  statement-step debug modes through all 110 replay frames. Per-frame pixels,
+  work, active routing and recorded input match; selected donor source cannot
+  change main's launch entry, source events identify main/vault correctly and the
+  donor never executes. A real Studio checkpoint after the night-bank swap
+  rewinds to frame 23 and replays to identical canonical state/checkpoint and
+  per-ID saves. Both modes use isolated test save IDs and persist no commits;
+  authored source remains unchanged. The regression and workspace Clippy pass.
+  Opaque V8 bytes are deliberately not compared after restore: Node documents
+  that equal values can serialize differently; canonical evidence is authoritative.
 - CLI and native verification now share the same canonical evidence helpers,
   with unchanged existing replay goldens. Native reports bounded per-frame
   SHA-256 checks for indexed pixels, interleaved PCM and audio commands, plus

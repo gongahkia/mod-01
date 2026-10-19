@@ -1,5 +1,57 @@
 use super::*;
 
+#[test]
+fn empty_workcarts_can_author_current_assets_that_pack_through_shared_validation() {
+    let context = egui::Context::default();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../templates/blank/cart.m01w");
+    let original = fs::read(&path).unwrap();
+    let mut app = StudioApp::new_with_devices(Some(path.clone()), &context, false);
+    for (name, kind) in [
+        ("tiles", modl_core::AssetKind::TileSet),
+        ("map", modl_core::AssetKind::Map),
+        ("font", modl_core::AssetKind::Font),
+        ("sound", modl_core::AssetKind::Sound),
+        ("music", modl_core::AssetKind::Music),
+    ] {
+        app.new_asset_name = name.to_owned();
+        app.new_asset_kind = kind;
+        app.create_asset();
+        assert!(
+            app.project
+                .as_ref()
+                .unwrap()
+                .manifest
+                .assets
+                .contains_key(name),
+            "{}",
+            app.status
+        );
+    }
+    app.sprite_name = "hero".to_owned();
+    app.create_sprite();
+    assert!(
+        app.project
+            .as_ref()
+            .unwrap()
+            .manifest
+            .assets
+            .contains_key("hero"),
+        "{}",
+        app.status
+    );
+    app.open_display();
+    app.sync_asset().unwrap();
+    let project = app.project.as_ref().unwrap();
+    assert!(
+        modl_core::assets::analyze_project_assets(&project.manifest, &project.files).is_valid()
+    );
+    project.pack().unwrap();
+    assert_eq!(fs::read(path).unwrap(), original);
+    context
+        .run_ui(egui::RawInput::default(), |_| {})
+        .drop_without_applying_deltas();
+}
+
 fn example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/api-tour/cart.m01w")
 }

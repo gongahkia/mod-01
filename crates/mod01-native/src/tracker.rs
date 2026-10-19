@@ -58,6 +58,21 @@ impl TrackerEditor {
         std::mem::take(&mut self.actions)
     }
 
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.pattern.capacity()
+            + self.sound.capacity()
+            + self.rename.capacity()
+            + self.status.capacity()
+            + self.clipboard.as_ref().map_or(0, |rows| {
+                rows.iter()
+                    .flatten()
+                    .map(crate::asset_sessions::json_bytes)
+                    .sum::<usize>()
+            })
+            + self.actions.capacity() * std::mem::size_of::<Action>()
+    }
+
     pub fn cursor(&self, document: &Value) -> Option<(String, usize, usize)> {
         let patterns = document["patterns"].as_object()?;
         let name = if patterns.contains_key(&self.pattern) {

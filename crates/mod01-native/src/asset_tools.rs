@@ -83,6 +83,40 @@ impl AssetWorkbench {
             .map_err(|error| error.to_string())
     }
 
+    pub fn is_display(&self) -> bool {
+        self.display
+    }
+
+    pub fn retained_bytes(&self) -> usize {
+        use crate::asset_sessions::json_bytes;
+        std::mem::size_of::<Self>()
+            + json_bytes(&self.document)
+            + self
+                .history
+                .iter()
+                .chain(&self.future)
+                .map(json_bytes)
+                .sum::<usize>()
+            + self.raster_clipboard.as_ref().map_or(0, json_bytes)
+            + self.map_clipboard.as_ref().map_or(0, |(_, _, cells)| {
+                cells.iter().map(json_bytes).sum::<usize>()
+            })
+            + self.font_preview.capacity()
+            + self.tracker.retained_bytes()
+    }
+
+    pub fn replace_document(&mut self, document: Value) {
+        if document != self.document {
+            self.history
+                .push(std::mem::replace(&mut self.document, document));
+            if self.history.len() > 32 {
+                self.history.remove(0);
+            }
+            self.future.clear();
+            self.dirty = true;
+        }
+    }
+
     pub fn tracker_cursor(&self) -> Option<(String, usize, usize)> {
         (self.kind == AssetKind::Music)
             .then(|| self.tracker.cursor(&self.document))
@@ -93,17 +127,19 @@ impl AssetWorkbench {
         std::mem::take(&mut self.tracker_actions)
     }
 
-    fn undo(&mut self) {
+    pub fn undo(&mut self) {
         if let Some(previous) = self.history.pop() {
             self.future
                 .push(std::mem::replace(&mut self.document, previous));
+            self.dirty = true;
         }
     }
 
-    fn redo(&mut self) {
+    pub fn redo(&mut self) {
         if let Some(next) = self.future.pop() {
             self.history
                 .push(std::mem::replace(&mut self.document, next));
+            self.dirty = true;
         }
     }
 

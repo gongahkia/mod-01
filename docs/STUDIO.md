@@ -58,6 +58,17 @@ be removed. Patterns retain 1–256 rows; tempo supports the full 1–240 frames
 Existing optional fields/annotations survive unrelated edits and duplicate/copy
 operations. Invalid shapes remain recoverable as raw JSON without silent repair.
 
+Structured assets and layered sprites keep separate editor sessions when you
+switch assets, including undo/redo and selection/tool state. Synchronization and
+ordinary saves do not erase that history; importing a structured asset is one
+undoable replacement. Each editor retains up to 32 edits. Inactive sessions use
+a 64-session / conservative 64 MiB allocation budget; least-recently-used history
+expires at the limit, never the asset stored in project memory. A session too
+large for that budget is not cached. History is session-local, not an on-disk
+format: opening/recovering/creating another cartridge clears it. Changed asset
+kind/path/bytes or layered source invalidate cached state. Raw JSON text widgets
+also use separate asset/project identities so their text undo cannot cross assets.
+
 Sound/music previews run the production synth in a separate, disposable native
 runtime: LIVE SONG starts the order list; PATTERN FROM CURSOR plays a non-looping
 copy of the selected pattern; AUDITION CELL/PREVIEW PATCH triggers the actual

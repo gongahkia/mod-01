@@ -19,6 +19,7 @@
     clippy::assigning_clones
 )]
 
+mod asset_sessions;
 mod asset_tools;
 mod audio;
 mod launch;
@@ -31,6 +32,8 @@ mod runtime;
 mod save_manager;
 mod source_editor;
 mod sprite;
+#[cfg(test)]
+mod studio_asset_tests;
 mod syntax;
 mod tracker;
 mod ui_assets;
@@ -134,6 +137,7 @@ struct StudioApp {
     asset_text: String,
     asset_dirty: bool,
     asset_workbench: Option<AssetWorkbench>,
+    asset_sessions: asset_sessions::AssetSessions,
     color_hex: String,
     sprite_painting: bool,
     last_sprite_point: Option<(i32, i32)>,
@@ -193,6 +197,10 @@ struct StudioApp {
 
 impl StudioApp {
     fn new(start: Option<PathBuf>, context: &egui::Context) -> Self {
+        Self::new_with_devices(start, context, true)
+    }
+
+    fn new_with_devices(start: Option<PathBuf>, context: &egui::Context, devices: bool) -> Self {
         let host_path = native_host_path();
         let mut app = Self {
             cursors: PixelCursors::new(context),
@@ -204,8 +212,8 @@ impl StudioApp {
             live_audio: live_audio::AudioPreview::new(),
             playground: playground::Playground::new(),
             show_playground: false,
-            audio: AudioOutput::new().ok(),
-            gamepads: Gilrs::new().ok(),
+            audio: devices.then(|| AudioOutput::new().ok()).flatten(),
+            gamepads: devices.then(|| Gilrs::new().ok()).flatten(),
             texture: None,
             sprite: None,
             modl_highlighter: syntax::ModlHighlighter::default(),
@@ -217,6 +225,7 @@ impl StudioApp {
             asset_text: String::new(),
             asset_dirty: false,
             asset_workbench: None,
+            asset_sessions: asset_sessions::AssetSessions::default(),
             color_hex: "ED7B69FF".to_owned(),
             sprite_painting: false,
             last_sprite_point: None,
@@ -286,10 +295,7 @@ impl StudioApp {
                 self.manifest_text = project.manifest_source.clone();
                 self.status = format!("OPENED {}", project.manifest.title);
                 self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
+                self.reset_asset_editors();
                 self.view = View::Code;
             }
             Err(error) => self.status = error,
@@ -305,10 +311,7 @@ impl StudioApp {
                 self.manifest_text = project.manifest_source.clone();
                 self.status = format!("OPENED SAMPLE {}", project.manifest.title);
                 self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
+                self.reset_asset_editors();
                 self.view = View::Code;
                 if play {
                     self.run();
@@ -332,9 +335,7 @@ impl StudioApp {
                 project.dirty = true;
                 self.manifest_text = project.manifest_source.clone();
                 self.project = Some(project);
-                self.asset_workbench = None;
-                self.sprite = None;
-                self.asset_name.clear();
+                self.reset_asset_editors();
                 self.view = View::Code;
                 self.status = "RECOVERY REVISION LOADED; SAVE TO APPLY".to_owned();
             }
@@ -349,10 +350,7 @@ impl StudioApp {
                 self.manifest_text = project.manifest_source.clone();
                 self.status = format!("CREATED {}", project.manifest.id);
                 self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
+                self.reset_asset_editors();
                 self.show_new = false;
                 self.view = View::Code;
             }
@@ -372,11 +370,12 @@ impl StudioApp {
                 return;
             }
         }
-        let Some(project) = self.project.as_mut() else {
-            return;
-        };
         match modl_core::parse_project_manifest(&requested_manifest) {
             Ok(manifest) => {
+                self.cache_asset_editors();
+                let Some(project) = self.project.as_mut() else {
+                    return;
+                };
                 project.manifest_source = requested_manifest.clone();
                 self.manifest_text = requested_manifest;
                 project.manifest = manifest;
@@ -1900,12 +1899,63 @@ impl StudioApp {
         let _: Value = serde_json::from_str(&self.asset_text)
             .map_err(|error| format!("{}: {error}", self.asset_path))?;
         let project = self.project.as_mut().ok_or("no project is open")?;
-        project
-            .files
-            .insert(self.asset_path.clone(), self.asset_text.as_bytes().to_vec());
-        project.dirty = true;
+        if project.files.get(&self.asset_path).map(Vec::as_slice)
+            != Some(self.asset_text.as_bytes())
+        {
+            project
+                .files
+                .insert(self.asset_path.clone(), self.asset_text.as_bytes().to_vec());
+            project.dirty = true;
+        }
         self.asset_dirty = false;
+        if let Some(workbench) = self.asset_workbench.as_mut() {
+            workbench.dirty = false;
+        }
         Ok(())
+    }
+
+    // Call only after current buffers have been synchronized into project memory.
+    fn reset_asset_editors(&mut self) {
+        self.asset_sessions.clear();
+        self.asset_workbench = None;
+        self.sprite = None;
+        self.asset_name.clear();
+        self.asset_path.clear();
+        self.asset_text.clear();
+        self.asset_dirty = false;
+        self.sprite_texture = None;
+        self.sprite_painting = false;
+        self.last_sprite_point = None;
+        self.selection_anchor = None;
+    }
+
+    // Call only after current buffers have been synchronized into project memory.
+    fn cache_asset_editors(&mut self) {
+        let Some(project) = &self.project else { return };
+        let mut retained = true;
+        if let Some(editor) = self.asset_workbench.take() {
+            retained &= self.asset_sessions.stash_structured(
+                project,
+                &self.asset_name,
+                &self.asset_path,
+                editor,
+            );
+        }
+        if let Some(editor) = self.sprite.take() {
+            retained &= self.asset_sessions.stash_sprite(project, editor);
+        }
+        self.asset_name.clear();
+        self.asset_path.clear();
+        self.asset_text.clear();
+        self.asset_dirty = false;
+        self.sprite_texture = None;
+        self.sprite_painting = false;
+        self.last_sprite_point = None;
+        self.selection_anchor = None;
+        if !retained {
+            self.status =
+                "ASSET RETAINED IN PROJECT / SESSION EXCEEDS HISTORY CACHE LIMIT".to_owned();
+        }
     }
 
     fn import_asset_file(&mut self) {
@@ -1953,19 +2003,11 @@ impl StudioApp {
             self.status = format!("ASSET KIND MUST BE {expected}");
             return;
         }
-        let editor = if self.asset_name == "DISPLAY" {
-            AssetWorkbench::new_display(&source)
-        } else {
-            AssetWorkbench::new(current.kind, &source)
-        };
-        match editor {
-            Ok(editor) => {
-                self.asset_text = source;
-                self.asset_workbench = Some(editor);
-                self.asset_dirty = true;
-                self.status = format!("IMPORTED {}", path.display());
-            }
-            Err(error) => self.status = error,
+        if let Some(current) = self.asset_workbench.as_mut() {
+            current.replace_document(parsed);
+            self.asset_text = source;
+            self.asset_dirty = true;
+            self.status = format!("IMPORTED {} / UNDO AVAILABLE", path.display());
         }
     }
 
@@ -2074,14 +2116,24 @@ impl StudioApp {
             self.status = format!("ASSET FILE {} IS MISSING", asset.path);
             return;
         };
+        if self.asset_name == name && self.asset_path == asset.path {
+            self.view = View::Assets;
+            return;
+        }
+        let asset_path = asset.path.clone();
+        let kind = asset.kind;
         match String::from_utf8(bytes.clone()) {
             Ok(source) => {
-                self.sprite = None;
+                let editor = self
+                    .asset_sessions
+                    .take_structured(project, name, &asset_path, Some(kind))
+                    .or_else(|| AssetWorkbench::new(kind, &source).ok());
+                self.cache_asset_editors();
                 self.asset_name = name.to_owned();
-                self.asset_path = asset.path.clone();
+                self.asset_path = asset_path;
                 self.asset_text = source;
                 self.asset_dirty = false;
-                self.asset_workbench = AssetWorkbench::new(asset.kind, &self.asset_text).ok();
+                self.asset_workbench = editor;
                 self.view = View::Assets;
             }
             Err(error) => self.status = error.to_string(),
@@ -2090,6 +2142,12 @@ impl StudioApp {
 
     fn open_display(&mut self) {
         if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
             self.status = error;
             return;
         }
@@ -2109,7 +2167,11 @@ impl StudioApp {
                     return;
                 }
             };
-            manifest["display"] = toml::Value::String(path.clone());
+            let Some(table) = manifest.as_table_mut() else {
+                self.status = "MANIFEST MUST BE A TABLE".to_owned();
+                return;
+            };
+            table.insert("display".to_owned(), toml::Value::String(path.clone()));
             project.manifest_source = match toml::to_string_pretty(&manifest) {
                 Ok(value) => value,
                 Err(error) => {
@@ -2124,7 +2186,7 @@ impl StudioApp {
         let source = project.files.entry(path.clone()).or_insert_with(|| {
             serde_json::to_vec(&json!({
                 "revision":2,"kind":"display",
-                "remap":(0..32).collect::<Vec<_>>(),"raster":[]
+                "remap":(0..256).collect::<Vec<_>>(),"raster":[]
             }))
             .unwrap_or_default()
         });
@@ -2135,7 +2197,22 @@ impl StudioApp {
                 return;
             }
         };
-        self.asset_workbench = AssetWorkbench::new_display(&source).ok();
+        if self.asset_name == "DISPLAY"
+            && self.asset_path == path
+            && self
+                .asset_workbench
+                .as_ref()
+                .is_some_and(AssetWorkbench::is_display)
+        {
+            self.view = View::Assets;
+            return;
+        }
+        let editor = self
+            .asset_sessions
+            .take_structured(project, "DISPLAY", &path, None)
+            .or_else(|| AssetWorkbench::new_display(&source).ok());
+        self.cache_asset_editors();
+        self.asset_workbench = editor;
         self.asset_text = source;
         self.asset_name = "DISPLAY".to_owned();
         self.asset_path = path;
@@ -2255,6 +2332,10 @@ impl StudioApp {
     }
 
     fn load_sprite(&mut self, name: &str) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
         if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
             if let Err(error) = self.save_sprite() {
                 self.status = error;
@@ -2264,12 +2345,22 @@ impl StudioApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
+        if self
+            .sprite
+            .as_ref()
+            .is_some_and(|editor| editor.name == name)
+        {
+            self.view = View::Sprites;
+            return;
+        }
         let Some(asset) = project.manifest.assets.get(name) else {
             return;
         };
         let sidecar = format!("editor/sprites/{name}.m01paint");
         let palette = sprite::palette();
-        let editor = if let Some(source) = project.files.get(&sidecar) {
+        let editor = if let Some(editor) = self.asset_sessions.take_sprite(project, name) {
+            Ok(editor)
+        } else if let Some(source) = project.files.get(&sidecar) {
             serde_json::from_slice::<SpriteDocument>(source)
                 .map_err(|error| error.to_string())
                 .and_then(|document| {
@@ -2282,6 +2373,7 @@ impl StudioApp {
         };
         match editor {
             Ok(editor) => {
+                self.cache_asset_editors();
                 self.sprite = Some(editor);
                 self.asset_name.clear();
                 self.sprite_texture = None;
@@ -2293,6 +2385,10 @@ impl StudioApp {
     }
 
     fn create_sprite(&mut self) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
         if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
             if let Err(error) = self.save_sprite() {
                 self.status = error;
@@ -2325,6 +2421,7 @@ impl StudioApp {
         );
         match editor {
             Ok(editor) => {
+                self.cache_asset_editors();
                 self.sprite = Some(editor);
                 self.sprite_texture = None;
                 if let Err(error) = self.save_sprite() {
@@ -3073,6 +3170,7 @@ impl eframe::App for StudioApp {
                             if ui
                                 .add(
                                     egui::TextEdit::multiline(&mut self.asset_text)
+                                        .id_salt(("asset-json", self.asset_sessions.generation(), &self.asset_name, &self.asset_path))
                                         .font(egui::TextStyle::Monospace)
                                         .code_editor()
                                         .desired_rows(12),

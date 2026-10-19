@@ -195,3 +195,14 @@ choices remain outstanding.
   navigation. Screenshots include `tracker-eight-notes-final.png`,
   `tracker-pattern-playback.png` and `tracker-minimum-scrolled.png`.
   Studio help documents the exact shortcuts and local clipboard semantics.
+
+- Per-asset sessions now preserve structured and layered-sprite undo across asset
+  switches and ordinary save/sync, with stale-byte/kind/path/layered-source checks
+  and a bounded LRU cache. Imports are undoable; raw text undo is independently
+  scoped to each asset/project. Five cache/Studio-level tests cover real
+  music/sound/sprite/display transitions, unchanged manifests, external edits,
+  cache expiry, invalid raw buffers and zero source-file writes. Native visual
+  QA verified returning to a newly added pattern, undoing it, visiting Display
+  and returning with redo still available (`asset-history-returned.png`,
+  `asset-history-undo.png`). First-use Display also now safely inserts its
+  manifest key and initializes all 256 remap entries.

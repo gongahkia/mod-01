@@ -158,6 +158,34 @@ impl Layer {
 }
 
 impl SpriteEditor {
+    pub fn retained_bytes(&self) -> usize {
+        fn document_bytes(document: &SpriteDocument) -> usize {
+            document.frames.capacity() * std::mem::size_of::<SpriteFrame>()
+                + document
+                    .frames
+                    .iter()
+                    .map(|frame| {
+                        frame.layers.capacity() * std::mem::size_of::<Layer>()
+                            + frame
+                                .layers
+                                .iter()
+                                .map(|layer| layer.name.capacity() + layer.pixels.capacity())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+        }
+        std::mem::size_of::<Self>()
+            + self.name.capacity()
+            + self.asset_path.capacity()
+            + document_bytes(&self.document)
+            + self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .map(document_bytes)
+                .sum::<usize>()
+    }
+
     pub fn new(name: String, asset_path: String, document: SpriteDocument) -> Result<Self, String> {
         document.validate()?;
         Ok(Self {

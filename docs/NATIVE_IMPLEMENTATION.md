@@ -51,6 +51,15 @@ choices remain outstanding.
 
 ## Progress
 
+- Release artifact smoke checks now inspect the JSON result, not only CLI exit
+  status. Each of ten maintained packed games must report the current result
+  revision, expected identity, five requested/completed frames, five ordered
+  records and no fault field. Two regressions cover incomplete/malformed traces
+  and an actual faulting MODL cartridge whose CLI process returns structured JSON
+  with exit status zero; the release checker rejects it with status one. Lint,
+  the two tests and the strengthened artifact/package verifier pass with all
+  cartridge bytes unchanged. All 320 runtime/script tests in 43 files and the
+  repository format check also pass. This changes verification, not CLI fault reporting.
 - A shared 40-case source-readable Rust/TypeScript replay corpus first reproduced
   compact-empty, integral-number and negative-zero differences. Both decoders now
   agree on accepted schemas and exact expanded inputs/round trips, including

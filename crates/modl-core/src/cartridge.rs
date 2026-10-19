@@ -345,6 +345,7 @@ fn pack_materialized_project(
     insert_unique(&mut entries, "manifest.json".to_owned(), canonical_manifest)?;
     let bytes = encode_archive(&entries)?;
     ensure_capacity(bytes.len())?;
+    decode_cartridge(&bytes)?;
     Ok(PackedCartridge {
         bytes,
         manifest: packed_manifest,

@@ -13,13 +13,13 @@ Git commit. The final audit must link the evidence for every row below.
 
 | Requirement                   | Acceptance evidence                                                                                                                                                                                         | Complete |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| Native-only product           | Browser app, Wasm bridge, PWA, workers, web sharing/export and browser-only build/test dependencies removed; native build/check/package gates pass.                                                         | [ ]      |
-| One current format            | Studio/CLI use one canonical editable workcart and one current packed encoding; no old-format/profile migration branches; authored modules, auxiliary files, layered sprites, recipes and tests round-trip. | [ ]      |
-| Current machine contract      | API, hardware, assets, manual, examples, limits and metadata agree on the current 240×144 / 256-colour / 1 MiB machine.                                                                                     | [ ]      |
-| Math helpers                  | Typed abs/min/max/clamp/rounding/sqrt/trig/atan2 execute with specified deterministic results, faults and work costs in release/debug/headless/native.                                                      | [ ]      |
-| Number formatting/conversion  | Explicit numeric formatting, padding and safe parsing work in HUDs and reject invalid inputs predictably.                                                                                                   | [ ]      |
-| Text helpers                  | Bounded length/slice/character conversion/split operations have useful typed results and tested edge cases.                                                                                                 | [ ]      |
-| Bit operations                | AND/OR/XOR/NOT/shifts use explicit integer-width/overflow rules with parser, compiler and execution coverage.                                                                                               | [ ]      |
+| Native-only product           | Browser app, Wasm bridge, PWA, workers, web sharing/export and browser-only build/test dependencies removed; native build/check/package gates pass.                                                         | [x]      |
+| One current format            | Studio/CLI use one canonical editable workcart and one current packed encoding; no old-format/profile migration branches; authored modules, auxiliary files, layered sprites, recipes and tests round-trip. | [x]      |
+| Current machine contract      | API, hardware, assets, manual, examples, limits and metadata agree on the current 240×144 / 256-colour / 1 MiB machine.                                                                                     | [x]      |
+| Math helpers                  | Typed abs/min/max/clamp/rounding/sqrt/trig/atan2 execute with specified deterministic results, faults and work costs in release/debug/headless/native.                                                      | [x]      |
+| Number formatting/conversion  | Explicit numeric formatting, padding and safe parsing work in HUDs and reject invalid inputs predictably.                                                                                                   | [x]      |
+| Text helpers                  | Bounded length/slice/character conversion/split operations have useful typed results and tested edge cases.                                                                                                 | [x]      |
+| Bit operations                | AND/OR/XOR/NOT/shifts use explicit integer-width/overflow rules with parser, compiler and execution coverage.                                                                                               | [x]      |
 | Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [ ]      |
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [ ]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [ ]      |
@@ -55,8 +55,7 @@ choices remain outstanding.
 - Working branch: `feat/native-consolidation`.
 - Implementation and final verification remain open.
 - Browser Studio/Wasm/PWA removal: `5e17574`; browser adapters, sharing/storage
-  and worker protocol removal: `09090dd`. Web export removal is still pending the
-  standalone native game packager.
+  and worker protocol removal: `09090dd`. Web export/runner removal: `7872dac`.
 - Numeric helpers: `docs/STANDARD_LIBRARY.md`, `math.test.ts`, the compiler's
   numeric type tests, and `stdlib-conformance.test.ts` demonstrate release/debug,
   native/headless execution, independent accuracy vectors, bounded costs and
@@ -69,3 +68,19 @@ choices remain outstanding.
   proving unchanged input hashes, work peaks, framebuffer checkpoints, audio
   commands and PCM; new builtins/generated code change packed/snapshot identity.
   Full visual QA, format consolidation and remaining acceptance rows are open.
+
+- Current-format consolidation: every maintained project is `cart.m01w`;
+  M01W/2 and M01C/2 are the only supported formats. Exact workcart metadata,
+  auxiliary files, layers, recipes and tests round-trip. Imported build products
+  are checked against recompiled source before native/CLI use.
+- Current memory: one 1 MiB ROM at `0x100000`, 256-colour palette at
+  `0x200000`, one 1 MiB visual bank at `0x210000`; no aliases.
+  Allocation metadata is bounded to 8,192 records, below ROM. Boundary tests
+  cover the full table with a full ROM present and rejection of record 8,193.
+- Consolidation checks: 69 core tests, 18 CLI integration tests, 19 native
+  tests, 160 runtime tests, formatting/lint/types and warning-free workspace
+  Clippy. All eight games pack/PNG-export reproducibly and boot. Linux native
+  package verification passes 120 frames without PATH. Golden updates prove
+  unchanged input/work/pixels/checkpoints/audio/PCM, changing only packed and
+  complete device-state identities. Windows/macOS execution and visual/input QA
+  are not claimed by these Linux checks.

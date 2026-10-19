@@ -506,11 +506,14 @@ fn execute_headless_host(request: &[u8], frames: u32) -> Result<Vec<u8>, ()> {
 fn load_headless_cartridge(
     path: &Path,
 ) -> Result<(Vec<u8>, modl_core::DecodedCartridge, Vec<u8>), ()> {
-    let packed = if path.is_dir() || is_workcart_path(path) {
+    let bytes = if path.is_dir() || is_workcart_path(path) {
         let project = load_project(path)?;
-        project.pack().map_err(|error| {
-            eprintln!("{}: {error}", path.display());
-        })?
+        project
+            .pack()
+            .map_err(|error| {
+                eprintln!("{}: {error}", path.display());
+            })?
+            .bytes
     } else if path
         .extension()
         .is_some_and(|extension| extension == "m01c" || extension == "png")
@@ -518,19 +521,13 @@ fn load_headless_cartridge(
         let file_bytes = fs::read(path).map_err(|error| {
             eprintln!("{}: {error}", path.display());
         })?;
-        let bytes = if path.extension().is_some_and(|extension| extension == "png") {
+        if path.extension().is_some_and(|extension| extension == "png") {
             decode_cartridge_png(&file_bytes)
                 .map_err(|error| eprintln!("{}: {error}", path.display()))?
                 .cartridge
         } else {
             file_bytes
-        };
-        decode_cartridge(&bytes).map_err(|error| {
-            eprintln!("{}: {error}", path.display());
-        })?;
-        let source =
-            unpack_workcart(&bytes).map_err(|error| eprintln!("{}: {error}", path.display()))?;
-        pack_workcart(&source).map_err(|error| eprintln!("{}: {error}", path.display()))?
+        }
     } else {
         eprintln!(
             "{}: expected a project directory, .m01w, .m01c, or .m01c.png cartridge",
@@ -538,10 +535,10 @@ fn load_headless_cartridge(
         );
         return Err(());
     };
-    let (cartridge, program) = load_cartridge_program(&packed.bytes).map_err(|error| {
+    let (cartridge, program) = load_cartridge_program(&bytes).map_err(|error| {
         eprintln!("{}: {error}", path.display());
     })?;
-    Ok((packed.bytes, cartridge, program))
+    Ok((bytes, cartridge, program))
 }
 
 fn read_json_input(path: Option<&Path>) -> Result<serde_json::Value, ()> {

@@ -1,7 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
-    CompileMode, ProjectManifest, compile_project, decode_cartridge_png, pack_workcart,
-    parse_project_manifest, rewrite_workcart, unpack_workcart, workcart_project_view,
+    CompileMode, ProjectManifest, compile_project, decode_cartridge_png, load_cartridge_program,
+    pack_workcart, parse_project_manifest, rewrite_workcart, unpack_workcart,
+    workcart_project_view,
 };
 use serde_json::{Value, json};
 use std::{
@@ -56,6 +57,7 @@ impl NativeProject {
         } else {
             source
         };
+        load_cartridge_program(&bytes).map_err(|error| error.to_string())?;
         Self::from_source(
             unpack_workcart(&bytes).map_err(|error| error.to_string())?,
             None,

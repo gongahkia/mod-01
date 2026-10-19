@@ -19,6 +19,7 @@
     clippy::assigning_clones
 )]
 
+mod asset_meter;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
@@ -138,6 +139,7 @@ struct StudioApp {
     asset_dirty: bool,
     asset_workbench: Option<AssetWorkbench>,
     asset_sessions: asset_sessions::AssetSessions,
+    asset_meter: asset_meter::AssetMeter,
     color_hex: String,
     sprite_painting: bool,
     last_sprite_point: Option<(i32, i32)>,
@@ -226,6 +228,7 @@ impl StudioApp {
             asset_dirty: false,
             asset_workbench: None,
             asset_sessions: asset_sessions::AssetSessions::default(),
+            asset_meter: asset_meter::AssetMeter::default(),
             color_hex: "ED7B69FF".to_owned(),
             sprite_painting: false,
             last_sprite_point: None,
@@ -1914,9 +1917,10 @@ impl StudioApp {
         Ok(())
     }
 
-    // Call only after current buffers have been synchronized into project memory.
+    // Discard project-local UI state when replacing the current cartridge.
     fn reset_asset_editors(&mut self) {
         self.asset_sessions.clear();
+        self.asset_meter = asset_meter::AssetMeter::default();
         self.asset_workbench = None;
         self.sprite = None;
         self.asset_name.clear();
@@ -1956,6 +1960,56 @@ impl StudioApp {
             self.status =
                 "ASSET RETAINED IN PROJECT / SESSION EXCEEDS HISTORY CACHE LIMIT".to_owned();
         }
+    }
+
+    fn asset_meter_ui(&mut self, ui: &mut egui::Ui) {
+        let now = Instant::now();
+        if self.asset_meter.due(now)
+            && let Some(project) = &self.project
+        {
+            let overlay = if let Some(editor) = self.sprite.as_ref().filter(|editor| editor.dirty) {
+                let source = serde_json::to_vec(&json!({"revision":2,"kind":"sprite","width":editor.document.width,"height":editor.document.height,"frames":editor.document.indexed_frames(&sprite::palette())})).expect("indexed sprite is serializable");
+                Some(asset_meter::Overlay {
+                    path: editor.asset_path.clone(),
+                    source,
+                    declaration: Some((
+                        editor.name.clone(),
+                        if editor.document.frames.len() > 1 {
+                            modl_core::AssetKind::Animation
+                        } else {
+                            modl_core::AssetKind::Sprite
+                        },
+                    )),
+                })
+            } else if let Some(editor) = self.asset_workbench.as_ref().filter(|editor| editor.dirty)
+            {
+                Some(asset_meter::Overlay {
+                    path: self.asset_path.clone(),
+                    source: editor
+                        .source()
+                        .expect("asset JSON is serializable")
+                        .into_bytes(),
+                    declaration: None,
+                })
+            } else if self.asset_dirty {
+                Some(asset_meter::Overlay {
+                    path: self.asset_path.clone(),
+                    source: self.asset_text.as_bytes().to_vec(),
+                    declaration: None,
+                })
+            } else {
+                None
+            };
+            self.asset_meter.refresh(project, overlay, now);
+        }
+        if let Some(name) = self.asset_meter.ui(ui) {
+            if name == "DISPLAY" {
+                self.open_display();
+            } else if name != "BANK" {
+                self.open_asset(&name);
+            }
+        }
+        ui.separator();
     }
 
     fn import_asset_file(&mut self) {
@@ -3054,8 +3108,9 @@ impl eframe::App for StudioApp {
                             .show(ui, project, &mut self.modl_highlighter);
                     }
                 }
-                View::Sprites => self.sprite_ui(ui),
+                View::Sprites => { self.asset_meter_ui(ui); self.sprite_ui(ui); }
                 View::Assets => {
+                    self.asset_meter_ui(ui);
                     egui::ScrollArea::vertical().id_salt("asset-workspace").show(ui, |ui| {
                     if self.asset_name.is_empty() {
                         ui.heading("ASSETS");
@@ -3171,6 +3226,7 @@ impl eframe::App for StudioApp {
                                 .add(
                                     egui::TextEdit::multiline(&mut self.asset_text)
                                         .id_salt(("asset-json", self.asset_sessions.generation(), &self.asset_name, &self.asset_path))
+                                        .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace)
                                         .code_editor()
                                         .desired_rows(12),

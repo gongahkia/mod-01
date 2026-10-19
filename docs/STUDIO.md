@@ -69,6 +69,15 @@ format: opening/recovering/creating another cartridge clears it. Changed asset
 kind/path/bytes or layered source invalidate cached state. Raw JSON text widgets
 also use separate asset/project identities so their text undo cannot cross assets.
 
+ASSET BANK shows the shared Rust validator's live visual-byte/allocation-slot
+usage in Assets and Sprites, including unsaved JSON, structured edits and sprite
+frame changes. It refreshes at most four times per second; REFRESH requests the
+next check immediately. Reports never apply buffers or change project dirty state.
+Invalid banks are visibly marked, with bounded, scrollable file/JSON-field
+diagnostics; click an asset name to select its editor. Any diagnostic means the
+bank cannot load, even if its partial usage is low. CLI `mod01 assets PATH` exposes
+the same report, and `check`/pack/packed import enforce the same rules.
+
 Sound/music previews run the production synth in a separate, disposable native
 runtime: LIVE SONG starts the order list; PATTERN FROM CURSOR plays a non-looping
 copy of the selected pattern; AUDITION CELL/PREVIEW PATCH triggers the actual

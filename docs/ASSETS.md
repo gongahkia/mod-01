@@ -9,7 +9,8 @@ These are independent asset schemas, not compatibility profiles.
 without needing Node or a display. Its exit status is nonzero for an invalid
 bank. `mod01 check PATH` prints independent asset failures alongside source
 diagnostics, and packing/loading a packed cartridge enforces the same validation.
-The editable workcart remains openable for repair. Reports identify the asset,
+Schema/reference failures do not prevent opening structurally valid workcarts
+for repair. Reports identify the asset,
 file and JSON field: `M014060` schema, `M014061` reference, `M014062` capacity and
 `M014063` missing file. At most 128 diagnostics are retained; the JSON report's
 `diagnosticsTruncated` flag states whether more were suppressed.

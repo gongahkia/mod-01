@@ -218,3 +218,12 @@ choices remain outstanding.
   CLI regression checks prove reference diagnostics without PATH/Node and retain
   a separate valid-schema packed-capacity test. Native live-meter integration is
   the next slice, not claimed by these backend tests.
+
+- Studio's live asset meter now uses that exact report on a read-only overlay of
+  unsaved structured/raw JSON and sprite frame changes. Four-Hz refresh pacing,
+  exact animation-kind/cost changes, malformed JSON visibility and zero project
+  mutation have native tests. All 51 native tests and workspace Clippy pass.
+  Xvfb QA inspected the valid meter, an unsaved missing-sound reference with its
+  JSON field, and wrapping at 900×600 (`asset-meter-valid.png`,
+  `asset-meter-diagnostic.png`, `asset-meter-small.png`). Diagnostic expansion is
+  height-bounded so a large failure list cannot consume the entire editor.

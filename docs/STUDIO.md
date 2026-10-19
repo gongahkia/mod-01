@@ -38,6 +38,14 @@ drawing/fill tools, PNG import/export, palette picking and undo. Structured tool
 edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
 raw asset text remains visible.
 
+Asset JSON/source, sprite/atlas PNG and WAV save dialogs suggest namespaced
+`asset-NAME.EXT` filenames rather than raw device-like asset names or source
+basenames. The readable ASCII label is sanitized and capped at 64 characters;
+source extensions are kept when safe, otherwise `.json` is suggested. These are
+editable suggestions, not unique IDs: inspect the destination before replacing
+an existing file. Asset IDs, declared source paths and exported contents do not
+change.
+
 The music workbench shows all eight channels together, with MIDI note, patch and
 optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
 chromatic notes from the selected octave; comma/L/period/semicolon/slash extend

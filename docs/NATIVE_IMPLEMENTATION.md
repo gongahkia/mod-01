@@ -51,6 +51,15 @@ choices remain outstanding.
 
 ## Progress
 
+- Asset source, sprite/tile-atlas PNG and WAV export dialogs now share portable
+  `asset-NAME.EXT` suggestions, including reserved device-like IDs. Labels are
+  bounded/sanitized, source extensions are checked, and explicit user-selected
+  destinations remain authoritative. Asset identities, project paths and output
+  payloads are unchanged. Regressions cover device names, maximum/unsafe/Unicode
+  labels, all current export extensions and unsafe extension fallback. This is
+  filename-default hardening, not Windows execution evidence or a unique-ID map.
+  Both filename tests, all four Studio asset integrations and warning-free
+  all-feature workspace Clippy pass.
 - Native device callbacks now coalesce bounded first notices instead of repeatedly
   logging ALSA errors. Current CPAL classifications keep xrun/reroute/realtime
   warnings nonfatal; unusable streams are muted/cleared and released by the UI

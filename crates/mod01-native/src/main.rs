@@ -23,6 +23,7 @@ mod asset_meter;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
+mod export_names;
 mod gamepad_controller;
 mod keyboard_controller;
 mod launch;
@@ -1445,7 +1446,7 @@ impl StudioApp {
                         continue;
                     }
                     if let Some(path) = rfd::FileDialog::new()
-                        .set_file_name(format!("{}.wav", self.preview_name))
+                        .set_file_name(export_names::asset(&self.preview_name, "wav"))
                         .save_file()
                     {
                         self.status = match fs::write(path, bytes) {
@@ -2607,11 +2608,7 @@ impl StudioApp {
             },
             None => self.asset_text.clone(),
         };
-        let name = PathBuf::from(&self.asset_path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("asset.json")
-            .to_owned();
+        let name = export_names::source(&self.asset_name, &self.asset_path);
         if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
             self.status = match fs::write(&path, source) {
                 Ok(()) => format!("EXPORTED {}", path.display()),
@@ -2658,7 +2655,7 @@ impl StudioApp {
             }
         };
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.png", self.asset_name))
+            .set_file_name(export_names::asset(&self.asset_name, "png"))
             .add_filter("PNG atlas", &["png"])
             .save_file()
         {
@@ -3246,7 +3243,7 @@ impl StudioApp {
                             }
                             if ui.button("PNG OUT").clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
-                                    .set_file_name(format!("{}.png", editor.name))
+                                    .set_file_name(export_names::asset(&editor.name, "png"))
                                     .save_file()
                                 {
                                     self.status = match editor.export_png().and_then(|bytes| {

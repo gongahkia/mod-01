@@ -4,7 +4,7 @@ use crate::span::{Span, Spanned};
 
 pub type Name = Spanned<String>;
 
-/// Project-link visibility. Declarations default to public for alpha compatibility.
+/// Project-link visibility. Declarations are public unless explicitly marked private.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -92,6 +92,7 @@ pub enum CallbackKind {
     Update,
     Draw,
     Raster,
+    Menu,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -314,6 +315,7 @@ pub enum UnaryOperator {
     Negate,
     Positive,
     Not,
+    BitNot,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -332,4 +334,25 @@ pub enum BinaryOperator {
     Multiply,
     Divide,
     Remainder,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
+    ShiftRightUnsigned,
+}
+
+impl BinaryOperator {
+    #[must_use]
+    pub const fn bitwise_call(self) -> Option<&'static str> {
+        match self {
+            Self::BitAnd => Some("bit_and"),
+            Self::BitOr => Some("bit_or"),
+            Self::BitXor => Some("bit_xor"),
+            Self::ShiftLeft => Some("bit_shl"),
+            Self::ShiftRight => Some("bit_shr"),
+            Self::ShiftRightUnsigned => Some("bit_ushr"),
+            _ => None,
+        }
+    }
 }

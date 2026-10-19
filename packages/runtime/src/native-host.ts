@@ -2,13 +2,20 @@ import { createInterface } from 'node:readline';
 import { deserialize, serialize } from 'node:v8';
 
 import { createConsoleRuntime, type ConsoleRuntime } from './console-runtime';
-import { HARDWARE } from './hardware';
+import { DEFAULT_SEED, HARDWARE } from './hardware';
 import type { InputFrame } from './input';
 import type { CartridgeFactory } from './machine';
 import { RuntimeFault } from './errors';
 import { renderMusicWav, renderSoundWav } from './wav';
-import type { MusicAsset, SoundAsset } from './audio';
+import {
+  AudioAssetStore,
+  Synthesizer,
+  type AudioAsset,
+  type MusicAsset,
+  type SoundAsset,
+} from './audio';
 import { evaluateWatch } from './debugger';
+import { MEMORY } from './bus';
 
 type Command =
   | {
@@ -16,7 +23,7 @@ type Command =
       javascript: string;
       manifest: {
         id: string;
-        hardwareRevision?: 1 | 2;
+        hardwareRevision?: 2;
         updateRate: 30 | 60;
         display: string | null;
         assets: Record<string, { kind: string; path: string }>;
@@ -25,14 +32,20 @@ type Command =
       rom: string;
       save: string;
       debug?: boolean;
+      seed?: number;
       symbolNames?: Record<string, string>;
     }
   | { type: 'frame'; input: InputFrame }
+  | { type: 'scratch'; input: InputFrame }
   | { type: 'step'; input: InputFrame; watches?: string[]; conditions?: string[] }
   | { type: 'snapshot' }
   | { type: 'restore'; snapshot: string }
   | { type: 'memory'; address: number; length: number }
   | { type: 'memory-edit'; address: number; bytes: string }
+  | { type: 'audio-preview-load'; assets: AudioAsset[] }
+  | { type: 'audio-preview-play'; music: string; orderIndex: number; row: number }
+  | { type: 'audio-preview-audition'; sound: string; note: number; volume?: number }
+  | { type: 'audio-preview-frame' }
   | {
       type: 'render-wav';
       kind: 'sound' | 'music';
@@ -42,14 +55,19 @@ type Command =
   | { type: 'stop' };
 
 let runtime: ConsoleRuntime | undefined;
+let audioPreview: Synthesizer | undefined;
+let scratchFresh = false;
 let cartridgeId: string | undefined;
 let symbolNames: Readonly<Record<string, string>> = {};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
 function bytes(encoded: string): Uint8Array {
-  if (typeof encoded !== 'string' || encoded.length > 4 * 1024 * 1024)
+  if (typeof encoded !== 'string' || encoded.length > 24 * 1024 * 1024)
     throw new TypeError('invalid native host byte payload');
-  return Uint8Array.from(Buffer.from(encoded, 'base64'));
+  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
+  if (decoded.length > 16 * 1024 * 1024)
+    throw new RangeError('native host byte payload exceeds 16 MiB');
+  return decoded;
 }
 
 function encoded(value: Uint8Array | Float32Array): string {
@@ -92,6 +110,47 @@ function evaluateExpressions(
 
 async function handle(command: Command): Promise<unknown> {
   switch (command.type) {
+    case 'audio-preview-load': {
+      runtime = undefined;
+      audioPreview = undefined;
+      scratchFresh = false;
+      cartridgeId = undefined;
+      symbolNames = {};
+      if (
+        !Array.isArray(command.assets) ||
+        command.assets.length > 4096 ||
+        Buffer.byteLength(JSON.stringify(command.assets), 'utf8') > 16 * 1024 * 1024
+      )
+        throw new RangeError('audio preview requires at most 4096 assets and 16 MiB');
+      audioPreview = new Synthesizer(new AudioAssetStore(command.assets));
+      return { type: 'audio-preview-loaded' };
+    }
+    case 'audio-preview-play':
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      audioPreview.playMusic(command.music, command.orderIndex, command.row);
+      return { type: 'audio-preview-playing', position: audioPreview.inspectTracker() };
+    case 'audio-preview-audition':
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      audioPreview.audition(command.sound, command.note, command.volume);
+      return { type: 'audio-preview-auditioned' };
+    case 'audio-preview-frame': {
+      if (audioPreview === undefined) throw new Error('no audio preview is loaded');
+      const frame = audioPreview.snapshot().frame;
+      const position = audioPreview.inspectTracker();
+      const result = audioPreview.finishFrame();
+      return {
+        type: 'audio-preview-frame',
+        frame,
+        position,
+        nextPosition: result.tracker,
+        left: encoded(result.left),
+        right: encoded(result.right),
+        activeVoices: result.activeVoices,
+        voices: audioPreview.inspectVoices(),
+        peakLeft: result.left.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+        peakRight: result.right.reduce((peak, sample) => Math.max(peak, Math.abs(sample)), 0),
+      };
+    }
     case 'render-wav': {
       const wav =
         command.kind === 'sound'
@@ -105,6 +164,8 @@ async function handle(command: Command): Promise<unknown> {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2 * 1024 * 1024)
         throw new TypeError('invalid compiled cartridge');
       runtime = undefined;
+      audioPreview = undefined;
+      scratchFresh = false;
       const module: unknown = await import(
         `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
       );
@@ -124,10 +185,10 @@ async function handle(command: Command): Promise<unknown> {
         }
       >;
       runtime = createConsoleRuntime(factory as CartridgeFactory, {
-        seed: 0,
+        seed: command.seed === undefined ? DEFAULT_SEED : command.seed,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: command.manifest.updateRate,
-        hardwareRevision: command.manifest.hardwareRevision ?? 1,
+        hardwareRevision: command.manifest.hardwareRevision ?? 2,
         debug: command.debug === true,
         assets: { declarations: manifestAssets, files, displayPath: command.manifest.display },
         rom: bytes(command.rom),
@@ -135,10 +196,12 @@ async function handle(command: Command): Promise<unknown> {
       });
       cartridgeId = command.manifest.id;
       symbolNames = command.symbolNames ?? {};
-      return { type: 'loaded', cartridgeId };
+      scratchFresh = command.debug === true;
+      return { type: 'loaded', cartridgeId, menuItems: runtime.inspectMenu() };
     }
     case 'frame': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.runFrame(command.input);
       return {
         type: 'frame',
@@ -149,10 +212,50 @@ async function handle(command: Command): Promise<unknown> {
         right: encoded(result.output.audio.right),
         saveCommit: result.saveCommit === undefined ? null : encoded(result.saveCommit),
         debug: result.debug ?? null,
+        menuItems: runtime.inspectMenu(),
+      };
+    }
+    case 'scratch': {
+      if (runtime === undefined) throw new Error('no scratchpad program is loaded');
+      if (!scratchFresh) throw new TypeError('scratchpad requires a freshly loaded debug program');
+      scratchFresh = false;
+      let locals: Record<string, unknown> = {};
+      let state: Record<string, unknown> = {};
+      let booted = false;
+      for (let step = 0; step < 65_536; step++) {
+        const result = runtime.stepDebug(command.input);
+        if ('event' in result) {
+          locals = namedValues(result.event.locals);
+          state = namedValues(result.inspection.state);
+        } else if ('booted' in result) {
+          booted = true;
+          break;
+        } else throw new TypeError('scratchpad must start from a fresh debug program');
+      }
+      if (!booted)
+        throw new RuntimeFault('M019105', 'scratchpad exceeds 65,536 statement boundaries', {
+          start: 0,
+          end: 0,
+        });
+      const work = runtime.inspectMemory(MEMORY.system + 0x20, 8).bytes;
+      const bootWorkUnits = Number(
+        new DataView(work.buffer, work.byteOffset, 8).getBigUint64(0, true),
+      );
+      const frame = runtime.runFrame(command.input);
+      return {
+        type: 'scratch',
+        locals,
+        state: frame.debug === undefined ? state : namedValues(frame.debug.inspection.state),
+        bootWorkUnits,
+        workUnits: frame.workUnits,
+        pixels: encoded(frame.output.indexedPixels),
+        left: encoded(frame.output.audio.left),
+        right: encoded(frame.output.audio.right),
       };
     }
     case 'step': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.stepDebug(command.input);
       if ('frame' in result) {
         return {
@@ -165,13 +268,15 @@ async function handle(command: Command): Promise<unknown> {
             right: encoded(result.frame.output.audio.right),
             saveCommit:
               result.frame.saveCommit === undefined ? null : encoded(result.frame.saveCommit),
+            menuItems: runtime.inspectMenu(),
           },
         };
       }
-      if ('booted' in result) return { type: 'step', ...result };
+      if ('booted' in result) return { type: 'step', ...result, menuItems: runtime.inspectMenu() };
       return {
         type: 'step',
         ...result,
+        menuItems: runtime.inspectMenu(),
         watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
         conditions: evaluateExpressions(
           command.conditions,
@@ -183,11 +288,28 @@ async function handle(command: Command): Promise<unknown> {
     }
     case 'snapshot':
       if (runtime === undefined) throw new Error('no cartridge is loaded');
-      return { type: 'snapshot', snapshot: serialize(runtime.snapshot()).toString('base64') };
+      {
+        const snapshot = runtime.snapshot();
+        return {
+          type: 'snapshot',
+          snapshot: serialize(snapshot).toString('base64'),
+          frame: snapshot.machine.frame,
+          booted: snapshot.machine.execution.booted,
+        };
+      }
     case 'restore':
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
-      return { type: 'restored' };
+      {
+        const snapshot = runtime.snapshot();
+        return {
+          type: 'restored',
+          frame: snapshot.machine.frame,
+          booted: snapshot.machine.execution.booted,
+          menuItems: runtime.inspectMenu(),
+        };
+      }
     case 'memory': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
       const result = runtime.inspectMemory(command.address, command.length);
@@ -204,6 +326,8 @@ async function handle(command: Command): Promise<unknown> {
       return { type: 'memory-edited' };
     case 'stop':
       runtime = undefined;
+      audioPreview = undefined;
+      scratchFresh = false;
       cartridgeId = undefined;
       return { type: 'stopped' };
   }
@@ -220,6 +344,7 @@ input.on('line', (line) => {
         type: 'error',
         code: error instanceof RuntimeFault ? error.code : 'M019100',
         message: error instanceof Error ? error.message : 'native host failure',
+        ...(error instanceof RuntimeFault ? { sourceSpan: error.sourceSpan } : {}),
       });
     }
   });

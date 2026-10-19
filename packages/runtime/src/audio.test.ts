@@ -44,6 +44,106 @@ function handle(name: string, kind: 'Sound' | 'Music'): object {
 }
 
 describe('MOD-01 synthesizer and tracker', () => {
+  it('seeks through the same validated order/row state as the MMIO sequencer', () => {
+    const music: MusicAsset = {
+      kind: 'music',
+      name: 'song',
+      framesPerRow: 2,
+      loop: false,
+      order: ['a', 'b'],
+      patterns: {
+        a: { rows: [[null, null, null, null, null, null, null, null]] },
+        b: { rows: [[{ note: 67, sound: 'tone' }, null, null, null, null, null, null, null]] },
+      },
+    };
+    const store = new AudioAssetStore([sound('tone', 'noise'), music]);
+    const synth = new Synthesizer(store),
+      raw = new Synthesizer(store);
+    synth.playMusic('song', 1, 0);
+    const bus = new MemoryBus(raw.memoryRegions(), () => {});
+    const bytes = new Uint8Array(16),
+      view = new DataView(bytes.buffer);
+    view.setUint32(0, store.id('song') + 1, true);
+    view.setUint32(4, 1, true);
+    bus.edit(MEMORY.audioTracker, bytes);
+    expect(synth.inspectTracker()).toEqual(raw.inspectTracker());
+    expect(synth.finishFrame()).toEqual(raw.finishFrame());
+    const before = synth.snapshot();
+    for (const [order, row] of [
+      [-1, 0],
+      [2, 0],
+      [0, 1],
+      [0.5, 0],
+      [0, Infinity],
+    ]) {
+      expect(() => {
+        synth.playMusic('song', order ?? 0, row ?? 0);
+      }).toThrow();
+      expect(synth.snapshot()).toEqual(before);
+    }
+    expect(() => {
+      synth.playMusic('absent');
+    }).toThrow(/Music/);
+    expect(synth.snapshot()).toEqual(before);
+    synth.playMusic('song', 0, 0);
+    expect(synth.snapshot().voices).toEqual(before.voices);
+    expect(synth.snapshot().frame).toBe(before.frame);
+  });
+
+  it('auditions each oscillator through exactly the tracker note/volume/PCM path', () => {
+    for (const waveform of ['pulse', 'triangle', 'saw', 'noise', 'wavetable'] as const) {
+      const patch = sound('tone', waveform);
+      const audition = new Synthesizer(new AudioAssetStore([patch]));
+      audition.audition('tone', 64, 0.4);
+      const music: MusicAsset = {
+        kind: 'music',
+        name: 'test',
+        framesPerRow: 1,
+        loop: false,
+        order: ['p'],
+        patterns: {
+          p: {
+            rows: [
+              [{ sound: 'tone', note: 64, volume: 0.4 }, null, null, null, null, null, null, null],
+            ],
+          },
+        },
+      };
+      const tracker = new Synthesizer(new AudioAssetStore([patch, music]));
+      const expected = tracker.executeFrame([command('music', [handle('test', 'Music')])]);
+      expect(audition.finishFrame()).toEqual(expected);
+      expect(audition.inspectVoices()).toEqual(tracker.inspectVoices());
+    }
+  });
+
+  it('audition validates before mutation and shares all eight voices and oldest-voice stealing', () => {
+    const synth = new Synthesizer(new AudioAssetStore([sound('tone')]));
+    const before = synth.snapshot();
+    for (const [note, volume] of [
+      [-1, 1],
+      [128, 1],
+      [60.5, 1],
+      [NaN, 1],
+      [60, -1],
+      [60, 2],
+      [60, Infinity],
+    ]) {
+      expect(() => {
+        synth.audition('tone', note ?? 0, volume ?? 1);
+      }).toThrow();
+      expect(synth.snapshot()).toEqual(before);
+    }
+    expect(() => {
+      synth.audition('absent', 60);
+    }).toThrow(/Sound/);
+    expect(synth.snapshot()).toEqual(before);
+    for (let note = 60; note <= 68; note++) synth.audition('tone', note);
+    expect(synth.inspectVoices().map((voice) => voice.note)).toEqual([
+      68, 61, 62, 63, 64, 65, 66, 67,
+    ]);
+    expect(synth.finishFrame().activeVoices).toBe(8);
+  });
+
   it('faults at exact audio counters before mutating voices or advancing samples', () => {
     const synth = new Synthesizer(new AudioAssetStore([sound('tone')]));
     const initial = synth.snapshot();

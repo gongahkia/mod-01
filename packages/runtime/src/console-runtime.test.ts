@@ -3,17 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createConsoleRuntime } from './console-runtime';
 import { MEMORY } from './bus';
 import { emptyInputFrame } from './input';
-import type { CartridgeFactory, MachineSnapshot } from './machine';
+import type { CartridgeFactory } from './machine';
 import { SaveMemory, decodeSaveValues } from './save';
-
-const legacyMachine = (snapshot: MachineSnapshot) => ({
-  revision: 1,
-  frame: snapshot.frame,
-  rngState: snapshot.rngState,
-  cartridge: snapshot.cartridge,
-  input: snapshot.input,
-  previousInput: snapshot.previousInput,
-});
 
 const span = { start: 10, end: 20 };
 const configuration = { seed: 99, workUnitsPerFrame: 50_000, updateRate: 60 as const };
@@ -36,9 +27,31 @@ const factory: CartridgeFactory = (api) => ({
 });
 
 describe('production console dispatcher', () => {
+  it('attributes invalid graphics arguments to their MODL span without mutating their device register', () => {
+    for (const debug of [false, true]) {
+      const runtime = createConsoleRuntime(
+        (api) => ({
+          ...factory(api),
+          update() {},
+          draw() {
+            api.call('palt', [255, 'not a Bool'], span);
+          },
+        }),
+        { ...configuration, debug },
+      );
+      expect(() => {
+        runtime.runFrame(emptyInputFrame());
+      }).toThrow(expect.objectContaining({ code: 'M019009', sourceSpan: span }));
+      expect(runtime.snapshot().machine.execution.fault).toEqual({ code: 9009, sourceSpan: span });
+      const mask = runtime
+        .snapshot()
+        .memory.regions.find((region) => region.address === MEMORY.transparency)?.bytes;
+      expect(mask).toEqual(Uint8Array.from({ length: 32 }, (_, index) => (index === 0 ? 1 : 0)));
+    }
+  });
   it('exposes cloned ROM/status bytes and permits debugger-only transactional RAM edits', () => {
     let observed = -1;
-    const rom = Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 1, 3, 0, 0, 0, 77);
+    const rom = Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 2, 3, 0, 0, 0, 77);
     const runtime = createConsoleRuntime(
       (api) => ({
         ...factory(api),
@@ -50,8 +63,8 @@ describe('production console dispatcher', () => {
     );
     rom[12] = 0;
     const status = runtime.inspectMemory(MEMORY.cartridgeInfo, 64);
-    expect(new DataView(status.bytes.buffer).getUint16(0, true)).toBe(1);
-    expect(new DataView(status.bytes.buffer).getUint16(2, true)).toBe(1);
+    expect(new DataView(status.bytes.buffer).getUint16(0, true)).toBe(2);
+    expect(new DataView(status.bytes.buffer).getUint16(2, true)).toBe(2);
     expect(new DataView(status.bytes.buffer).getUint32(4, true)).toBe(13);
     expect(new DataView(status.bytes.buffer).getUint32(20, true)).toBe(3);
     expect(status.regions).toContainEqual({
@@ -229,7 +242,7 @@ describe('production console dispatcher', () => {
     const saved = runtime.snapshot();
     expect(() => {
       runtime.restore(invalidPixels);
-    }).toThrow(/invalid worker snapshot/);
+    }).toThrow(/invalid console snapshot/);
     deepStrictEqual(runtime.snapshot(), saved);
     expect(() => {
       runtime.restore({
@@ -243,31 +256,23 @@ describe('production console dispatcher', () => {
     deepStrictEqual(runtime.snapshot(), saved);
   });
 
-  it('migrates revision-2 frame snapshots with zero-initialized work RAM', () => {
-    const runtime = createConsoleRuntime(
-      (api) => ({
-        ...factory(api),
-        update() {
-          api.call('mem_write', [0, 7], span);
-        },
-      }),
-      configuration,
-    );
-    const initial = runtime.snapshot();
+  it('rejects obsolete runtime and machine snapshots atomically', () => {
+    const runtime = createConsoleRuntime(factory, configuration);
     runtime.runFrame(emptyInputFrame());
-    expect(runtime.snapshot().memory.regions[0]?.bytes[0]).toBe(7);
-    runtime.restore({
-      revision: 2,
-      machine: legacyMachine(initial.machine),
-      save: decodeSaveValues(initial.save.bytes),
-      graphics: initial.graphics,
-      audio: initial.audio,
-      pendingSaveWrites: initial.pendingSaveWrites,
-    });
-    deepStrictEqual(runtime.snapshot(), initial);
+    const current = runtime.snapshot();
+    for (const revision of [0, 1, 2, 3, 4, 5, 6, 8]) {
+      expect(() => {
+        runtime.restore({ ...current, revision });
+      }).toThrow(/snapshot/);
+      deepStrictEqual(runtime.snapshot(), current);
+    }
+    expect(() => {
+      runtime.restore({ ...current, machine: { ...current.machine, revision: 1 } });
+    }).toThrow(/snapshot/);
+    deepStrictEqual(runtime.snapshot(), current);
   });
 
-  it('migrates revision-3 bus snapshots from source visuals while retaining RAM and rejecting malformed images', () => {
+  it('restores all current RAM and visual state, and rolls back malformed device images', () => {
     const runtime = createConsoleRuntime(
       (api) => ({
         ...factory(api),
@@ -282,70 +287,28 @@ describe('production console dispatcher', () => {
           declarations: { dot: { kind: 'sprite', path: 'dot.m01g' } },
           files: {
             'dot.m01g': new TextEncoder().encode(
-              JSON.stringify({ revision: 1, kind: 'sprite', width: 1, height: 1, frames: [[7]] }),
+              JSON.stringify({ revision: 2, kind: 'sprite', width: 1, height: 1, frames: [[7]] }),
             ),
           },
         },
       },
     );
+    const before = runtime.snapshot();
     runtime.runFrame(emptyInputFrame());
-    const current = runtime.snapshot();
-    expect(current.revision).toBe(6);
-    const legacy = {
-      ...current,
-      revision: 3,
-      save: decodeSaveValues(current.save.bytes),
-      machine: legacyMachine(current.machine),
-      memory: {
-        ...current.memory,
-        regions: current.memory.regions.filter((region) => region.address !== MEMORY.visual),
-      },
-    };
-    runtime.restore(legacy);
-    const migrated = runtime.snapshot();
-    expect(
-      migrated.memory.regions.find((region) => region.address === MEMORY.visual)?.bytes[0],
-    ).toBe(7);
-    expect(migrated.memory.regions[0]?.bytes[0]).toBe(7);
-    runtime.restore(current);
-    deepStrictEqual(runtime.snapshot(), current);
-    const malformed = structuredClone(current);
+    const after = runtime.snapshot();
+    expect(after.memory.regions[0]?.bytes[0]).toBe(7);
+    runtime.restore(before);
+    deepStrictEqual(runtime.snapshot(), before);
+    runtime.restore(after);
+    deepStrictEqual(runtime.snapshot(), after);
+    const malformed = structuredClone(after);
     const visual = malformed.memory.regions.find((region) => region.address === MEMORY.visual);
     if (visual === undefined) throw new Error('missing visual region');
     Object.defineProperty(visual, 'bytes', { value: new Uint8Array(3) });
     expect(() => {
       runtime.restore(malformed);
     }).toThrow(/snapshot/);
-    deepStrictEqual(runtime.snapshot(), current);
-    expect(() => {
-      runtime.restore({ ...current, revision: 3, machine: legacyMachine(current.machine) });
-    }).toThrow(/snapshot/);
-    deepStrictEqual(runtime.snapshot(), current);
-  });
-
-  it('migrates revision-4 device images without inventing prior work or fault state', () => {
-    const runtime = createConsoleRuntime(factory, configuration);
-    runtime.runFrame(emptyInputFrame());
-    const current = runtime.snapshot();
-    runtime.runFrame(emptyInputFrame());
-    runtime.restore({
-      ...current,
-      revision: 4,
-      machine: legacyMachine(current.machine),
-      save: decodeSaveValues(current.save.bytes),
-    });
-    deepStrictEqual(runtime.snapshot(), {
-      ...current,
-      save: { ...current.save, commits: 0 },
-      machine: {
-        ...current.machine,
-        budget: { ...current.machine.budget, used: 0, attribution: [] },
-      },
-    });
-    for (const revision of [1, 2, 3, 4, 5, 7])
-      expect(() => {
-        runtime.restore({ ...current, revision });
-      }).toThrow(/snapshot/);
+    deepStrictEqual(runtime.snapshot(), after);
   });
 
   it('latches system faults before a retry can reset devices and restores both healthy and faulted checkpoints', () => {
@@ -473,7 +436,7 @@ describe('production console dispatcher', () => {
       ['mem_read', [-1], 'M019020'],
       ['mem_read16', [MEMORY.size - 1], 'M019020'],
       ['mem_write', [MEMORY.palette, 0], 'M019021'],
-      ['mem_write', [MEMORY.transparency, 1], 'M019021'],
+      ['mem_write', [MEMORY.palette + 1, 1], 'M019021'],
       ['mem_write', [MEMORY.display, 0], 'M019021'],
       ['mem_write', [MEMORY.rasterLive, 0], 'M019021'],
       ['mem_write', [MEMORY.back, 256], 'M019022'],

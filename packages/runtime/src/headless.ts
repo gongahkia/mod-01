@@ -76,7 +76,7 @@ export interface HeadlessResult {
   };
 }
 
-/** Runs validated compiler output through the same production core used by the browser Worker. */
+/** Runs validated compiler output through the same production core used by native Studio/games. */
 export async function runHeadless(value: unknown): Promise<HeadlessResult> {
   if (!isHeadlessRequest(value)) throw new TypeError('invalid MOD-01 headless request');
   const request = value;
@@ -188,7 +188,7 @@ function isHeadlessRequest(value: unknown): value is HeadlessRequest {
     value.javascript.length === 0 ||
     value.javascript.length > 2 * 1024 * 1024 ||
     !isManifest(value.manifest) ||
-    !isByteRecord(value.entries, 4096, 2 * 1024 * 1024) ||
+    !isByteRecord(value.entries, 4096, 16 * 1024 * 1024) ||
     !isByteArray(value.rom, HARDWARE.cartridgeCapacityBytes) ||
     typeof value.seed !== 'number' ||
     !Number.isSafeInteger(value.seed) ||

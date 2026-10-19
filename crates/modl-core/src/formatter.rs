@@ -92,31 +92,39 @@ fn format_tokens(tokens: &[Token]) -> String {
 }
 
 fn is_unary_prefix(current: &TokenKind, previous: Option<&TokenKind>) -> bool {
-    matches!(current, TokenKind::Plus | TokenKind::Minus)
-        && previous.is_none_or(|previous| {
-            matches!(
-                previous,
-                TokenKind::LeftParen
-                    | TokenKind::LeftBracket
-                    | TokenKind::Comma
-                    | TokenKind::Colon
-                    | TokenKind::Equal
-                    | TokenKind::EqualEqual
-                    | TokenKind::BangEqual
-                    | TokenKind::Less
-                    | TokenKind::LessEqual
-                    | TokenKind::Greater
-                    | TokenKind::GreaterEqual
-                    | TokenKind::Plus
-                    | TokenKind::Minus
-                    | TokenKind::Star
-                    | TokenKind::Slash
-                    | TokenKind::Percent
-                    | TokenKind::And
-                    | TokenKind::Or
-                    | TokenKind::Return
-            )
-        })
+    matches!(
+        current,
+        TokenKind::Plus | TokenKind::Minus | TokenKind::Tilde
+    ) && previous.is_none_or(|previous| {
+        matches!(
+            previous,
+            TokenKind::LeftParen
+                | TokenKind::LeftBracket
+                | TokenKind::Comma
+                | TokenKind::Colon
+                | TokenKind::Equal
+                | TokenKind::EqualEqual
+                | TokenKind::BangEqual
+                | TokenKind::Less
+                | TokenKind::LessEqual
+                | TokenKind::Greater
+                | TokenKind::GreaterEqual
+                | TokenKind::Plus
+                | TokenKind::Minus
+                | TokenKind::Star
+                | TokenKind::Slash
+                | TokenKind::Percent
+                | TokenKind::Ampersand
+                | TokenKind::Pipe
+                | TokenKind::Caret
+                | TokenKind::ShiftLeft
+                | TokenKind::ShiftRight
+                | TokenKind::ShiftRightUnsigned
+                | TokenKind::And
+                | TokenKind::Or
+                | TokenKind::Return
+        )
+    })
 }
 
 fn begin_token(output: &mut String, indentation: usize, line_start: &mut bool) {
@@ -218,6 +226,13 @@ fn render(kind: &TokenKind) -> String {
         TokenKind::Star => "*".to_owned(),
         TokenKind::Slash => "/".to_owned(),
         TokenKind::Percent => "%".to_owned(),
+        TokenKind::Ampersand => "&".to_owned(),
+        TokenKind::Pipe => "|".to_owned(),
+        TokenKind::Caret => "^".to_owned(),
+        TokenKind::Tilde => "~".to_owned(),
+        TokenKind::ShiftLeft => "<<".to_owned(),
+        TokenKind::ShiftRight => ">>".to_owned(),
+        TokenKind::ShiftRightUnsigned => ">>>".to_owned(),
         TokenKind::Equal => "=".to_owned(),
         TokenKind::EqualEqual => "==".to_owned(),
         TokenKind::BangEqual => "!=".to_owned(),
@@ -261,6 +276,22 @@ fn render_text(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bitwise_tokens_preserve_longest_match_and_unary_spacing() {
+        let source = crate::SourceFile::new(
+            crate::FileId(0),
+            "bits.modl",
+            "on start:\n  let value=~1&-2|3^4<<2>>1>>>0\n",
+        );
+        let formatted = super::format_source(&source).expect("bit expression formats");
+        assert!(
+            formatted.contains("~1 & -2 | 3 ^ 4 << 2 >> 1 >>> 0"),
+            "{formatted}"
+        );
+        let again = crate::SourceFile::new(crate::FileId(0), "bits.modl", &formatted);
+        assert_eq!(super::format_source(&again).expect("idempotent"), formatted);
+    }
+
     use crate::{FileId, SourceFile, format_source};
 
     #[test]

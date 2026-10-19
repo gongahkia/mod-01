@@ -1,7 +1,7 @@
-// public MODL memory conformance; candidate Revision 1 addresses are decimal.
+// Public MODL memory conformance; current machine addresses are decimal.
 state frames: Int = 0
 const CART_INFO: Int = 329216
-const CART_ROM: Int = 393216
+const CART_ROM: Int = 1048576
 
 on start:
   assert visual_id("absent") == -1, "unknown visual ID"
@@ -17,13 +17,13 @@ on start:
   assert mem_read(4) == 7, "overlap last"
   mem_fill(1, 0, 4)
   assert mem_read16(1) == 0, "fill"
-  assert mem_read(327808) == 23, "fixed palette red"
-  assert mem_read16(CART_INFO) == 1, "hardware revision"
-  assert mem_read16(CART_INFO + 2) == 1, "cartridge format revision"
+  assert mem_read(2097152) == 23, "fixed palette red"
+  assert mem_read16(CART_INFO) == 2, "hardware revision"
+  assert mem_read16(CART_INFO + 2) == 2, "cartridge format revision"
   assert mem_read16(CART_INFO + 8) == 0, "cartridge capacity low word"
-  assert mem_read16(CART_INFO + 10) == 4, "cartridge capacity high word"
+  assert mem_read16(CART_INFO + 10) == 16, "cartridge capacity high word"
   assert mem_read16(CART_INFO + 12) == 0, "ROM base low word"
-  assert mem_read16(CART_INFO + 14) == 6, "ROM base high word"
+  assert mem_read16(CART_INFO + 14) == 16, "ROM base high word"
   assert mem_read(CART_INFO + 16) == 3, "present and canonical flags"
   assert mem_read(CART_ROM) == 77, "ROM magic M"
   assert mem_read(CART_ROM + 1) == 79, "ROM magic O"

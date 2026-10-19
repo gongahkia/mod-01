@@ -1,8 +1,13 @@
 use std::{
+    cell::Cell,
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdout, Command, Stdio},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::Duration,
 };
@@ -25,43 +30,97 @@ impl HostProcess {
 }
 
 pub struct RuntimeBridge {
-    sender: Sender<Value>,
-    receiver: Receiver<Value>,
+    sender: Sender<(u64, Value)>,
+    receiver: Receiver<(Option<u64>, Value)>,
+    generation: Arc<AtomicU64>,
+    pending: Cell<usize>,
 }
 
 impl RuntimeBridge {
     pub fn new(host_path: PathBuf) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
-        thread::spawn(move || worker(host_path, command_rx, event_tx));
+        let generation = Arc::new(AtomicU64::new(0));
+        let active = Arc::clone(&generation);
+        thread::spawn(move || worker(host_path, command_rx, event_tx, active));
         Self {
             sender: command_tx,
             receiver: event_rx,
+            generation,
+            pending: Cell::new(0),
         }
     }
 
     pub fn send(&self, command: Value) -> Result<(), String> {
-        self.sender.send(command).map_err(|error| error.to_string())
+        let replaces_session = matches!(
+            command["type"].as_str(),
+            Some("load" | "render-wav" | "audio-preview-load" | "stop")
+        );
+        let generation = if replaces_session {
+            self.generation
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1)
+        } else {
+            self.generation.load(Ordering::Relaxed)
+        };
+        self.sender
+            .send((generation, command))
+            .map_err(|error| error.to_string())?;
+        self.pending.set(if replaces_session {
+            1
+        } else {
+            self.pending.get().saturating_add(1)
+        });
+        Ok(())
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending.get() != 0
     }
 
     pub fn poll(&self) -> Option<Value> {
-        self.receiver.try_recv().ok()
+        while let Ok((generation, event)) = self.receiver.try_recv() {
+            if generation
+                .is_none_or(|generation| generation == self.generation.load(Ordering::Relaxed))
+            {
+                self.pending.set(if event["type"] == "error" {
+                    0
+                } else {
+                    self.pending.get().saturating_sub(1)
+                });
+                return Some(event);
+            }
+        }
+        None
     }
 }
 
-fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) {
+fn worker(
+    host_path: PathBuf,
+    commands: Receiver<(u64, Value)>,
+    events: Sender<(Option<u64>, Value)>,
+    active: Arc<AtomicU64>,
+) {
     let host_path = match host_path.canonicalize() {
         Ok(path) => path,
         Err(error) => {
-            let _ = events.send(error_event(format!(
-                "native runtime bundle is missing: {error}"
-            )));
+            let _ = events.send((
+                None,
+                error_event(format!("native runtime bundle is missing: {error}")),
+            ));
             return;
         }
     };
     let mut child: Option<HostProcess> = None;
-    for command in commands {
-        if command["type"] == "load" || command["type"] == "render-wav" {
+    for (generation, command) in commands {
+        if generation != active.load(Ordering::Relaxed) {
+            continue;
+        }
+        let publish = |event| events.send((Some(generation), event));
+        if command["type"] == "load"
+            || command["type"] == "render-wav"
+            || command["type"] == "audio-preview-load"
+        {
             if let Some(old) = child.take() {
                 old.stop();
             }
@@ -89,8 +148,7 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
             match process.spawn() {
                 Ok(mut started) => {
                     let Some(stdout) = started.stdout.take() else {
-                        let _ =
-                            events.send(error_event("runtime output pipe is missing".to_owned()));
+                        let _ = publish(error_event("runtime output pipe is missing".to_owned()));
                         let _ = started.kill();
                         let _ = started.wait();
                         continue;
@@ -103,13 +161,13 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
                     });
                 }
                 Err(error) => {
-                    let _ = events.send(error_event(format!("cannot start Node runtime: {error}")));
+                    let _ = publish(error_event(format!("cannot start Node runtime: {error}")));
                     continue;
                 }
             }
         }
         let Some(running) = child.as_mut() else {
-            let _ = events.send(if command["type"] == "stop" {
+            let _ = publish(if command["type"] == "stop" {
                 serde_json::json!({"type":"stopped"})
             } else {
                 error_event("no cartridge runtime is active".to_owned())
@@ -119,7 +177,7 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
         match exchange(running, &command) {
             Ok(reply) => {
                 let faulted = reply["type"] == "error";
-                let _ = events.send(reply);
+                let _ = publish(reply);
                 if faulted {
                     if let Some(failed) = child.take() {
                         failed.stop();
@@ -127,7 +185,7 @@ fn worker(host_path: PathBuf, commands: Receiver<Value>, events: Sender<Value>) 
                 }
             }
             Err(error) => {
-                let _ = events.send(error_event(error));
+                let _ = publish(error_event(error));
                 if let Some(failed) = child.take() {
                     failed.stop();
                 }
@@ -183,4 +241,204 @@ fn read_replies(stdout: ChildStdout, replies: Sender<Result<Value, String>>) {
 
 fn error_event(message: String) -> Value {
     serde_json::json!({ "type": "error", "message": message })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde_json::json;
+    use std::time::Instant;
+
+    #[test]
+    fn queued_frame_save_audio_and_stop_replies_cannot_cross_runtime_sessions() {
+        let (commands, received) = mpsc::channel();
+        let (events, replies) = mpsc::channel();
+        let bridge = RuntimeBridge {
+            sender: commands,
+            receiver: replies,
+            generation: Arc::new(AtomicU64::new(0)),
+            pending: Cell::new(0),
+        };
+        events
+            .send((
+                Some(0),
+                json!({"type":"frame","saveCommit":"old","left":"old","right":"old"}),
+            ))
+            .unwrap();
+        bridge.send(json!({"type":"load"})).unwrap();
+        assert_eq!(received.recv().unwrap(), (1, json!({"type":"load"})));
+        events.send((Some(0), json!({"type":"stopped"}))).unwrap();
+        events
+            .send((Some(1), json!({"type":"loaded","cartridgeId":"new"})))
+            .unwrap();
+        assert_eq!(
+            bridge.poll().unwrap(),
+            json!({"type":"loaded","cartridgeId":"new"})
+        );
+        assert!(bridge.poll().is_none());
+        bridge.send(json!({"type":"memory"})).unwrap();
+        bridge.send(json!({"type":"snapshot"})).unwrap();
+        assert_eq!(received.recv().unwrap().0, 1);
+        assert_eq!(received.recv().unwrap().0, 1);
+        events.send((Some(1), json!({"type":"memory"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "memory");
+        assert!(bridge.has_pending());
+        events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
+        assert!(!bridge.has_pending());
+        bridge.send(json!({"type":"stop"})).unwrap();
+        assert_eq!(received.recv().unwrap().0, 2);
+        events
+            .send((Some(1), json!({"type":"snapshot","snapshot":"old"})))
+            .unwrap();
+        events.send((Some(2), json!({"type":"stopped"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap(), json!({"type":"stopped"}));
+        assert!(bridge.poll().is_none());
+        events
+            .send((None, error_event("missing runtime".to_owned())))
+            .unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "error");
+    }
+
+    fn receive(runtime: &RuntimeBridge) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(7);
+        loop {
+            if let Some(event) = runtime.poll() {
+                return event;
+            }
+            assert!(Instant::now() < deadline, "native bridge timed out");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn rapid_real_cartridge_reloads_only_deliver_the_latest_machine_and_its_save_commit() {
+        let project = |id: &str, color: u8| {
+            let mut project =
+                modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                    .unwrap();
+            project.manifest.id = id.to_owned();
+            project.files.insert("src/main.modl".to_owned(),format!("on start:\n  save_set_int(\"owner\", {color})\n  save_commit()\n\non draw:\n  clear({color})\n").into_bytes());
+            let source = modl_core::encode_workcart(
+                &project.manifest,
+                &project.files,
+                &project.recipes,
+                &project.tests,
+            )
+            .unwrap();
+            crate::project::NativeProject::from_source(source, None).unwrap()
+        };
+        let first = project("epoch-first", 7);
+        let second = project("epoch-second", 9);
+        let bridge = RuntimeBridge::new(crate::native_host_path());
+        bridge
+            .send(first.load_command(false, &[]).unwrap())
+            .unwrap();
+        bridge
+            .send(second.load_command(false, &[]).unwrap())
+            .unwrap();
+        assert_eq!(
+            receive(&bridge),
+            json!({"type":"loaded","cartridgeId":"epoch-second","menuItems":[]})
+        );
+        bridge
+            .send(json!({"type":"frame","input":crate::replay::empty_input()}))
+            .unwrap();
+        let frame = receive(&bridge);
+        assert_eq!(frame["type"], "frame");
+        assert!(
+            STANDARD
+                .decode(frame["pixels"].as_str().unwrap())
+                .unwrap()
+                .iter()
+                .all(|pixel| *pixel == 9)
+        );
+        assert!(frame["saveCommit"].is_string());
+        bridge
+            .send(json!({"type":"frame","input":crate::replay::empty_input()}))
+            .unwrap();
+        bridge
+            .send(first.load_command(false, &[]).unwrap())
+            .unwrap();
+        assert_eq!(
+            receive(&bridge),
+            json!({"type":"loaded","cartridgeId":"epoch-first","menuItems":[]})
+        );
+        bridge
+            .send(json!({"type":"frame","input":crate::replay::empty_input()}))
+            .unwrap();
+        let frame = receive(&bridge);
+        assert_eq!(frame["type"], "frame");
+        assert!(
+            STANDARD
+                .decode(frame["pixels"].as_str().unwrap())
+                .unwrap()
+                .iter()
+                .all(|pixel| *pixel == 7)
+        );
+        assert!(frame["saveCommit"].is_string());
+        bridge.send(json!({"type":"stop"})).unwrap();
+        assert_eq!(receive(&bridge)["type"], "stopped");
+    }
+
+    #[test]
+    fn missing_runtime_startup_errors_remain_visible_after_a_session_change() {
+        let bridge = RuntimeBridge::new(std::env::temp_dir().join(format!(
+            "missing-mod01-native-host-{}.mjs",
+            std::process::id()
+        )));
+        bridge.send(json!({"type":"load"})).unwrap();
+        let event = receive(&bridge);
+        assert_eq!(event["type"], "error");
+        assert!(
+            event["message"]
+                .as_str()
+                .unwrap()
+                .contains("native runtime bundle is missing")
+        );
+    }
+
+    #[test]
+    fn live_audio_preview_runs_in_an_isolated_native_child_and_restarts_its_clock() {
+        let runtime = RuntimeBridge::new(crate::native_host_path());
+        let request = |command| {
+            runtime.send(command).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(7);
+            loop {
+                if let Some(event) = runtime.poll() {
+                    return event;
+                }
+                assert!(Instant::now() < deadline, "live audio preview timed out");
+                thread::sleep(Duration::from_millis(1));
+            }
+        };
+        let load = json!({"type":"audio-preview-load","assets":[{
+            "kind":"sound","name":"tone","waveform":"triangle","note":60,
+            "durationFrames":4,"volume":0.5,"pan":0,
+            "envelope":{"attackFrames":0,"decayFrames":0,"sustainLevel":1,"releaseFrames":1},
+            "pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}
+        }]});
+        assert_eq!(request(load.clone())["type"], "audio-preview-loaded");
+        assert_eq!(
+            request(json!({"type":"audio-preview-audition","sound":"tone","note":64,"volume":0.5}))
+                ["type"],
+            "audio-preview-auditioned"
+        );
+        let frame = request(json!({"type":"audio-preview-frame"}));
+        assert_eq!(frame["type"], "audio-preview-frame");
+        assert_eq!(frame["frame"], 0);
+        assert_eq!(frame["voices"][0]["note"], 64);
+        let left = STANDARD.decode(frame["left"].as_str().unwrap()).unwrap();
+        assert_eq!(left.len(), 800 * 4);
+        assert!(left.iter().any(|byte| *byte != 0));
+        assert!(frame.get("saveCommit").is_none());
+        assert!(frame["position"].is_null());
+        assert_eq!(request(json!({"type":"stop"}))["type"], "stopped");
+        assert_eq!(request(load)["type"], "audio-preview-loaded");
+        let fresh = request(json!({"type":"audio-preview-frame"}));
+        assert_eq!(fresh["frame"], 0);
+        assert_eq!(fresh["activeVoices"], 0);
+        assert_eq!(request(json!({"type":"stop"}))["type"], "stopped");
+    }
 }

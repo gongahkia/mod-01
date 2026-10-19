@@ -26,7 +26,7 @@ export interface RuntimeAssetSource {
   readonly displayPath?: string | null;
 }
 
-/** Bounded, data-only source bank sent to the restricted Worker for authoritative decoding. */
+/** Bounded, data-only source bank sent to the console core for authoritative decoding. */
 export function isRuntimeAssetSource(value: unknown): value is RuntimeAssetSource {
   if (
     !isRecord(value) ||
@@ -86,7 +86,7 @@ export interface RuntimeAssetBundle {
 }
 
 export interface DisplayAssetFile {
-  readonly revision: 1 | 2;
+  readonly revision: 2;
   readonly kind: 'display';
   readonly remap: readonly number[];
   readonly raster: readonly {
@@ -98,7 +98,7 @@ export interface DisplayAssetFile {
 }
 
 export interface SpriteAssetFile {
-  readonly revision: 1 | 2;
+  readonly revision: 2;
   readonly kind: 'sprite';
   readonly width: number;
   readonly height: number;
@@ -106,7 +106,7 @@ export interface SpriteAssetFile {
 }
 
 export interface TileSetAssetFile {
-  readonly revision: 1 | 2;
+  readonly revision: 2;
   readonly kind: 'tile_set';
   readonly tiles: readonly (readonly number[])[];
   readonly flags: readonly number[];
@@ -138,7 +138,7 @@ export interface FontAssetFile {
   }[];
 }
 
-/** Decodes documented JSON asset files into validated hardware stores and worker map views. */
+/** Decodes documented JSON asset files into validated hardware stores and query views. */
 export function decodeRuntimeAssets(
   declarations: Readonly<Record<string, ProjectAssetDeclaration>>,
   files: Readonly<Record<string, Uint8Array>>,
@@ -235,10 +235,10 @@ function decodeSprite(
 ): IndexedSprite | IndexedAnimation {
   if (
     !isRecord(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'sprite' ||
-    !boundedInteger(value.width, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
-    !boundedInteger(value.height, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.width, 1, HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.height, 1, HARDWARE.spriteMaximumAxis) ||
     !Array.isArray(value.frames) ||
     value.frames.length === 0 ||
     value.frames.length > 256
@@ -247,7 +247,7 @@ function decodeSprite(
   }
   const pixelCount = value.width * value.height;
   const frames = value.frames.map((frame) => {
-    if (!isNumberArray(frame, pixelCount, 0, value.revision === 1 ? 31 : 255)) {
+    if (!isNumberArray(frame, pixelCount, 0, 255)) {
       throw new TypeError(`sprite asset '${name}' has invalid indexed pixels`);
     }
     return {
@@ -268,7 +268,7 @@ function decodeSprite(
 function decodeTileSet(name: string, value: unknown): IndexedTileSet {
   if (
     !isRecord(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'tile_set' ||
     !Array.isArray(value.tiles) ||
     value.tiles.length === 0 ||
@@ -278,7 +278,7 @@ function decodeTileSet(name: string, value: unknown): IndexedTileSet {
     throw new TypeError(`tile-set asset '${name}' is invalid`);
   }
   const tiles = value.tiles.map((pixels, index) => {
-    if (!isNumberArray(pixels, 64, 0, value.revision === 1 ? 31 : 255)) {
+    if (!isNumberArray(pixels, 64, 0, 255)) {
       throw new TypeError(`tile ${String(index)} in '${name}' has invalid indexed pixels`);
     }
     return {
@@ -397,9 +397,9 @@ function decodeDisplay(
   const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
   if (
     !isRecord(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'display' ||
-    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255) ||
+    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, 255) ||
     !Array.isArray(value.raster) ||
     value.raster.length > HARDWARE.height
   ) {
@@ -413,7 +413,7 @@ function decodeDisplay(
       state.line <= previousLine ||
       !boundedInteger(state.scrollX, -32_768, 32_767) ||
       !boundedInteger(state.scrollY, -32_768, 32_767) ||
-      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255)
+      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, 255)
     ) {
       throw new TypeError('display configuration has invalid raster state');
     }

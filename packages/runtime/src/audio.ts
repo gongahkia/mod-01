@@ -344,12 +344,9 @@ export class Synthesizer {
     if (snapshot.tracker !== null) {
       const tracker = snapshot.tracker;
       const music = this.assets.get(tracker.music);
-      const patternName = music?.kind === 'music' ? music.order[tracker.orderIndex] : undefined;
       if (
         music?.kind !== 'music' ||
-        patternName === undefined ||
-        music.patterns[patternName]?.rows[tracker.row] === undefined ||
-        tracker.frameInRow >= music.framesPerRow
+        !validTrackerPosition(music, tracker.orderIndex, tracker.row, tracker.frameInRow)
       )
         throw new TypeError('snapshot references an invalid tracker position');
     }
@@ -365,8 +362,24 @@ export class Synthesizer {
     return structuredClone(this.voices);
   }
 
+  /** Native instrument audition uses the tracker's real note override and voice allocator. */
+  public audition(soundName: string, note: number, volumeScale = 1): void {
+    if (!audioInteger(note, 0, 127) || !audioNumber(volumeScale, 0, 1))
+      throw new RangeError('audition requires a note 0-127 and volume 0-1');
+    this.trigger(soundName, note, volumeScale);
+  }
+
   public inspectTracker(): TrackerInspection | null {
     return this.tracker === null ? null : { ...this.tracker };
+  }
+
+  /** Start or seek the real sequencer without resetting voices or the synth clock. */
+  public playMusic(name: string, orderIndex = 0, row = 0): void {
+    const music = this.assets.get(name);
+    if (music?.kind !== 'music') throw new TypeError(`missing Music asset '${name}'`);
+    if (!validTrackerPosition(music, orderIndex, row, 0))
+      throw new RangeError('invalid tracker order or row');
+    this.tracker = { music: name, orderIndex, row, frameInRow: 0 };
   }
 
   public memoryRegions(): readonly MemoryRegion[] {
@@ -447,13 +460,7 @@ export class Synthesizer {
       row: view.getUint32(8, true),
       frameInRow: view.getUint32(12, true),
     };
-    const patternName = music.order[next.orderIndex];
-    if (
-      patternName === undefined ||
-      music.patterns[patternName]?.rows[next.row] === undefined ||
-      next.frameInRow >= music.framesPerRow
-    )
-      return undefined;
+    if (!validTrackerPosition(music, next.orderIndex, next.row, next.frameInRow)) return undefined;
     return () => {
       this.tracker = next;
     };
@@ -516,11 +523,7 @@ export class Synthesizer {
       case 'music': {
         const [handle] = expectArguments(command, 1);
         const name = readAssetName(handle, 'Music');
-        const music = this.assets.get(name);
-        if (music?.kind !== 'music') {
-          throw new TypeError(`missing Music asset '${name}'`);
-        }
-        this.tracker = { music: name, orderIndex: 0, row: 0, frameInRow: 0 };
+        this.playMusic(name);
         return;
       }
       case 'music_stop':
@@ -630,52 +633,21 @@ export class Synthesizer {
   }
 }
 
-/** Small Web Audio queue used only after an explicit host-side resume gesture. */
-export class WebAudioSink {
-  private readonly context: AudioContext;
-  private readonly output: AudioNode;
-  private cursor = 0;
-
-  public constructor(
-    context = new AudioContext({ sampleRate: HARDWARE.audioSampleRate }),
-    volume = 1,
-  ) {
-    if (!Number.isFinite(volume) || volume < 0 || volume > 1)
-      throw new RangeError('audio volume must be between zero and one');
-    this.context = context;
-    const gain = context.createGain();
-    gain.gain.value = volume;
-    gain.connect(context.destination);
-    this.output = gain;
-  }
-
-  public get state(): AudioContextState {
-    return this.context.state;
-  }
-
-  public async resume(): Promise<void> {
-    await this.context.resume();
-    this.cursor = Math.max(this.cursor, this.context.currentTime);
-  }
-
-  public enqueue(frame: AudioFrame): void {
-    if (this.context.state !== 'running') {
-      return;
-    }
-    const buffer = this.context.createBuffer(2, frame.left.length, HARDWARE.audioSampleRate);
-    buffer.getChannelData(0).set(frame.left);
-    buffer.getChannelData(1).set(frame.right);
-    const source = this.context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(this.output);
-    this.cursor = Math.max(this.cursor, this.context.currentTime);
-    source.start(this.cursor);
-    this.cursor += frame.left.length / HARDWARE.audioSampleRate;
-  }
-
-  public async close(): Promise<void> {
-    await this.context.close();
-  }
+function validTrackerPosition(
+  music: MusicAsset,
+  orderIndex: number,
+  row: number,
+  frameInRow: number,
+): boolean {
+  if (
+    !audioCounter(orderIndex) ||
+    !audioCounter(row) ||
+    !audioCounter(frameInRow) ||
+    frameInRow >= music.framesPerRow
+  )
+    return false;
+  const name = music.order[orderIndex];
+  return name !== undefined && music.patterns[name]?.rows[row] !== undefined;
 }
 
 function emptyVoice(slot: number): Voice {

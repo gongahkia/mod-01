@@ -19,7 +19,8 @@ members require project analysis.
 - Decimal `Num` literals contain a decimal point. `Int` literals do not.
 - Durations use `2f` for frames and `0.5s` for deterministic cartridge seconds.
 - `#hero` is a named asset reference, not a string.
-- Operators are `+ - * / %`, comparisons, `and or not`, assignment and compound assignment.
+- Operators include `+ - * / %`, `& | ^ ~ << >> >>>`, comparisons, `and or not`, assignment and compound assignment.
+- [STANDARD_LIBRARY.md](STANDARD_LIBRARY.md) specifies numeric, text and bit helpers and their bounds.
 - `0..10` is a half-open range. The end value is excluded.
 
 ## Declarations
@@ -33,7 +34,7 @@ state recent: List[Int, 16] = []
 state ports: [Int, 4] = [0, 0, 0, 0]
 ```
 
-Top-level declarations are public by default so every MOD-01 baseline project remains valid. `pub` may make
+Top-level declarations are public by default. `pub` may make
 that intent explicit; `private` prevents access through an import alias. Visibility applies to
 constants, state, functions, tasks, records, and enums. Imports are absolute project paths and
 always use qualified member access:
@@ -63,8 +64,10 @@ task flash(color: Color):
   wait 2f
 ```
 
-System callbacks are `on start:`, `on update:`, `on draw:`, and
-`on raster(line: Int):`. A task begins only through `start task_name(arguments)`.
+System callbacks are `on start:`, `on update:`, `on draw:`,
+`on raster(line: Int):`, and `on menu(action: Int):`. A task begins only through
+`start task_name(arguments)`. The menu callback receives a registered host-menu
+activation before the normal display-frame update/draw sequence; see [MENU.md](MENU.md).
 
 Records contain typed fields and optional defaults. Enum variants may have typed payloads. `match`
 arms begin with `case`; `else` is the wildcard arm.
@@ -92,7 +95,7 @@ payload-free variants require no extra work units. Traversal uses the normal fra
 ## Static types
 
 `Num` is the deterministic numeric path and `Int` is validated for integer-only operations. Integer
-literals may initialize `Num`, and palette indices from 0 through 31 may initialize `Color`; other
+values widen to `Num`, and palette-index literals from 0 through 255 may initialize `Color`; other
 implicit conversions are rejected. `Bool`, `Text`, `Vec2`, `Rect`, `Controller`, and `Button` are
 distinct value types. `Unit` is the no-value function return type.
 
@@ -102,7 +105,7 @@ empty option; `some(value)` preserves the element's static type, `is_some(option
 literal may initialize a list when its length does not exceed the declared capacity. Capacity is
 currently restricted to 1 through 65535. Generated reads and writes validate integer indices against
 the declared length/capacity; an uninitialized sparse-list read is also a source-mapped runtime
-fault. Indexing ASCII `Text` returns the character code and is read-only. General dynamic allocation
+fault. Indexing `Text` uses Unicode scalar positions and returns the character code and is read-only. General dynamic allocation
 is not part of MODL/1.
 
 Asset types are `Sprite`, `Animation`, `TileSet`, `Map`, `Font`, `Sound`, and `Music`. A `#name`
@@ -146,7 +149,7 @@ constant     = "const", identifier, [ ":", type ], "=", expression, line-end ;
 state        = "state", identifier, ":", type, "=", expression, line-end ;
 function     = "fn", identifier, parameters, "->", type, ":", block ;
 task         = "task", identifier, parameters, ":", block ;
-callback     = "on", ( "start" | "update" | "draw" | "raster" ),
+callback     = "on", ( "start" | "update" | "draw" | "raster" | "menu" ),
                [ parameters ], ":", block ;
 parameters   = "(", [ parameter, { ",", parameter } ], ")" ;
 parameter    = identifier, ":", type ;

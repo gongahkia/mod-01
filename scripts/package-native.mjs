@@ -2,13 +2,21 @@
 
 import { execFileSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
 
 const root = resolve(import.meta.dirname, '..');
 const executableName = process.platform === 'win32' ? 'mod01-studio.exe' : 'mod01-studio';
 const release = join(root, 'target', 'release', executableName);
+const cliName = process.platform === 'win32' ? 'mod01.exe' : 'mod01';
+const cli = join(root, 'target', 'release', cliName);
 const host = join(root, 'packages', 'runtime', 'standalone', 'native-host.mjs');
-for (const file of [release, host, process.execPath]) {
+const nodeDirectory = dirname(realpathSync(process.execPath));
+const nodeLicense = [join(nodeDirectory, 'LICENSE'), join(nodeDirectory, '../LICENSE')].find(
+  existsSync,
+);
+if (!nodeLicense) throw new Error('Node distribution LICENSE is required for redistribution');
+for (const file of [release, cli, host, process.execPath]) {
   if (!existsSync(file) || !statSync(file).isFile())
     throw new Error(`missing native package input: ${file}`);
 }
@@ -37,6 +45,8 @@ if (process.platform === 'darwin') {
   mkdirSync(binaries, { recursive: true });
 }
 copyFileSync(release, join(binaries, executableName));
+copyFileSync(cli, join(binaries, cliName));
+copyFileSync(nodeLicense, join(binaries, 'LICENSE'));
 copyFileSync(host, join(binaries, 'native-host.mjs'));
 const bundledNode = join(binaries, process.platform === 'win32' ? 'node.exe' : 'node');
 copyFileSync(process.execPath, bundledNode);
@@ -80,6 +90,10 @@ copyFileSync(
 copyFileSync(
   join(root, 'crates', 'mod01-native', 'assets', 'kenney', 'License.txt'),
   join(visualCredits, 'Kenney-LICENSE.txt'),
+);
+copyFileSync(
+  join(root, 'crates', 'mod01-native', 'assets', 'LIBRARY-LICENSES.txt'),
+  join(visualCredits, 'Library-renderer-LICENSES.txt'),
 );
 rmSync(archive, { force: true });
 execFileSync('tar', ['-czf', archive, '-C', join(root, 'dist'), basename(output)]);

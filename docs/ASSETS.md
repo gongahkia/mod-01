@@ -1,27 +1,79 @@
 # MOD-01 asset files
 
-Project assets are UTF-8 JSON with a trailing newline. They remain readable in a project directory
-and inside a `.m01c`; the Studio editors write the same revision-1 representation documented here.
-Manifest names, rather than filenames, become typed MODL handles such as `#hero` and `#theme`.
+Assets are UTF-8 JSON embedded in a workcart. Manifest names become typed MODL
+handles such as `#hero` and `#theme`. Sprite/tile-set/display JSON use current
+revision 2; map/font/sound/music each use their own current revision 1 schema.
+These are independent asset schemas, not compatibility profiles.
 
-Every file has `"revision": 1` and a `kind`. Indexed colour values are integers from 0 through 31.
-Colour 0 is transparent when a sprite is blitted. The fixed master RGB palette itself is not stored
-in a cartridge and cannot be replaced.
+Stored noise/WFC map recipes consume current revision-2 tile sets and emit current
+revision-1 maps. Generated results pass the same asset/compiler/packed admission;
+obsolete revision-1 tile sets are rejected instead of producing an un-packable game.
+
+Native sprite/tile PNG import uses the shared Rust decoder and palette converter.
+It checks PNG source size (16 MiB), IHDR geometry and purpose before pixel
+decoding, with decoder allocation limits as well: sprites are 1–128 on each axis;
+atlases contain 1–4,096 complete 8×8 tiles in row-major order. Alpha 0–127 becomes
+index zero. Other pixels use squared-RGB nearest colour among indices 1–255,
+choosing the lowest index on ties, without dithering. Original RGBA layer data
+remains editable; sprite resize/import is one undo transaction. Tile import
+preserves authored metadata and existing flags, truncating/extending flags with
+the new tile count. `M014065` identifies failed PNG/conversion admission.
+
+The CLI uses that same pipeline and writes one current workcart atomically:
+
+```sh
+mod01 import png my-game hero art/hero.png
+mod01 import png my-game tiles art/atlas.png --kind tile-set
+mod01 import png my-game hero art/revised.png --replace
+mod01 import png my-game hero art/hero.png --output new-cart.m01w
+```
+
+Use `--replace` only to replace an entire existing asset. A sprite replacement
+also replaces its editable RGBA sidecar, not just the indexed pixels; native PNG
+IN instead targets the current layer/frame. Both paths produce identical files
+and packed bytes for the same single-layer context. Other modules, auxiliary
+files, recipes and tests are retained. Metadata and existing tile flags survive.
+The CLI validates the complete asset bank, compiler output and packed capacity
+before writing; shrinking an atlas cannot leave invalid map references behind.
+Existing `--output` paths and implicit asset replacement are refused (`M014066`).
+Every admission failure leaves the input unchanged. PNG reads are byte-bounded,
+not merely checked after an unbounded file read.
+
+`mod01 assets PATH` prints the shared Rust validation/capacity report as JSON
+without needing Node or a display. Its exit status is nonzero for an invalid
+bank. `mod01 check PATH` prints independent asset failures alongside source
+diagnostics, and packing/loading a packed cartridge enforces the same validation.
+Schema/reference failures do not prevent opening structurally valid workcarts
+for repair. Reports identify the asset,
+file and JSON field: `M014060` schema, `M014061` reference, `M014062` capacity and
+`M014063` missing file. At most 128 diagnostics are retained; the JSON report's
+`diagnosticsTruncated` flag states whether more were suppressed.
+
+Usage counts schema-valid payloads only: any diagnostic means the bank is not
+loadable, even if its partial byte count is below capacity. Visual bytes and
+allocation slots are independent limits. `sourceBytes` is unique authored asset
+JSON bytes, not console RAM or packed cartridge size. Runtime admission validates
+untrusted data again; cross-language conformance tests compare both boundaries
+and exact layout costs, including display storage.
+
+Indexed colours are 0–255; sprite colour 0 defaults to transparent. The fixed
+master RGB palette cannot be replaced. The 32 logical drawing/raster remaps
+can each target any colour; direct indices 32–255 bypass this remap.
 
 ## Graphics
 
-A `sprite` file contains a 1-64 pixel width and height and one or more row-major frames. Declare a
-single-frame file as `sprite` or a multi-frame file as `animation` in `cart.toml`:
+A `sprite` file contains a 1-128 pixel width and height and one or more row-major frames. Declare a
+single-frame file as `sprite` or a multi-frame file as `animation` in the workcart:
 
 ```json
-{ "revision": 1, "kind": "sprite", "width": 2, "height": 2, "frames": [[0, 23, 23, 0]] }
+{ "revision": 2, "kind": "sprite", "width": 2, "height": 2, "frames": [[0, 23, 23, 0]] }
 ```
 
 A `tile_set` contains 8x8 row-major tiles and one eight-bit flag value per tile:
 
 ```json
 {
-  "revision": 1,
+  "revision": 2,
   "kind": "tile_set",
   "tiles": [
     [
@@ -46,13 +98,13 @@ indices, and the manifest name of its tile set:
 ```
 
 Sprite pixels, animation pixels, tile pixels and flags, two bytes per map cell, and display state
-share the 128 KiB visual capacity. The loader rejects missing tile sets and out-of-range tile
+share the 1 MiB visual capacity. The loader rejects missing tile sets and out-of-range tile
 indices before execution.
 
-In Hardware Revision 1 these payloads occupy the actual bus image at `0x30000`. Allocation
-descriptors and `visual_id` expose their addresses; drawing and map queries read that same storage.
-See [HARDWARE.md](HARDWARE.md#visual-image-and-allocation-descriptors) for encoding and write rules.
-Revision-1 asset files remain backward-compatible with MOD-01 baseline projects.
+Payloads occupy the bus image at `0x210000`. Allocation descriptors and
+`visual_id` expose actual renderer storage. At most 4,096 visual assets and
+8,192 allocations fit, independently of byte capacity. See
+[HARDWARE.md](HARDWARE.md#visual-image-and-allocation-descriptors).
 
 ## Bitmap fonts
 
@@ -90,7 +142,7 @@ remap:
 
 ```json
 {
-  "revision": 1,
+  "revision": 2,
   "kind": "display",
   "remap": [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -120,8 +172,7 @@ frames, volume and sustain are 0-1, and pan is -1 to 1. Pulse duty must be betwe
 Numeric fields must be present and finite, and the waveform must be one of the five supported
 oscillators. Pitch effects are admitted only when the worst-case frequency remains finite across
 all notes 0–127 and the full duration plus release: `127 + abs(slide)*lifetime + abs(vibrato)` is
-the upper-note bound used for validation. Previously accepted malformed patches that could produce
-non-finite oscillator state are now rejected at asset load. Tracker orders/rows/tables must be dense
+the upper-note bound used for validation. Malformed/non-finite oscillator patches are rejected at load. Tracker orders/rows/tables must be dense
 arrays with valid shapes, boolean looping and finite cell volumes. Loaded patches are copied into
 the synthesizer's asset store; snapshot restore rejects an active voice beyond its patch lifetime.
 Wavetables contain 4-32 samples in the range -1 to 1.

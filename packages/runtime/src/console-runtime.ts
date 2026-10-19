@@ -20,26 +20,29 @@ import type { MemoryRegionDescriptor } from './bus';
 import { MapQueryStore } from './map-query';
 import {
   SaveMemory,
-  isSaveValues,
-  isPendingSaveWrites,
   isSaveSnapshot,
   isPendingDeviceWrites,
   type SaveSnapshot,
-  type SaveValues,
   type SaveWrite,
 } from './save';
 import { isInputFrame, type InputFrame } from './input';
-import { isSandboxConfiguration } from './protocol';
+import type { MenuItem } from './menu';
+import { isConsoleConfiguration } from './protocol';
+import {
+  isCartridgeControlSnapshot,
+  type CartridgeControl,
+  type CartridgeControlSnapshot,
+} from './cartridge-control';
 import type {
   ConsoleCommand,
   DebugStackFrame,
   DebugTraceEvent,
-  SandboxConfiguration,
+  ConsoleConfiguration,
   SourceSpan,
-  WorkerResponse,
+  ConsoleFrame,
 } from './protocol';
 
-export type ConsoleFrame = Omit<Extract<WorkerResponse, { type: 'frame' }>, 'id' | 'type'>;
+export type { ConsoleFrame } from './protocol';
 
 export interface ConsoleDebugPause {
   readonly event: DebugTraceEvent;
@@ -68,41 +71,52 @@ export interface ConsoleRuntime {
   };
   editMemory(address: number, bytes: Uint8Array): void;
   memoryRegions(): readonly MemoryRegionDescriptor[];
+  inspectMenu(): readonly MenuItem[];
 }
 
 export interface ConsoleRuntimeSnapshot {
-  readonly revision: 6;
+  readonly revision: 7;
   readonly machine: MachineSnapshot;
   readonly save: SaveSnapshot;
   readonly graphics: GraphicsSnapshot;
   readonly audio: SynthSnapshot;
   readonly pendingSaveWrites: readonly SaveWrite[];
   readonly memory: MemorySnapshot;
+  readonly cartridgeControl: CartridgeControlSnapshot | null;
+}
+
+/** Trusted scheduler services, never data supplied by cartridge code or JSON configuration. */
+export interface ConsoleRuntimeServices {
+  readonly cartridge?: CartridgeControl;
+  readonly deferBoot?: boolean;
 }
 
 export function isConsoleRuntimeSnapshot(value: unknown): value is ConsoleRuntimeSnapshot {
   return (
     isRecord(value) &&
-    value.revision === 6 &&
-    Object.keys(value).length === 7 &&
+    value.revision === 7 &&
+    Object.keys(value).length === 8 &&
     isMachineSnapshot(value.machine) &&
-    value.machine.revision === 2 &&
     isSaveSnapshot(value.save) &&
     isGraphicsSnapshot(value.graphics) &&
     isSynthSnapshot(value.audio) &&
     isPendingDeviceWrites(value.pendingSaveWrites, value.save) &&
     isMemorySnapshot(value.memory) &&
-    graphicsMatchesMemory(value.graphics, value.memory)
+    graphicsMatchesMemory(value.graphics, value.memory) &&
+    (value.cartridgeControl === null || isCartridgeControlSnapshot(value.cartridgeControl))
   );
 }
 
-/** One production dispatcher for restricted Workers and deterministic headless hosts. */
+/** One production dispatcher for native Studio, standalone players and headless hosts. */
 export function createConsoleRuntime(
   factory: CartridgeFactory,
-  configuration: SandboxConfiguration,
+  configuration: ConsoleConfiguration,
+  services: ConsoleRuntimeServices = {},
 ): ConsoleRuntime {
-  if (!isSandboxConfiguration(configuration))
-    throw new RuntimeFault('M019100', 'invalid sandbox configuration', { start: 0, end: 0 });
+  if (!isConsoleConfiguration(configuration))
+    throw new RuntimeFault('M019100', 'invalid console configuration', { start: 0, end: 0 });
+  const cartridgeControl = services.cartridge;
+  const deferBoot = services.deferBoot === true;
   const source = configuration.assets;
   const assets =
     source === undefined
@@ -121,7 +135,7 @@ export function createConsoleRuntime(
   const mapQueries = new MapQueryStore(source === undefined ? (configuration.maps ?? []) : []);
   const saveMemory = new SaveMemory(configuration.save ?? {});
   const cartridgeRom = configuration.rom?.slice() ?? new Uint8Array();
-  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 1);
+  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 2);
   const debugEnabled = configuration.debug ?? false;
   let debugTrace: DebugTraceEvent[] = [];
   const debugCallStack: DebugStackFrame[] = [];
@@ -148,19 +162,9 @@ export function createConsoleRuntime(
             {
               name: 'canonical cartridge ROM',
               address: MEMORY.cartridgeRom,
-              bytes: cartridgeRom.subarray(0, 256 * 1024),
+              bytes: cartridgeRom,
               writable: false,
             } as const,
-            ...(cartridgeRom.length > 256 * 1024
-              ? [
-                  {
-                    name: 'canonical cartridge ROM extension',
-                    address: MEMORY.cartridgeRomExtension,
-                    bytes: cartridgeRom.subarray(256 * 1024),
-                    writable: false,
-                  } as const,
-                ]
-              : []),
           ]),
       {
         name: 'controllers and pointer',
@@ -179,13 +183,7 @@ export function createConsoleRuntime(
       {
         name: 'master palette RGBA',
         address: MEMORY.palette,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(0, 32 * 4)),
-        writable: false,
-      },
-      {
-        name: 'extended master palette RGBA',
-        address: MEMORY.paletteExtended,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(32 * 4)),
+        bytes: Uint8Array.from(MASTER_PALETTE_RGBA),
         writable: false,
       },
     ],
@@ -229,7 +227,7 @@ export function createConsoleRuntime(
   graphics.beginFrame();
   rendering = true;
   try {
-    if (!debugEnabled) machine.boot();
+    if (!debugEnabled && !deferBoot) machine.boot();
   } finally {
     rendering = false;
   }
@@ -341,37 +339,28 @@ export function createConsoleRuntime(
     },
     snapshot: captureSnapshot,
     restore(value) {
-      const snapshot = readWorkerSnapshot(value);
+      if (!isConsoleRuntimeSnapshot(value))
+        throw new RuntimeFault('M019103', 'invalid console snapshot', { start: 0, end: 0 });
+      const snapshot = value;
+      if ((cartridgeControl === undefined) !== (snapshot.cartridgeControl === null))
+        throw new RuntimeFault(
+          'M019103',
+          'snapshot cartridge environment does not match this console',
+          { start: 0, end: 0 },
+        );
       const before = debugFrameActive ? boundarySnapshot : captureSnapshot();
       try {
+        if (snapshot.cartridgeControl !== null)
+          cartridgeControl?.restore(snapshot.cartridgeControl);
         requireMachine().restore(snapshot.machine);
         debugFrameActive = false;
-        if (snapshot.revision === 6)
-          saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
-        else saveMemory.restore(snapshot.save, snapshot.pendingSaveWrites);
-        if (snapshot.revision >= 2) {
-          graphics.restore(snapshot.graphics);
-          synthesizer.restore(snapshot.audio);
-        }
-        if (snapshot.revision >= 4) bus.restore(snapshot.memory);
-        else if (snapshot.revision >= 2) {
-          const visual = new VisualAssetStore(assets.visual, assets.display).memoryRegions()[0];
-          if (visual === undefined) throw new TypeError('missing visual image');
-          if (snapshot.revision === 3 && isMemorySnapshot(snapshot.memory)) {
-            bus.restore({
-              revision: 1,
-              regions: [
-                ...snapshot.memory.regions,
-                { address: MEMORY.visual, bytes: visual.bytes },
-              ].sort((a, b) => a.address - b.address),
-            });
-          } else {
-            ram.fill(0);
-            visualStore.memoryRegions()[0]?.bytes.set(visual.bytes);
-          }
-        }
+        saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
+        graphics.restore(snapshot.graphics);
+        synthesizer.restore(snapshot.audio);
+        bus.restore(snapshot.memory);
         boundarySnapshot = captureSnapshot();
       } catch (error) {
+        if (before.cartridgeControl !== null) cartridgeControl?.restore(before.cartridgeControl);
         requireMachine().restore(before.machine);
         saveMemory.restoreDevice(before.save, before.pendingSaveWrites);
         graphics.restore(before.graphics);
@@ -413,17 +402,21 @@ export function createConsoleRuntime(
     memoryRegions() {
       return bus.describe();
     },
+    inspectMenu() {
+      return requireMachine().inspectMenu();
+    },
   };
 
   function captureSnapshot(): ConsoleRuntimeSnapshot {
     return {
-      revision: 6,
+      revision: 7,
       machine: requireMachine().snapshot(),
       save: saveMemory.deviceSnapshot(),
       graphics: graphics.snapshot(),
       audio: synthesizer.snapshot(),
       pendingSaveWrites: saveMemory.pendingWrites(),
       memory: bus.snapshot(),
+      cartridgeControl: cartridgeControl?.snapshot() ?? null,
     };
   }
 
@@ -442,6 +435,17 @@ export function createConsoleRuntime(
     sourceSpan: SourceSpan,
     context: ExecutionContext,
   ): unknown {
+    if (name === 'load_cart' || name === 'cart_parameter' || name === 'reload_assets') {
+      if (cartridgeControl === undefined)
+        throw new RuntimeFault(
+          'M019017',
+          'cartridge changes require an admitted game scheduler',
+          sourceSpan,
+        );
+      return cartridgeControl.call(name, arguments_, sourceSpan, context, (units, span) => {
+        requireMachine().work(units, span);
+      });
+    }
     if (name === 'visual_id' || name === 'audio_id') {
       if (arguments_.length !== 1 || typeof arguments_[0] !== 'string')
         throw new RuntimeFault('M019009', `${name} expects one Text name`, sourceSpan);
@@ -579,7 +583,15 @@ export function createConsoleRuntime(
         throw new RuntimeFault('M019010', 'draw-command ceiling exceeded', sourceSpan);
       }
       drawCommands.push(command);
-      if (rendering) graphics.executeCommand(command);
+      if (rendering) {
+        try {
+          graphics.executeCommand(command);
+        } catch (error) {
+          if (error instanceof TypeError || error instanceof RangeError)
+            throw new RuntimeFault('M019009', error.message, sourceSpan);
+          throw error;
+        }
+      }
       return undefined;
     }
     if (AUDIO_CALLS.has(name)) {
@@ -598,17 +610,17 @@ export function createConsoleRuntime(
   }
 }
 
-function createCartridgeInfo(rom: Uint8Array, hardwareRevision: 1 | 2): Uint8Array {
+function createCartridgeInfo(rom: Uint8Array, hardwareRevision: 2): Uint8Array {
   const bytes = new Uint8Array(64);
   const view = new DataView(bytes.buffer);
   const validHeader =
     rom.length >= 12 &&
     [77, 79, 68, 45, 48, 49, 26].every((byte, index) => rom[index] === byte) &&
-    rom[7] === 1;
+    rom[7] === 2;
   view.setUint16(0, hardwareRevision, true);
   view.setUint16(2, validHeader ? (rom[7] ?? 0) : 0, true);
   view.setUint32(4, rom.length, true);
-  view.setUint32(8, hardwareRevision === 1 ? 256 * 1024 : HARDWARE.cartridgeCapacityBytes, true);
+  view.setUint32(8, HARDWARE.cartridgeCapacityBytes, true);
   view.setUint32(12, MEMORY.cartridgeRom, true);
   view.setUint32(16, Number(rom.length > 0) | (Number(validHeader) << 1), true);
   view.setUint32(
@@ -633,10 +645,16 @@ const DRAW_CALLS = new Set([
   'clip_reset',
   'sprite',
   'sprite_xform',
+  'sprite_region',
+  'texture_line',
   'animation',
   'map',
   'pal',
   'pal_reset',
+  'palt',
+  'palt_reset',
+  'fill_pattern',
+  'fill_pattern_reset',
   'raster_scroll',
   'print',
   'font_print',
@@ -676,6 +694,18 @@ export function consoleWorkCost(name: string, arguments_: readonly unknown[]): n
       return 32;
     case 'sprite_xform':
       return Math.max(32, 32 * Math.abs(integer(3)) ** 2);
+    case 'sprite_region': {
+      if ([3, 4, 7, 8].some((index) => integer(index) <= 0)) return 1;
+      return Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(1, Math.ceil((integer(7) * integer(8)) / 4)),
+      );
+    }
+    case 'texture_line': {
+      const samples =
+        Math.max(Math.abs(integer(3) - integer(1)), Math.abs(integer(4) - integer(2))) + 1;
+      return Math.min(Number.MAX_SAFE_INTEGER, 2 + Math.ceil(samples / 2));
+    }
     case 'map':
       return 128;
     case 'print':
@@ -709,53 +739,6 @@ function readInteger(value: unknown, sourceSpan: SourceSpan): number {
     throw new RuntimeFault('M019009', 'console arguments must be safe integers', sourceSpan);
   }
   return value;
-}
-
-function readWorkerSnapshot(value: unknown): {
-  revision: 1 | 2 | 3 | 4 | 5 | 6;
-  machine: unknown;
-  save: SaveValues | SaveSnapshot;
-  graphics: unknown;
-  audio: unknown;
-  pendingSaveWrites: readonly SaveWrite[];
-  memory: unknown;
-} {
-  if (
-    !isRecord(value) ||
-    (value.revision === 6 ? !isConsoleRuntimeSnapshot(value) : !isLegacyWorkerSnapshot(value))
-  ) {
-    throw new RuntimeFault('M019103', 'invalid worker snapshot', { start: 0, end: 0 });
-  }
-  return {
-    revision: value.revision as 1 | 2 | 3 | 4 | 5 | 6,
-    machine: value.machine,
-    save: value.save as SaveValues | SaveSnapshot,
-    graphics: value.graphics,
-    audio: value.audio,
-    pendingSaveWrites:
-      value.revision === 1 ? [] : (value.pendingSaveWrites as readonly SaveWrite[]),
-    memory: value.memory,
-  };
-}
-
-function isLegacyWorkerSnapshot(value: Record<string, unknown>): boolean {
-  if (
-    !isMachineSnapshot(value.machine) ||
-    value.machine.revision !== (value.revision === 5 ? 2 : 1) ||
-    !isSaveValues(value.save)
-  )
-    return false;
-  if (value.revision === 1) return Object.keys(value).length === 3;
-  if (value.revision !== 2 && value.revision !== 3 && value.revision !== 4 && value.revision !== 5)
-    return false;
-  return (
-    Object.keys(value).length === (value.revision === 2 ? 6 : 7) &&
-    isGraphicsSnapshot(value.graphics) &&
-    isSynthSnapshot(value.audio) &&
-    isPendingSaveWrites(value.pendingSaveWrites, value.save) &&
-    (value.revision === 2 ||
-      (isMemorySnapshot(value.memory) && graphicsMatchesMemory(value.graphics, value.memory)))
-  );
 }
 
 function graphicsMatchesMemory(graphics: GraphicsSnapshot, memory: MemorySnapshot): boolean {

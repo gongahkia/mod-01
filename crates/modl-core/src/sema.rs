@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +31,65 @@ pub struct AnalysisOutput {
     pub symbols: Vec<Symbol>,
     pub ir: Option<IrModule>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Compiler-derived standard API metadata shared by Studio and external editors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuiltinDefinition {
+    pub name: String,
+    pub signature: String,
+    pub callable: bool,
+}
+
+/// Returns the complete current API from the same registrations used by type checking.
+#[must_use]
+pub fn builtin_definitions() -> &'static [BuiltinDefinition] {
+    static DEFINITIONS: OnceLock<Vec<BuiltinDefinition>> = OnceLock::new();
+    DEFINITIONS.get_or_init(|| {
+        let source = SourceFile::new(crate::FileId(0), "builtins.modl", "");
+        let parsed = parse(&source);
+        let assets = AssetCatalog::default();
+        let mut analyzer = Analyzer::new(&parsed.module, &assets);
+        analyzer.install_builtins();
+        let mut definitions = analyzer
+            .symbols
+            .iter()
+            .map(|symbol| {
+                let (signature, callable) = if let Type::Function(function) = &symbol.r#type {
+                    (
+                        format!(
+                            "fn {}({}) -> {}",
+                            symbol.name,
+                            function
+                                .parameters
+                                .iter()
+                                .map(|parameter| analyzer.describe_type(parameter))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            analyzer.describe_type(&function.return_type)
+                        ),
+                        true,
+                    )
+                } else {
+                    (
+                        format!(
+                            "{}: {}",
+                            symbol.name,
+                            analyzer.describe_type(&symbol.r#type)
+                        ),
+                        false,
+                    )
+                };
+                BuiltinDefinition {
+                    name: symbol.name.clone(),
+                    signature,
+                    callable,
+                }
+            })
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| left.name.cmp(&right.name));
+        definitions
+    })
 }
 
 /// Parses, resolves, type-checks, and lowers one MODL module to typed IR.
@@ -173,6 +235,81 @@ impl<'syntax> Analyzer<'syntax> {
         self.install_display_builtins();
         self.install_runtime_builtins();
         self.install_builtin_values();
+        self.install_math_builtins();
+        self.install_text_builtins();
+        self.builtin("bit_not", vec![Type::Int], Type::Int);
+        for name in [
+            "bit_and", "bit_or", "bit_xor", "bit_shl", "bit_shr", "bit_ushr",
+        ] {
+            self.builtin(name, vec![Type::Int, Type::Int], Type::Int);
+        }
+        self.install_memory_builtins();
+    }
+
+    fn install_text_builtins(&mut self) {
+        self.builtin(
+            "format_int",
+            vec![Type::Int, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "format_num",
+            vec![Type::Num, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "parse_int",
+            vec![Type::Text, Type::Int],
+            Type::Option(Box::new(Type::Int)),
+        );
+        self.builtin(
+            "parse_num",
+            vec![Type::Text],
+            Type::Option(Box::new(Type::Num)),
+        );
+        self.builtin("text_length", vec![Type::Text], Type::Int);
+        self.builtin(
+            "text_slice",
+            vec![Type::Text, Type::Int, Type::Int],
+            Type::Text,
+        );
+        self.builtin(
+            "text_code",
+            vec![Type::Text, Type::Int],
+            Type::Option(Box::new(Type::Int)),
+        );
+        self.builtin(
+            "text_char",
+            vec![Type::Int],
+            Type::Option(Box::new(Type::Text)),
+        );
+        self.builtin(
+            "text_pad",
+            vec![Type::Text, Type::Int, Type::Text],
+            Type::Text,
+        );
+        self.builtin(
+            "text_split",
+            vec![Type::Text, Type::Text],
+            Type::List {
+                element: Box::new(Type::Text),
+                capacity: 256,
+            },
+        );
+        self.builtin("list_length", vec![Type::Unknown], Type::Int);
+    }
+
+    fn install_math_builtins(&mut self) {
+        for (name, count) in [("abs", 1), ("min", 2), ("max", 2), ("clamp", 3)] {
+            self.builtin(name, vec![Type::Unknown; count], Type::Unknown);
+        }
+        for name in ["floor", "ceil", "round", "trunc"] {
+            self.builtin(name, vec![Type::Num], Type::Int);
+        }
+        for name in ["sqrt", "sin", "cos"] {
+            self.builtin(name, vec![Type::Num], Type::Num);
+        }
+        self.builtin("atan2", vec![Type::Num, Type::Num], Type::Num);
     }
 
     fn install_shape_builtins(&mut self) {
@@ -213,6 +350,11 @@ impl<'syntax> Analyzer<'syntax> {
     }
 
     fn install_display_builtins(&mut self) {
+        self.install_image_builtins();
+        self.install_mapping_builtins();
+    }
+
+    fn install_image_builtins(&mut self) {
         self.builtin(
             "sprite",
             vec![Type::Asset(AssetKind::Sprite), Type::Int, Type::Int],
@@ -242,8 +384,44 @@ impl<'syntax> Analyzer<'syntax> {
             Type::Unit,
         );
         self.builtin(
+            "sprite_region",
+            vec![
+                Type::Asset(AssetKind::Sprite),
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Bool,
+                Type::Bool,
+            ],
+            Type::Unit,
+        );
+        self.builtin(
             "map",
             vec![Type::Asset(AssetKind::Map), Type::Int, Type::Int],
+            Type::Unit,
+        );
+    }
+
+    fn install_mapping_builtins(&mut self) {
+        self.builtin(
+            "texture_line",
+            vec![
+                Type::Asset(AssetKind::Sprite),
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Int,
+                Type::Num,
+                Type::Num,
+                Type::Num,
+                Type::Num,
+                Type::Bool,
+            ],
             Type::Unit,
         );
         self.builtin(
@@ -271,6 +449,14 @@ impl<'syntax> Analyzer<'syntax> {
         self.builtin("clip_reset", Vec::new(), Type::Unit);
         self.builtin("pal", vec![Type::Color, Type::Color], Type::Unit);
         self.builtin("pal_reset", Vec::new(), Type::Unit);
+        self.builtin("palt", vec![Type::Color, Type::Bool], Type::Unit);
+        self.builtin("palt_reset", Vec::new(), Type::Unit);
+        self.builtin(
+            "fill_pattern",
+            vec![Type::Int, Type::Color, Type::Bool],
+            Type::Unit,
+        );
+        self.builtin("fill_pattern_reset", Vec::new(), Type::Unit);
         self.builtin("raster_scroll", vec![Type::Int, Type::Int], Type::Unit);
         self.builtin(
             "dither",
@@ -312,6 +498,10 @@ impl<'syntax> Analyzer<'syntax> {
             vec![Type::Num, Type::Num, Type::Num, Type::Num],
             Type::Rect,
         );
+        self.builtin("menu_item", vec![Type::Int, Type::Text], Type::Unit);
+        self.builtin("load_cart", vec![Type::Text, Type::Text], Type::Unit);
+        self.builtin("cart_parameter", vec![], Type::Text);
+        self.builtin("reload_assets", vec![Type::Text], Type::Unit);
     }
 
     fn install_builtin_values(&mut self) {
@@ -713,7 +903,7 @@ impl<'syntax> Analyzer<'syntax> {
                 format!("`on {:?}` is declared more than once", callback.kind).to_lowercase(),
             );
         }
-        let expected = if callback.kind == CallbackKind::Raster {
+        let expected = if matches!(callback.kind, CallbackKind::Raster | CallbackKind::Menu) {
             vec![Type::Int]
         } else {
             Vec::new()
@@ -732,6 +922,17 @@ impl<'syntax> Analyzer<'syntax> {
                 )
                 .with_primary_label("callback signature does not match the system callback"),
             );
+        }
+        for (parameter, expected_type) in callback.parameters.iter().zip(&expected) {
+            let declared = self.resolve_type(&parameter.type_annotation);
+            if declared != *expected_type && declared != Type::Error {
+                self.type_mismatch(
+                    parameter.span,
+                    &declared,
+                    expected_type,
+                    "callback parameter",
+                );
+            }
         }
         self.check_routine(
             None,
@@ -1196,6 +1397,7 @@ impl<'syntax> Analyzer<'syntax> {
                 );
                 let r#type = match operator {
                     UnaryOperator::Not if operand.r#type == Type::Bool => Type::Bool,
+                    UnaryOperator::BitNot if operand.r#type == Type::Int => Type::Int,
                     UnaryOperator::Negate | UnaryOperator::Positive
                         if operand.r#type.is_numeric() =>
                     {
@@ -1285,10 +1487,7 @@ impl<'syntax> Analyzer<'syntax> {
             return error_expression(span);
         }
         let name = &path[0];
-        let Some(symbol) = self
-            .lookup(&name.value)
-            .or_else(|| self.memory_builtin(&name.value))
-        else {
+        let Some(symbol) = self.lookup(&name.value) else {
             self.diagnostics.push(
                 Diagnostic::error(
                     "M013002",
@@ -1306,43 +1505,31 @@ impl<'syntax> Analyzer<'syntax> {
         }
     }
 
-    fn memory_builtin(&mut self, name: &str) -> Option<SymbolId> {
-        if name == "font_print" {
-            // Lazy V1 installation preserves every alpha program's generated symbol IDs.
-            self.builtin(
-                "font_print",
-                vec![
-                    Type::Asset(AssetKind::Font),
-                    Type::Text,
-                    Type::Int,
-                    Type::Int,
-                    Type::Color,
-                ],
-                Type::Unit,
-            );
-            return self.lookup(name);
+    fn install_memory_builtins(&mut self) {
+        self.builtin(
+            "font_print",
+            vec![
+                Type::Asset(AssetKind::Font),
+                Type::Text,
+                Type::Int,
+                Type::Int,
+                Type::Color,
+            ],
+            Type::Unit,
+        );
+        self.builtin("visual_id", vec![Type::Text], Type::Int);
+        self.builtin("audio_id", vec![Type::Text], Type::Int);
+        for (name, count, return_type) in [
+            ("mem_read", 1, Type::Int),
+            ("mem_read16", 1, Type::Int),
+            ("mem_write", 2, Type::Unit),
+            ("mem_write16", 2, Type::Unit),
+            ("mem_copy", 3, Type::Unit),
+            ("mem_fill", 3, Type::Unit),
+            ("save_commit", 0, Type::Unit),
+        ] {
+            self.builtin(name, vec![Type::Int; count], return_type);
         }
-        if name == "visual_id" {
-            self.builtin("visual_id", vec![Type::Text], Type::Int);
-            return self.lookup(name);
-        }
-        if name == "audio_id" {
-            self.builtin("audio_id", vec![Type::Text], Type::Int);
-            return self.lookup(name);
-        }
-        let (name, count, return_type) = match name {
-            "mem_read" => ("mem_read", 1, Type::Int),
-            "mem_read16" => ("mem_read16", 1, Type::Int),
-            "mem_write" => ("mem_write", 2, Type::Unit),
-            "mem_write16" => ("mem_write16", 2, Type::Unit),
-            "mem_copy" => ("mem_copy", 3, Type::Unit),
-            "mem_fill" => ("mem_fill", 3, Type::Unit),
-            "save_commit" => ("save_commit", 0, Type::Unit),
-            _ => return None,
-        };
-        // lazy installation preserves alpha symbol IDs and existing user-defined names.
-        self.builtin(name, vec![Type::Int; count], return_type);
-        self.lookup(name)
     }
 
     fn is_raster_builtin(name: &str) -> bool {
@@ -1465,6 +1652,12 @@ impl<'syntax> Analyzer<'syntax> {
             BinaryOperator::Range if left.r#type == Type::Int && right.r#type == Type::Int => {
                 Type::Range
             }
+            op if op.bitwise_call().is_some()
+                && left.r#type == Type::Int
+                && right.r#type == Type::Int =>
+            {
+                Type::Int
+            }
             BinaryOperator::Add
             | BinaryOperator::Subtract
             | BinaryOperator::Multiply
@@ -1564,7 +1757,10 @@ impl<'syntax> Analyzer<'syntax> {
         };
         let callee_name = self.symbol(callee_symbol).name.clone();
         let special_builtin = self.symbol(callee_symbol).kind == SymbolKind::Builtin
-            && matches!(callee_name.as_str(), "some" | "is_some" | "unwrap_or");
+            && matches!(
+                callee_name.as_str(),
+                "some" | "is_some" | "unwrap_or" | "abs" | "min" | "max" | "clamp" | "list_length"
+            );
         let arguments = arguments
             .iter()
             .enumerate()
@@ -1578,7 +1774,7 @@ impl<'syntax> Analyzer<'syntax> {
             })
             .collect::<Vec<_>>();
         let return_type = if special_builtin {
-            self.check_option_builtin(&callee_name, &arguments, span)
+            self.check_special_builtin(&callee_name, &arguments, span)
         } else {
             (*signature.return_type).clone()
         };
@@ -1611,13 +1807,45 @@ impl<'syntax> Analyzer<'syntax> {
         }
     }
 
-    fn check_option_builtin(
+    fn check_special_builtin(
         &mut self,
         name: &str,
         arguments: &[IrExpression],
         call_span: Span,
     ) -> Type {
         match name {
+            "list_length" => {
+                if let Some(argument) = arguments.first()
+                    && !matches!(
+                        argument.r#type,
+                        Type::List { .. } | Type::Array { .. } | Type::Error
+                    )
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        "M013101",
+                        argument.span,
+                        "list_length requires a fixed-capacity list or array",
+                    ));
+                }
+                Type::Int
+            }
+            "abs" | "min" | "max" | "clamp" => {
+                let mut result = Type::Int;
+                for argument in arguments {
+                    if !argument.r#type.is_numeric() && !argument.r#type.is_error() {
+                        self.type_mismatch(
+                            argument.span,
+                            &argument.r#type,
+                            &Type::Num,
+                            "numeric helper argument",
+                        );
+                        result = Type::Error;
+                    } else if argument.r#type == Type::Num && result != Type::Error {
+                        result = Type::Num;
+                    }
+                }
+                result
+            }
             "some" => Type::Option(Box::new(
                 arguments
                     .first()
@@ -1813,12 +2041,16 @@ impl<'syntax> Analyzer<'syntax> {
     fn literal_type(&mut self, literal: &Literal, expected: Option<&Type>, span: Span) -> Type {
         match literal {
             Literal::Int(value) if expected == Some(&Type::Color) => {
-                if (0..32).contains(value) {
+                if (0..256).contains(value) {
                     Type::Color
                 } else {
                     self.diagnostics.push(
-                        Diagnostic::error("M013119", span, "colour index must be between 0 and 31")
-                            .with_primary_label("outside the fixed master palette"),
+                        Diagnostic::error(
+                            "M013119",
+                            span,
+                            "colour index must be between 0 and 255",
+                        )
+                        .with_primary_label("outside the fixed master palette"),
                     );
                     Type::Error
                 }
@@ -1858,6 +2090,13 @@ impl<'syntax> Analyzer<'syntax> {
                     (UnaryOperator::Negate, ConstantValue::Int(value)) => {
                         value.checked_neg().map(ConstantValue::Int)
                     }
+                    (UnaryOperator::BitNot, ConstantValue::Int(value)) => {
+                        constant_bits(value).map(|value| {
+                            ConstantValue::Int(i64::from(i32::from_le_bytes(
+                                (!value).to_le_bytes(),
+                            )))
+                        })
+                    }
                     (UnaryOperator::Negate, ConstantValue::Num(value)) => {
                         Some(ConstantValue::Num(-value))
                     }
@@ -1887,6 +2126,29 @@ impl<'syntax> Analyzer<'syntax> {
         right: ConstantValue,
     ) -> Option<ConstantValue> {
         match (left, operator, right) {
+            (ConstantValue::Int(left), op, ConstantValue::Int(right))
+                if op.bitwise_call().is_some() =>
+            {
+                let left = constant_bits(left)?;
+                let right_bits = constant_bits(right)?;
+                let shift = u32::try_from(right).ok().filter(|value| *value < 32);
+                let value = match op {
+                    BinaryOperator::BitAnd => left & right_bits,
+                    BinaryOperator::BitOr => left | right_bits,
+                    BinaryOperator::BitXor => left ^ right_bits,
+                    BinaryOperator::ShiftLeft => left.wrapping_shl(shift?),
+                    BinaryOperator::ShiftRight => u32::from_le_bytes(
+                        (i32::from_le_bytes(left.to_le_bytes()) >> shift?).to_le_bytes(),
+                    ),
+                    BinaryOperator::ShiftRightUnsigned => {
+                        return Some(ConstantValue::Int(i64::from(left >> shift?)));
+                    }
+                    _ => return None,
+                };
+                Some(ConstantValue::Int(i64::from(i32::from_le_bytes(
+                    value.to_le_bytes(),
+                ))))
+            }
             (ConstantValue::Bool(left), BinaryOperator::And, ConstantValue::Bool(right)) => {
                 Some(ConstantValue::Bool(left && right))
             }
@@ -2233,6 +2495,14 @@ impl<'syntax> Analyzer<'syntax> {
     }
 }
 
+fn constant_bits(value: i64) -> Option<u32> {
+    u32::try_from(value).ok().or_else(|| {
+        i32::try_from(value)
+            .ok()
+            .map(|value| u32::from_le_bytes(value.to_le_bytes()))
+    })
+}
+
 fn error_expression(span: Span) -> IrExpression {
     IrExpression {
         kind: IrExpressionKind::Error,
@@ -2403,7 +2673,7 @@ on draw:
     }
 
     #[test]
-    fn memory_builtins_are_typed_without_reserving_existing_user_names() {
+    fn memory_builtins_are_typed_and_reserved_like_the_rest_of_the_api() {
         let invalid = analyze("on draw:\n  mem_write(true, 7)\n", &AssetCatalog::default());
         assert!(
             invalid
@@ -2434,17 +2704,119 @@ on draw:
             &AssetCatalog::default(),
         );
         assert!(
-            shadowed.diagnostics.is_empty(),
-            "{:#?}",
-            shadowed.diagnostics
-        );
-        assert!(
             shadowed
-                .symbols
+                .diagnostics
                 .iter()
-                .any(|symbol| symbol.name == "mem_read"
-                    && symbol.kind == crate::ir::SymbolKind::Function)
+                .any(|diagnostic| diagnostic.code == "M013001")
         );
+    }
+
+    #[test]
+    fn standard_api_metadata_matches_the_complete_compiler_symbol_table() {
+        let analysis = analyze("", &AssetCatalog::default());
+        let definitions = super::builtin_definitions();
+        assert_eq!(definitions.len(), analysis.symbols.len());
+        assert!(
+            definitions
+                .windows(2)
+                .all(|pair| pair[0].name < pair[1].name)
+        );
+        for symbol in &analysis.symbols {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.name == symbol.name)
+                .unwrap();
+            assert_eq!(
+                definition.callable,
+                matches!(symbol.r#type, crate::Type::Function(_))
+            );
+            assert!(definition.signature.contains(&symbol.name));
+        }
+        for name in [
+            "font_print",
+            "mem_copy",
+            "audio_id",
+            "save_commit",
+            "sqrt",
+            "text_split",
+            "bit_ushr",
+        ] {
+            assert!(definitions.iter().any(|definition| definition.name == name));
+        }
+        assert_eq!(
+            definitions
+                .iter()
+                .find(|definition| definition.name == "parse_num")
+                .unwrap()
+                .signature,
+            "fn parse_num(Text) -> Option[Num]"
+        );
+    }
+
+    #[test]
+    fn bit_operators_share_word_rules_in_constants_and_runtime_ir() {
+        let valid = analyze(
+            "assert 1 << 2 + 1 == 8\nassert ~0 == -1\nassert -1 >>> 0 == 4294967295\nassert 1 | 2 ^ 3 & 6 == 1\non start:\n  let word = 1 << 31\n  assert word >> 31 == -1\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "on start:\n  let bad = 1 & true\n  let worse = ~1.5\n  let count = 1 << 2.0\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013102")
+                .count(),
+            3
+        );
+        let overflow = analyze("assert 1 << 32 == 1\n", &AssetCatalog::default());
+        assert!(!overflow.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn text_helpers_return_typed_options_and_bounded_collections() {
+        let valid = analyze(
+            "state number: Option[Int] = parse_int(\"ff\", 16)\nstate real: Option[Num] = parse_num(\"1.25\")\nstate parts: List[Text, 256] = text_split(\"a,b\", \",\")\non start:\n  let label = format_int(unwrap_or(number, 0), 10, 4)\n  assert list_length(parts) == 2\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "on start:\n  let bad = text_slice(1, 0, 1)\n  let not_a_list = list_length(\"hi\")\n  let wrong_fallback = unwrap_or(parse_int(\"7\", 10), false)\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013101")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn numeric_helpers_preserve_integer_types_and_reject_non_numeric_arguments() {
+        let valid = analyze(
+            "fn small() -> Int:\n  return min(abs(-7), clamp(12, 1, 10))\nfn rounded() -> Int:\n  return round(sqrt(max(small(), 1.5)))\n",
+            &AssetCatalog::default(),
+        );
+        assert!(valid.diagnostics.is_empty(), "{:#?}", valid.diagnostics);
+        let invalid = analyze(
+            "fn not_int() -> Int:\n  return min(1.5, 2)\non start:\n  let bad = abs(true)\n  let worse = clamp(1, \"two\", 3)\n  let missing = atan2(1)\n",
+            &AssetCatalog::default(),
+        );
+        assert_eq!(
+            invalid
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == "M013101")
+                .count(),
+            3
+        );
+        assert!(invalid.diagnostics.iter().any(|d| d.code == "M013103"));
     }
 
     #[test]

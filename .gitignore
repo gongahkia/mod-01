@@ -6,13 +6,8 @@ target/
 node_modules/
 dist/
 coverage/
-playwright-report/
 test-results/
 *.log
 .DS_Store
 .vite/
-crates/modl-wasm/pkg/
-apps/studio/public/generated/
-apps/studio/public/cartridges/
 output/
-.playwright-cli/

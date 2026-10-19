@@ -1,13 +1,9 @@
 # Tutorial: build a playable cartridge
 
-For the in-console five-to-ten-minute route, boot Studio and enter `load modl-tutorial`, `run`.
-FIRST SIGNAL advances from a pixel through drawing, input, animation, production synth, the 8 KiB
-application save, and packing. It is an ordinary source-visible MODL cartridge: stop with
-Shift+Escape and use `edit` or `inspect` to see every line. The repository walkthrough below builds
-a slightly larger game from scratch.
-
-This builds a complete source-only catching game, runs it locally, and exports one offline HTML
-file. Commands assume the repository toolchain from the README.
+Open `cartridges/modl-tutorial/cart.m01w` with native Studio for the playable
+FIRST SIGNAL tour. Its source is editable and inspectable. The walkthrough below
+builds a small catching game with the same public facilities. Commands assume
+the README toolchain and a built native player.
 
 ## 1. Create the project
 
@@ -15,7 +11,8 @@ file. Commands assume the repository toolchain from the README.
 cargo run -p mod01-cli -- new relay-catch --title "RELAY CATCH"
 ```
 
-Keep the generated `cart.toml`. Replace `relay-catch/src/main.modl` with:
+Open `relay-catch/cart.m01w`. Replace the `source` value of its
+`src/main.modl` module with the following (retain the surrounding TOML quotes):
 
 ```modl
 // RELAY CATCH
@@ -95,22 +92,23 @@ half-open ranges. `rng_int` is deterministic and `btnp` is true only on the pres
 
 ```sh
 cargo run -p mod01-cli -- check relay-catch
-cargo run -p mod01-cli -- fmt --check relay-catch/src/main.modl
+cargo run -p mod01-cli -- fmt --check relay-catch
 cargo run -p mod01-cli -- run relay-catch
 ```
 
-`run` writes `relay-catch/dist/relay-catch.html` and opens it through `xdg-open`. Use `--no-open` in
-CI. In the browser Studio, `import` accepts the packed file produced below; `edit`, `run`, `debug`,
-and `inspect` then operate on the same compiler representation.
+`run` launches the native game surface. Use `--headless --frames 120` for
+a deterministic non-graphical trace. Open the same workcart in native Studio to
+edit, run, debug or inspect its compiler representation.
 
 ## 3. Pack and export
 
 ```sh
 cargo run -p mod01-cli -- pack relay-catch
-cargo run -p mod01-cli -- export html relay-catch
+cargo run -p mod01-cli -- export png relay-catch --output relay-catch.m01c.png
 ```
 
-The `.m01c` contains the original MODL, compiled JavaScript, source map, integrity inventory, and
-manifest. The standalone HTML `SOURCE` button shows the original module and needs no server after
-download. Add source-visible JSON graphics or synth assets using [ASSETS.md](ASSETS.md), declare
-them in `cart.toml`, and reference them as typed handles such as `#hero`.
+The packed cartridge preserves the exact workcart, original source/assets,
+compiler identity and optional JS/source map. PNG contains those exact packed
+bytes. Add assets as embedded JSON blocks in the workcart, reference them as typed
+handles such as `#hero`, and see [ASSETS.md](ASSETS.md). Native game packaging is
+documented in [NATIVE_GAMES.md](NATIVE_GAMES.md).

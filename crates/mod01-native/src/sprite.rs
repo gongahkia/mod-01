@@ -26,16 +26,12 @@ fn serialize_pixels<S: Serializer>(pixels: &[u8], serializer: S) -> Result<S::Ok
 }
 
 fn deserialize_pixels<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum EncodedPixels {
-        Base64(String),
-        Legacy(Vec<u8>),
+    let value = String::deserialize(deserializer)?;
+    let bytes = STANDARD.decode(&value).map_err(D::Error::custom)?;
+    if STANDARD.encode(&bytes) != value {
+        return Err(D::Error::custom("pixels must use canonical base64"));
     }
-    match EncodedPixels::deserialize(deserializer)? {
-        EncodedPixels::Base64(value) => STANDARD.decode(value).map_err(D::Error::custom),
-        EncodedPixels::Legacy(value) => Ok(value),
-    }
+    Ok(bytes)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -132,18 +128,15 @@ impl SpriteDocument {
         pixels
     }
 
-    pub fn indexed_frames(&self, palette: &[[u8; 3]; 256]) -> Vec<Vec<u8>> {
+    pub fn indexed_frames(&self) -> Vec<Vec<u8>> {
         (0..self.frames.len())
             .map(|frame| {
                 self.composite(frame)
-                    .chunks_exact(4)
-                    .map(|pixel| {
-                        if pixel[3] <= 127 {
-                            0
-                        } else {
-                            nearest([pixel[0], pixel[1], pixel[2]], palette)
-                        }
-                    })
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(modl_core::asset_import::palette_index)
                     .collect()
             })
             .collect()
@@ -162,6 +155,34 @@ impl Layer {
 }
 
 impl SpriteEditor {
+    pub fn retained_bytes(&self) -> usize {
+        fn document_bytes(document: &SpriteDocument) -> usize {
+            document.frames.capacity() * std::mem::size_of::<SpriteFrame>()
+                + document
+                    .frames
+                    .iter()
+                    .map(|frame| {
+                        frame.layers.capacity() * std::mem::size_of::<Layer>()
+                            + frame
+                                .layers
+                                .iter()
+                                .map(|layer| layer.name.capacity() + layer.pixels.capacity())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+        }
+        std::mem::size_of::<Self>()
+            + self.name.capacity()
+            + self.asset_path.capacity()
+            + document_bytes(&self.document)
+            + self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .map(document_bytes)
+                .sum::<usize>()
+    }
+
     pub fn new(name: String, asset_path: String, document: SpriteDocument) -> Result<Self, String> {
         document.validate()?;
         Ok(Self {
@@ -475,7 +496,14 @@ impl SpriteEditor {
         if !(1..=MAX_AXIS).contains(&width) || !(1..=MAX_AXIS).contains(&height) {
             return;
         }
+        if self.document.width == width && self.document.height == height {
+            return;
+        }
         self.remember();
+        self.resize_pixels(width, height);
+    }
+
+    fn resize_pixels(&mut self, width: usize, height: usize) {
         let old_width = self.document.width;
         let old_height = self.document.height;
         for frame in &mut self.document.frames {
@@ -515,53 +543,24 @@ impl SpriteEditor {
     }
 
     pub fn import_png(&mut self, bytes: &[u8]) -> Result<(), String> {
-        let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-            .map_err(|error| error.to_string())?
-            .into_rgba8();
-        let (width, height) = image.dimensions();
-        if width == 0 || height == 0 || width as usize > MAX_AXIS || height as usize > MAX_AXIS {
-            return Err("PNG must be between 1×1 and 128×128".to_owned());
+        use modl_core::asset_import::{PngAssetKind, decode_png};
+        if self.active_layer().locked {
+            return Err("UNLOCK THE CURRENT LAYER BEFORE IMPORTING".to_owned());
         }
-        self.resize(width as usize, height as usize);
+        let source = decode_png(bytes, PngAssetKind::Sprite).map_err(|error| error.to_string())?;
         self.remember();
-        self.active_layer_mut().pixels = image.into_raw();
+        if self.document.width != source.width || self.document.height != source.height {
+            self.resize_pixels(source.width, source.height);
+        }
+        self.active_layer_mut().pixels = source.pixels;
+        self.selection = None;
         self.dirty = true;
         Ok(())
     }
 }
 
 pub fn palette() -> [[u8; 3]; 256] {
-    let mut result = [[0; 3]; 256];
-    result[..32].copy_from_slice(&super::PALETTE);
-    for index in 0..216 {
-        let red = index / 36;
-        let green = (index / 6) % 6;
-        let blue = index % 6;
-        result[32 + index] = [(red * 51) as u8, (green * 51) as u8, (blue * 51) as u8];
-    }
-    for index in 0..8 {
-        let shade = (index * 29 + 26) as u8;
-        result[248 + index] = [shade; 3];
-    }
-    result
-}
-
-fn nearest(rgb: [u8; 3], palette: &[[u8; 3]; 256]) -> u8 {
-    let mut best = 1;
-    let mut best_distance = u32::MAX;
-    for (index, color) in palette.iter().enumerate().skip(1) {
-        let distance = (0..3)
-            .map(|channel| {
-                let difference = i32::from(rgb[channel]) - i32::from(color[channel]);
-                (difference * difference) as u32
-            })
-            .sum();
-        if distance < best_distance {
-            best = index;
-            best_distance = distance;
-        }
-    }
-    best as u8
+    *modl_core::hardware::master_palette()
 }
 
 fn blend(under: [u8; 4], over: [u8; 4]) -> [u8; 4] {
@@ -594,6 +593,50 @@ mod tests {
     use super::{DEFAULT_AXIS, MAX_AXIS, SpriteDocument, SpriteEditor, Tool, palette};
 
     #[test]
+    fn png_import_matches_the_shared_converter_and_resizes_as_one_undo_transaction() {
+        use modl_core::asset_import::{PngAssetKind, decode_png, indexed_asset};
+        let pixels = vec![
+            119, 37, 92, 255, 23, 20, 31, 255, 0, 255, 0, 127, 0, 255, 0, 128, 9, 55, 129, 0, 244,
+            233, 206, 255, 0, 0, 0, 255, 255, 255, 255, 255,
+        ];
+        let image = image::RgbaImage::from_raw(4, 2, pixels.clone()).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+        let decoded = decode_png(&png, PngAssetKind::Sprite).unwrap();
+        let expected = indexed_asset(&decoded, PngAssetKind::Sprite, None).unwrap();
+        let mut editor = SpriteEditor::new(
+            "hero".into(),
+            "assets/hero.m01g".into(),
+            SpriteDocument::new(2, 1),
+        )
+        .unwrap();
+        let before = serde_json::to_value(&editor.document).unwrap();
+        editor.import_png(&png).unwrap();
+        assert_eq!(editor.active_layer().pixels, pixels);
+        assert_eq!(
+            serde_json::to_value(editor.document.indexed_frames()).unwrap(),
+            expected["frames"]
+        );
+        editor.undo();
+        assert_eq!(serde_json::to_value(&editor.document).unwrap(), before);
+        editor.undo();
+        assert_eq!(serde_json::to_value(&editor.document).unwrap(), before);
+        editor.redo();
+        assert_eq!(editor.document.width, 4);
+        assert_eq!(editor.active_layer().pixels, pixels);
+        let current = serde_json::to_value(&editor.document).unwrap();
+        let history = (editor.undo.len(), editor.redo.len());
+        let mut huge = png.clone();
+        huge[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(editor.import_png(&huge).is_err());
+        assert_eq!(serde_json::to_value(&editor.document).unwrap(), current);
+        assert_eq!((editor.undo.len(), editor.redo.len()), history);
+        editor.active_layer_mut().locked = true;
+        assert!(editor.import_png(&png).is_err());
+    }
+
+    #[test]
     fn revision_two_supports_the_default_and_maximum_sprite_detail() {
         assert_eq!(DEFAULT_AXIS, 64);
         assert_eq!(MAX_AXIS, 128);
@@ -607,22 +650,21 @@ mod tests {
         let last = palette()[255];
         editor.color = [last[0], last[1], last[2], 255];
         editor.paint_line((127, 127), (127, 127));
-        let frames = editor.document.indexed_frames(&palette());
+        let frames = editor.document.indexed_frames();
         assert_eq!(frames[0].len(), 128 * 128);
         assert_eq!(frames[0][128 * 128 - 1], 255);
         assert_eq!(frames[0][0], 0);
     }
 
     #[test]
-    fn layered_source_uses_compact_pixels_and_reads_legacy_arrays() {
+    fn layered_source_requires_compact_canonical_pixels() {
         let document = SpriteDocument::new(64, 64);
         let compact = serde_json::to_vec(&document).unwrap();
         assert!(compact.len() < 23_000);
         let restored: SpriteDocument = serde_json::from_slice(&compact).unwrap();
         assert_eq!(restored.frames[0].layers[0].pixels.len(), 64 * 64 * 4);
         let old = r#"{"revision":1,"width":1,"height":1,"frames":[{"layers":[{"name":"Base","visible":true,"locked":false,"pixels":[1,2,3,255]}]}]}"#;
-        let restored: SpriteDocument = serde_json::from_str(old).unwrap();
-        assert_eq!(restored.frames[0].layers[0].pixels, [1, 2, 3, 255]);
+        assert!(serde_json::from_str::<SpriteDocument>(old).is_err());
     }
 
     #[test]
@@ -642,7 +684,7 @@ mod tests {
         assert_eq!(composite[3], 255);
         assert!(composite[0] > 0 && composite[2] > 0);
         assert_eq!(composite[7], 0);
-        assert_ne!(editor.document.indexed_frames(&palette())[0][0], 0);
+        assert_ne!(editor.document.indexed_frames()[0][0], 0);
     }
 
     #[test]

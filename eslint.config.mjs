@@ -12,8 +12,6 @@ export default tseslint.config(
       '**/dist/**',
       '**/coverage/**',
       '**/node_modules/**',
-      'apps/studio/public/generated/**',
-      'crates/modl-wasm/pkg/**',
       'packages/runtime/standalone/**',
       'packages/runtime/vite.*.config.ts',
     ],

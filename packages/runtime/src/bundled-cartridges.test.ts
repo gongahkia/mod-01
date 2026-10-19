@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { decodeRuntimeAssets, type ProjectAssetDeclaration } from './asset-codec';
 import { HARDWARE } from './hardware';
@@ -39,17 +40,22 @@ const catalogs: Readonly<Record<string, Readonly<Record<string, ProjectAssetDecl
 };
 
 describe('bundled cartridge assets', () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url));
+  const cli = `${root}target/debug/mod01`;
+  beforeAll(() => {
+    execFileSync('cargo', ['build', '--quiet', '-p', 'mod01-cli'], { cwd: root });
+  }, 120_000);
   for (const [id, catalog] of Object.entries(catalogs)) {
     it(`validates ${id} through the public asset decoder`, () => {
+      const view = JSON.parse(
+        execFileSync(cli, ['info', `${root}cartridges/${id}`, '--source'], { encoding: 'utf8' }),
+      ) as {
+        manifest: { assets: Record<string, ProjectAssetDeclaration> };
+        files: Record<string, number[]>;
+      };
+      expect(view.manifest.assets).toEqual(catalog);
       const files = Object.fromEntries(
-        [...Object.values(catalog).map((asset) => asset.path), 'assets/display.m01p'].map(
-          (path) => [
-            path,
-            new Uint8Array(
-              readFileSync(new URL(`../../../cartridges/${id}/${path}`, import.meta.url)),
-            ),
-          ],
-        ),
+        Object.entries(view.files).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
       );
       const assets = decodeRuntimeAssets(catalog, files, 'assets/display.m01p');
       expect(assets.visualBytes).toBeGreaterThan(0);

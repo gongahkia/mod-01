@@ -225,15 +225,13 @@ if(JSON.stringify(cartridge.snapshot())!==expected)throw new Error("replay diffe
 fn options_and_fixed_collection_indexes_execute_with_runtime_guards() {
     let valid = execute_source(
         "option-collection",
-        r#"state saved: Option[Int] = none
+        r"state saved: Option[Int] = none
 state values: List[Int, 2] = []
-state letter: Int = 0
 on start:
   values[0] = unwrap_or(saved, 7)
   saved = some(5)
   values[1] = unwrap_or(saved, 0)
-  letter = "A"[0]
-"#,
+",
     );
     assert!(
         valid.status.success(),
@@ -252,7 +250,6 @@ on start:
             .iter()
             .any(|value| value.as_array() == Some(&vec![7.into(), 5.into()]))
     );
-    assert!(values.iter().any(|value| value.as_i64() == Some(65)));
     assert!(
         values
             .iter()

@@ -1,0 +1,26 @@
+assert (1 | 2 ^ 3 & 6) == 1
+assert (1 << 2 + 1) == 8
+assert (~0) == -1
+assert (-1 >>> 0) == 4294967295
+assert (-2147483648 >> 31) == -1
+
+on start:
+  let word = 4294967295
+  assert (word & 255) == 255
+  assert (word ^ 255) == -256
+  assert (~word) == 0
+  assert (1 << 31) == -2147483648
+  assert (-2147483648 >> 31) == -1
+  assert (-1 >>> 1) == 2147483647
+  assert (-1 >>> 0) == word
+  assert bit_or(16, 3) == 19
+  assert bit_and(31, 7) == 7
+  assert bit_xor(31, 7) == 24
+  assert bit_not(0) == -1
+  assert bit_shl(1, 4) == 16
+  assert bit_shr(-16, 2) == -4
+  assert bit_ushr(-16, 2) == 1073741820
+
+on draw:
+  clear(0)
+  pixel(12, 34, 11)

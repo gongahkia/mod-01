@@ -1,0 +1,145 @@
+use modl_core::{AssetCatalog, AssetKind, CompileMode, FileId, SourceFile, compile};
+
+#[test]
+fn region_blits_require_a_sprite_integer_rectangles_and_explicit_boolean_flips() {
+    let mut assets = AssetCatalog::default();
+    assets.insert("image", AssetKind::Sprite);
+    assets.insert("level", AssetKind::Map);
+    for (statement, valid) in [
+        (
+            "sprite_region(#image, 0, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            true,
+        ),
+        (
+            "sprite_region(#level, 0, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            false,
+        ),
+        (
+            "sprite_region(#image, 0.5, 0, 4, 4, 1, 2, 8, 6, false, true)",
+            false,
+        ),
+        (
+            "sprite_region(#image, 0, 0, 4, 4, 1, 2, 8, 6, 0, true)",
+            false,
+        ),
+    ] {
+        for mode in [CompileMode::Release, CompileMode::Debug] {
+            let source = SourceFile::new(
+                FileId(0),
+                "region.modl",
+                format!("on draw:\n  {statement}\n"),
+            );
+            let result = compile(&source, &assets, mode);
+            assert_eq!(
+                result.generated.is_some(),
+                valid,
+                "{statement}: {:?}",
+                result.analysis.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn texture_lines_require_a_sprite_integer_endpoints_numeric_sampling_and_explicit_wrap() {
+    let mut assets = AssetCatalog::default();
+    assets.insert("image", AssetKind::Sprite);
+    assets.insert("level", AssetKind::Map);
+    for (statement, valid) in [
+        (
+            "texture_line(#image, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            true,
+        ),
+        (
+            "texture_line(#level, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0.5, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0, 0, 8, 4, false, 1.0, 0.125, 0.0, true)",
+            false,
+        ),
+        (
+            "texture_line(#image, 0, 0, 8, 4, -0.5, 1.0, 0.125, 0.0, 1)",
+            false,
+        ),
+    ] {
+        for mode in [CompileMode::Release, CompileMode::Debug] {
+            let source = SourceFile::new(
+                FileId(0),
+                "texture.modl",
+                format!("on draw:\n  {statement}\n"),
+            );
+            let result = compile(&source, &assets, mode);
+            assert_eq!(
+                result.generated.is_some(),
+                valid,
+                "{statement}: {:?}",
+                result.analysis.diagnostics
+            );
+        }
+    }
+}
+
+#[test]
+fn transparency_and_patterns_are_typed_in_both_compiler_modes() {
+    let source = SourceFile::new(
+        FileId(0),
+        "drawing.modl",
+        "on draw:\n  palt(255, true)\n  palt_reset()\n  fill_pattern(65535, 255, false)\n  rect_fill(1, 2, 8, 8, 7)\n  fill_pattern_reset()\n",
+    );
+    for mode in [CompileMode::Release, CompileMode::Debug] {
+        let result = compile(&source, &AssetCatalog::default(), mode);
+        assert!(
+            result.generated.is_some(),
+            "{:?}",
+            result.analysis.diagnostics
+        );
+    }
+    for statement in [
+        "palt(256, true)",
+        "palt(1, 1)",
+        "fill_pattern(0.5, 1, false)",
+        "fill_pattern(1, true, false)",
+        "fill_pattern_reset(1)",
+    ] {
+        let source = SourceFile::new(
+            FileId(0),
+            "invalid.modl",
+            format!("on draw:\n  {statement}\n"),
+        );
+        let result = compile(&source, &AssetCatalog::default(), CompileMode::Release);
+        assert!(result.generated.is_none(), "{statement}");
+        assert!(!result.analysis.diagnostics.is_empty(), "{statement}");
+    }
+}
+
+#[test]
+fn frame_draw_state_cannot_be_changed_from_a_raster_callback() {
+    for statement in [
+        "palt(1, true)",
+        "palt_reset()",
+        "fill_pattern(1, 7, false)",
+        "fill_pattern_reset()",
+    ] {
+        let source = SourceFile::new(
+            FileId(0),
+            "invalid.modl",
+            format!("on raster(line: Int):\n  {statement}\n"),
+        );
+        let result = compile(&source, &AssetCatalog::default(), CompileMode::Release);
+        assert!(result.generated.is_none(), "{statement}");
+        assert!(
+            result
+                .analysis
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("raster")),
+            "{:?}",
+            result.analysis.diagnostics
+        );
+    }
+}

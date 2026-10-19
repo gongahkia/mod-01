@@ -1,9 +1,0 @@
-format = 1
-language = "MODL/1"
-id = "platform-start"
-title = "PLATFORM START"
-author = "@gongahkia"
-version = "0.1.0"
-entry = "src/main.modl"
-update_rate = 60
-[assets]

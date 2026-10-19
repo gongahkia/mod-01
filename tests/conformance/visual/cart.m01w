@@ -1,0 +1,278 @@
+format = 2
+file = []
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "visual-conformance"
+title = "VISUAL CONFORMANCE"
+author = "@gongahkia"
+version = "0.1.0"
+entry = "main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "main.modl"
+source = """
+// visual allocation and aliasing conformance, using only public MODL operations.
+fn word32(address: Int) -> Int:
+  return mem_read16(address) + mem_read16(address + 2) * 65536
+
+fn allocation(name: Text, index: Int) -> Int:
+  let descriptor = 655360 + visual_id(name) * 32
+  return word32(descriptor + 8) + index * 24
+
+fn data(name: Text, index: Int) -> Int:
+  return word32(allocation(name, index) + 4)
+
+on start:
+  assert visual_id("dot") == 0, "sorted sprite ID"
+  assert visual_id("level") == 1, "sorted map ID"
+  assert visual_id("terrain") == 2, "sorted tileset ID"
+  assert visual_id("absent") == -1, "unknown asset"
+  assert word32(328448) == 3, "asset count"
+  assert word32(328452) == 135, "exact visual bytes"
+  assert word32(328460) == 5, "allocation count"
+  assert data("level", 0) == data("dot", 0) + 1, "unaligned packing"
+  assert word32(allocation("level", 0) + 20) == 3, "tileset ID plus one"
+  assert mem_read16(data("level", 0) + 2) == 1, "map LE words"
+
+on update:
+  mem_write(data("dot", 0), 23)
+  mem_write16(data("level", 0), 1)
+  mem_write(data("terrain", 1), 11)
+  mem_write(data("terrain", 2) + 1, 8)
+  assert map_cell(#level, 0, 0, 0) == 1, "bus map query alias"
+  assert map_flag(#level, 0, 0, 0, 3), "bus tile flag alias"
+
+on draw:
+  assert mem_read(327760) == 1, "default transparency bit zero"
+  assert mem_read(327791) == 0, "default upper palette opaque"
+  assert mem_read(327795) == 0, "fill pattern disabled at frame reset"
+  clear(0)
+  sprite(#dot, 0, 0)
+  map(#level, 1, 0)
+  assert mem_read(102400) == 23, "bus sprite alias"
+  assert mem_read(102401) == 11, "bus tile alias"
+  assert mem_read(102402) == 9, "remaining tile pixels"
+  palt(23, true)
+  sprite(#dot, 20, 0)
+  assert mem_read(102420) == 0, "masked logical source"
+  pal(23, 7)
+  palt(23, false)
+  palt(7, true)
+  sprite(#dot, 21, 0)
+  assert mem_read(102421) == 7, "remapped target does not determine transparency"
+  palt(255, true)
+  assert mem_read(327791) == 128, "upper palette bit mask"
+  mem_write(327791, 0)
+  palt_reset()
+  pal_reset()
+  assert mem_read(327760) == 1, "explicit mask reset"
+  assert mem_read(327791) == 0, "explicit upper mask reset"
+  palt(255, true)
+  print("VISUAL BUS PASS", 4, 24, 11)
+  print("135B / 1M", 4, 34, 23)
+  fill_pattern(1, 255, false)
+  rect_fill(40, 8, 4, 4, 7)
+  assert mem_read(104360) == 255, "pattern bit zero picks second colour"
+  assert mem_read(104361) == 7, "pattern bit one picks draw colour"
+  assert mem_read16(327792) == 1, "pattern mask is little endian"
+  mem_write(327796, 1)
+  rect_fill(44, 8, 4, 4, 7)
+  assert mem_read(104364) == 0, "transparent pattern hole keeps background"
+  fill_pattern_reset()
+  pixel(44, 8, 7)
+  assert mem_read(104364) == 7, "reset returns ordinary drawing"
+  fill_pattern(65535, 255, false)
+  sprite_region(#dot, 0, 0, 1, 1, 52, 8, 6, 4, true, true)
+  assert mem_read(104372) == 23, "region ignores primitive pattern"
+  assert mem_read(105097) == 23, "stretched region reaches final pixel"
+  sprite_region(#dot, -1, 0, 2, 1, 60, 8, 4, 1, false, false)
+  assert mem_read(104380) == 0, "out of source region is skipped"
+  assert mem_read(104382) == 23, "source clipping preserves destination alignment"
+  texture_line(#dot, 70, 8, 76, 8, -0.5, 0.0, 0.25, 0.0, true)
+  assert mem_read(104390) == 23, "texture wrapping samples original sprite"
+  assert mem_read(104396) == 23, "textured line includes endpoint"
+  texture_line(#dot, 70, 9, 76, 9, -1.0, 0.0, 0.5, 0.0, false)
+  assert mem_read(104630) == 0, "non-wrapping texture samples skip outside source"
+  assert mem_read(104632) == 23, "non-wrapping texture enters source"
+"""
+
+[[asset]]
+name = "dot"
+kind = "sprite"
+path = "dot.m01g"
+payload = """
+{
+  "frames": [
+    [
+      7
+    ]
+  ],
+  "height": 1,
+  "kind": "sprite",
+  "revision": 2,
+  "width": 1
+}
+"""
+
+[[asset]]
+name = "level"
+kind = "map"
+path = "level.m01m"
+payload = """
+{"revision":1,"kind":"map","layers":[{"width":2,"height":1,"cells":[0,1],"tileSet":"terrain"}]}
+"""
+
+[[asset]]
+name = "terrain"
+kind = "tile_set"
+path = "terrain.m01g"
+payload = """
+{
+  "flags": [
+    2,
+    4
+  ],
+  "kind": "tile_set",
+  "revision": 2,
+  "tiles": [
+    [
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6
+    ],
+    [
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9,
+      9
+    ]
+  ]
+}
+"""

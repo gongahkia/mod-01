@@ -1,0 +1,75 @@
+{
+  "revision": 1,
+  "frames": [
+    {
+      "frame": 0,
+      "duration": 1,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["a"]
+        }
+      ]
+    },
+    {
+      "frame": 1,
+      "duration": 30,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["right"]
+        }
+      ]
+    },
+    {
+      "frame": 31,
+      "duration": 100,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["up"]
+        }
+      ]
+    },
+    {
+      "frame": 131,
+      "duration": 30,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["left"]
+        }
+      ]
+    },
+    {
+      "frame": 161,
+      "duration": 125,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["up"]
+        }
+      ]
+    },
+    {
+      "frame": 286,
+      "duration": 30,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["left"]
+        }
+      ]
+    },
+    {
+      "frame": 316,
+      "duration": 100,
+      "controllers": [
+        {
+          "port": 1,
+          "buttons": ["up"]
+        }
+      ]
+    }
+  ]
+}

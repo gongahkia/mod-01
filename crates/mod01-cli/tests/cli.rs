@@ -1,7 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
-    net::TcpStream,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -12,6 +11,68 @@ use serde_json::{Value, json};
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mod01"))
+}
+
+#[test]
+fn graph_is_static_original_source_compiler_data_and_does_not_need_a_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = binary()
+        .arg("graph")
+        .arg(root.join("examples/api-tour/cart.m01w"))
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let model: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(model["sources"].as_array().unwrap().len(), 2);
+    assert!(!model["edges"].as_array().unwrap().is_empty());
+    assert!(
+        model["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node| node["kind"] == "Callback")
+    );
+    assert!(model["diagnostics"].as_array().unwrap().is_empty());
+}
+
+fn write_project_file(root: &Path, relative: &str, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let path = root.join("cart.m01w");
+    let source = fs::read_to_string(&path)?;
+    let mut project = modl_core::parse_workcart(&source).map_err(std::io::Error::other)?;
+    if relative.starts_with("tests/") {
+        project.tests.retain(|test| test.path != relative);
+        let payload = String::from_utf8(bytes.as_ref().to_vec()).map_err(std::io::Error::other)?;
+        project.tests.push(modl_core::WorkcartTest {
+            name: relative.to_owned(),
+            path: relative.to_owned(),
+            kind: if Path::new(relative)
+                .extension()
+                .is_some_and(|extension| extension == "modl")
+            {
+                modl_core::WorkcartTestKind::Modl
+            } else {
+                modl_core::WorkcartTestKind::Replay
+            },
+            payload,
+        });
+    } else {
+        project
+            .files
+            .insert(relative.to_owned(), bytes.as_ref().to_vec());
+    }
+    let source = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .map_err(std::io::Error::other)?;
+    fs::write(path, source)
 }
 
 #[test]
@@ -29,6 +90,255 @@ fn check_accepts_the_positive_language_fixture() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn assets_check_and_pack_share_precise_reference_diagnostics_without_needing_node() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut project = modl_core::parse_workcart(
+        &fs::read_to_string(root.join("examples/api-tour/cart.m01w")).unwrap(),
+    )
+    .unwrap();
+    let mut map: Value = serde_json::from_slice(&project.files["assets/room.m01m"]).unwrap();
+    map["layers"][0]["tileSet"] = json!("beep");
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&map).unwrap(),
+    );
+    let mut music: Value = serde_json::from_slice(&project.files["assets/loop.m01t"]).unwrap();
+    music["patterns"]["unused"] =
+        json!({"rows":[[{"note":60,"sound":"missing_patch"},null,null,null,null,null,null,null]]});
+    project.files.insert(
+        "assets/loop.m01t".to_owned(),
+        serde_json::to_vec(&music).unwrap(),
+    );
+    let source = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    let temporary = std::env::temp_dir().join(format!(
+        "mod01-asset-report-{}-{}.m01w",
+        std::process::id(),
+        line!()
+    ));
+    fs::write(&temporary, &source).unwrap();
+    let report = binary()
+        .arg("assets")
+        .arg(&temporary)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(report.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&report.stdout).unwrap();
+    assert_eq!(report["diagnostics"].as_array().unwrap().len(), 2);
+    assert!(
+        report["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|diagnostic| diagnostic["code"] == "M014061")
+    );
+    let check = binary()
+        .arg("check")
+        .arg(&temporary)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(check.status.code(), Some(1));
+    let diagnostics = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        diagnostics.contains("assets/room.m01m:$.layers[0].tileSet"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("missing_patch"), "{diagnostics}");
+    let packed = temporary.with_extension("m01c");
+    let pack = binary()
+        .arg("pack")
+        .arg(&temporary)
+        .arg("--output")
+        .arg(&packed)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(pack.status.code(), Some(1));
+    assert!(!packed.exists());
+    assert_eq!(fs::read_to_string(&temporary).unwrap(), source);
+    fs::remove_file(&temporary).unwrap();
+}
+
+#[test]
+fn png_import_is_atomic_source_preserving_explicit_about_replacement_and_reference_safe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temporary = std::env::temp_dir().join(format!(
+        "mod01-png-import-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&temporary).unwrap();
+    let input = temporary.join("original.m01w");
+    let output = temporary.join("imported.m01w");
+    let original = fs::read_to_string(root.join("examples/api-tour/cart.m01w")).unwrap();
+    fs::write(&input, &original).unwrap();
+    let png = root.join("crates/mod01-native/assets/kenney/tile_0028.png");
+    let imported = binary()
+        .args(["import", "png"])
+        .arg(&input)
+        .arg("art")
+        .arg(&png)
+        .arg("--output")
+        .arg(&output)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    assert_eq!(fs::read_to_string(&input).unwrap(), original);
+    let edited = fs::read_to_string(&output).unwrap();
+    let project = modl_core::parse_workcart(&edited).unwrap();
+    let before = modl_core::parse_workcart(&original).unwrap();
+    assert_eq!(project.recipes, before.recipes);
+    assert_eq!(project.tests, before.tests);
+    for (path, bytes) in &before.files {
+        assert_eq!(project.files.get(path), Some(bytes));
+    }
+    assert!(project.files.contains_key("editor/sprites/art.m01paint"));
+    let duplicate = binary()
+        .args(["import", "png"])
+        .arg(&output)
+        .arg("art")
+        .arg(&png)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("--replace"));
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    let repeat = binary()
+        .args(["import", "png"])
+        .arg(&output)
+        .arg("art")
+        .arg(&png)
+        .arg("--replace")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        repeat.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeat.stderr)
+    );
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    let occupied = binary()
+        .args(["import", "png"])
+        .arg(&input)
+        .arg("another")
+        .arg(&png)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert_eq!(occupied.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    assert_png_replacement_is_reference_safe(&output, &png, &temporary, &edited);
+    fs::remove_dir_all(temporary).unwrap();
+}
+
+fn assert_png_replacement_is_reference_safe(
+    output: &Path,
+    png: &Path,
+    temporary: &Path,
+    edited: &str,
+) {
+    let mut project = modl_core::parse_workcart(edited).unwrap();
+    project.files.insert("assets/tiles.m01g".to_owned(),serde_json::to_vec(&json!({"revision":2,"kind":"tile_set","tiles":vec![vec![0;64];5],"flags":[1,2,3,4,5],"memo":"retain"})).unwrap());
+    let mut room: Value = serde_json::from_slice(&project.files["assets/room.m01m"]).unwrap();
+    room["layers"][0]["cells"][0] = json!(4);
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&room).unwrap(),
+    );
+    let valid_before = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    modl_core::pack_workcart(&valid_before).unwrap();
+    fs::write(output, &valid_before).unwrap();
+    let shrink = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("tiles")
+        .arg(png)
+        .args(["--kind", "tile-set", "--replace"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(shrink.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&shrink.stderr).contains("M014061"));
+    assert_eq!(fs::read_to_string(output).unwrap(), valid_before);
+    room["layers"][0]["cells"][0] = json!(3);
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&room).unwrap(),
+    );
+    let valid = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    fs::write(output, &valid).unwrap();
+    let replaced = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("tiles")
+        .arg(png)
+        .args(["--kind", "tile-set", "--replace"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        replaced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    let successful = fs::read_to_string(output).unwrap();
+    let result = modl_core::parse_workcart(&successful).unwrap();
+    let tiles: Value = serde_json::from_slice(&result.files["assets/tiles.m01g"]).unwrap();
+    assert_eq!(tiles["flags"], json!([1, 2, 3, 4]));
+    assert_eq!(tiles["memo"], "retain");
+    let mut huge = fs::read(png).unwrap();
+    huge[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+    let bad = temporary.join("oversized.png");
+    fs::write(&bad, huge).unwrap();
+    let failed = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("art")
+        .arg(&bad)
+        .arg("--replace")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("M014065"));
+    assert_eq!(fs::read_to_string(output).unwrap(), successful);
+    assert!(!fs::read_dir(temporary).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
 }
 
 #[test]
@@ -91,89 +401,14 @@ fn build_emits_javascript_and_source_map() {
 }
 
 #[test]
-fn export_html_and_headless_run_write_the_same_offline_player() {
-    let project =
-        std::env::temp_dir().join(format!("mod01-export-{}-{}", std::process::id(), line!()));
-    let create = binary()
-        .args([
-            "new",
-            project.to_str().expect("UTF-8 project path"),
-            "--title",
-            "EXPORT TEST",
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(create.status.success());
-    let first = project.with_extension("first.html");
-    let second = project.with_extension("second.html");
-    let zip = project.with_extension("zip");
-    let export = binary()
-        .args([
-            "export",
-            "html",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            first.to_str().expect("UTF-8 HTML path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        export.status.success(),
-        "{}",
-        String::from_utf8_lossy(&export.stderr)
-    );
-    let run = binary()
-        .args([
-            "run",
-            project.to_str().expect("UTF-8 project path"),
-            "--no-open",
-            "--output",
-            second.to_str().expect("UTF-8 HTML path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    let first_html = fs::read_to_string(&first).expect("first HTML reads");
-    assert_eq!(
-        first_html,
-        fs::read_to_string(&second).expect("second HTML reads")
-    );
-    assert!(first_html.contains("MOD-01 standalone cartridge player"));
-    assert!(first_html.contains("id=\"source-view\""));
-    assert!(first_html.contains("id=\"pause\""));
-    assert!(first_html.contains("id=\"reset\""));
-    assert!(first_html.contains("id=\"fullscreen\""));
-    assert!(!first_html.contains("https://"));
-    let zip_export = binary()
-        .args([
-            "export",
-            "zip",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            zip.to_str().expect("UTF-8 ZIP path"),
-        ])
-        .output()
-        .expect("CLI starts");
-    assert!(
-        zip_export.status.success(),
-        "{}",
-        String::from_utf8_lossy(&zip_export.stderr)
-    );
-    let zip_bytes = fs::read(&zip).expect("ZIP reads");
-    assert_eq!(&zip_bytes[..4], &[0x50, 0x4b, 0x03, 0x04]);
-    assert!(
-        zip_bytes
-            .windows(first_html.len())
-            .any(|window| window == first_html.as_bytes())
-    );
-    for path in [first, second, zip] {
-        fs::remove_file(path).expect("temporary HTML removes");
+fn browser_exports_are_not_product_commands() {
+    for format in ["html", "zip"] {
+        let result = binary()
+            .args(["export", format])
+            .output()
+            .expect("CLI starts");
+        assert_eq!(result.status.code(), Some(2));
     }
-    fs::remove_dir_all(project).expect("temporary project removes");
 }
 
 #[test]
@@ -206,7 +441,7 @@ on draw:
     )
     .expect("work-cart writes");
     let packed = cart.with_extension("m01c");
-    let html = cart.with_extension("html");
+    let png = cart.with_extension("png");
     let trace = cart.with_extension("trace.json");
     for arguments in [
         vec!["check".to_owned(), cart.display().to_string()],
@@ -218,10 +453,10 @@ on draw:
         ],
         vec![
             "export".to_owned(),
-            "html".to_owned(),
+            "png".to_owned(),
             cart.display().to_string(),
             "--output".to_owned(),
-            html.display().to_string(),
+            png.display().to_string(),
         ],
         vec![
             "run".to_owned(),
@@ -240,17 +475,18 @@ on draw:
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    assert!(
-        fs::read_to_string(&html)
-            .expect("work-cart HTML reads")
-            .contains("CARTRIDGE FORMAT/2")
+    let image =
+        modl_core::decode_cartridge_png(&fs::read(&png).expect("PNG reads")).expect("PNG decodes");
+    assert_eq!(
+        image.cartridge,
+        fs::read(&packed).expect("canonical cartridge reads")
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&fs::read(&trace).expect("trace reads"))
             .expect("trace is JSON")["summary"]["completedFrames"],
         2
     );
-    for path in [cart, packed, html, trace] {
+    for path in [cart, packed, png, trace] {
         fs::remove_file(path).expect("temporary work-cart artifact removes");
     }
 }
@@ -285,7 +521,7 @@ source = "on draw:\n  clear(0)\n"
 name = "tiles"
 kind = "tile_set"
 path = "assets/tiles.m01g"
-payload = '''{{"revision":1,"kind":"tile_set","tiles":[[{pixels}]],"flags":[0]}}'''
+payload = '''{{"revision":2,"kind":"tile_set","tiles":[[{pixels}]],"flags":[0]}}'''
 
 [[asset]]
 name = "world"
@@ -322,6 +558,8 @@ tiles = [0]
     );
     let generated = fs::read_to_string(&cart).expect("generated work-cart reads");
     let project = modl_core::parse_workcart(&generated).expect("generated work-cart parses");
+    let packed = modl_core::pack_workcart(&generated).expect("generated current assets pack");
+    modl_core::load_cartridge_program(&packed.bytes).expect("generated cartridge loads");
     let map: Value =
         serde_json::from_slice(&project.files["assets/world.m01m"]).expect("generated map is JSON");
     assert_eq!(map["layers"][0]["width"], 4);
@@ -351,7 +589,7 @@ fn check_reports_packed_capacity_failures_for_workcarts() {
         std::process::id(),
         line!()
     ));
-    let padding = "0123456789abcdef".repeat(17_000);
+    let padding = "0123456789abcdef".repeat(70_000);
     fs::write(
         &cart,
         format!(
@@ -374,7 +612,7 @@ source = "on draw:\n  clear(0)\n"
 name = "oversized"
 kind = "sprite"
 path = "assets/oversized.m01g"
-payload = '''{{"padding":"{padding}"}}'''
+payload = '''{{"revision":2,"kind":"sprite","width":1,"height":1,"frames":[[1]],"padding":"{padding}"}}'''
 "#
         ),
     )
@@ -389,86 +627,94 @@ payload = '''{{"padding":"{padding}"}}'''
 }
 
 #[test]
-fn migrate_explicitly_rejects_tiled_files() {
-    let tiled = std::env::temp_dir().join(format!(
-        "mod01-tiled-{}-{}.tmx",
-        std::process::id(),
-        line!()
-    ));
-    fs::write(&tiled, "<map version=\"1.10\"/>").expect("Tiled fixture writes");
-    let output = binary()
-        .args(["migrate", tiled.to_str().expect("UTF-8 tiled path")])
-        .output()
-        .expect("CLI starts");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("migrate expects a V1 cartridge project directory")
+fn old_directory_authoring_and_migration_are_rejected() {
+    assert_eq!(
+        binary()
+            .args(["migrate", "anything"])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(2)
     );
-    fs::remove_file(tiled).expect("temporary Tiled fixture removes");
+    let root = std::env::temp_dir().join(format!("mod01-obsolete-project-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("cart.toml"), "format = 1").unwrap();
+    assert_eq!(
+        binary()
+            .args(["check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn migrate_turns_a_v1_project_and_its_tests_into_one_workcart() {
-    let project =
-        std::env::temp_dir().join(format!("mod01-migrate-{}-{}", std::process::id(), line!()));
-    let created = binary()
-        .args(["new", project.to_str().expect("UTF-8 project path")])
-        .output()
-        .expect("CLI starts");
-    assert!(created.status.success());
-    fs::create_dir(project.join("tests")).expect("test directory creates");
-    fs::write(
-        project.join("tests/smoke.modl"),
-        "on start:\n  assert 1 == 1, \"migrated test\"\n",
-    )
-    .expect("MODL test writes");
-    fs::write(
-        project.join("tests/boot.m01run.json"),
-        r#"{"revision":1,"frames":1,"expect":{"completedFrames":1}}"#,
-    )
-    .expect("replay test writes");
-    let workcart = project.with_extension("m01w");
-    let migrate = binary()
-        .args([
-            "migrate",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            workcart.to_str().expect("UTF-8 work-cart path"),
-        ])
-        .output()
-        .expect("CLI starts");
+fn new_creates_the_same_single_workcart_as_a_file_or_directory() {
+    let root = std::env::temp_dir().join(format!("mod01-new-workcart-{}", std::process::id()));
+    let file = root.with_extension("m01w");
     assert!(
-        migrate.status.success(),
-        "{}",
-        String::from_utf8_lossy(&migrate.stderr)
+        binary()
+            .args(["new", root.to_str().unwrap(), "--title", "WORKCART"])
+            .output()
+            .unwrap()
+            .status
+            .success()
     );
-    let source = fs::read_to_string(&workcart).expect("work-cart reads");
-    let parsed = modl_core::parse_workcart(&source).expect("work-cart parses");
-    assert_eq!(parsed.tests.len(), 2);
-    assert!(parsed.files.contains_key("src/main.modl"));
-    fs::remove_dir_all(&project).expect("V1 project removes");
-    let packed = workcart.with_extension("m01c");
-    for arguments in [
-        vec!["check".to_owned(), workcart.display().to_string()],
-        vec!["test".to_owned(), workcart.display().to_string()],
-        vec![
-            "pack".to_owned(),
-            workcart.display().to_string(),
-            "--output".to_owned(),
-            packed.display().to_string(),
-        ],
-    ] {
-        let output = binary().args(arguments).output().expect("CLI starts");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    for path in [workcart, packed] {
-        fs::remove_file(path).expect("temporary migration artifact removes");
-    }
+    assert!(
+        binary()
+            .args(["new", file.to_str().unwrap(), "--title", "WORKCART"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let directory_source = fs::read_to_string(root.join("cart.m01w")).unwrap();
+    assert_eq!(directory_source, fs::read_to_string(&file).unwrap());
+    assert!(!root.join("cart.toml").exists());
+    let source = binary()
+        .args(["info", file.to_str().unwrap(), "--source"])
+        .output()
+        .unwrap();
+    assert!(
+        source.status.success(),
+        "{}",
+        String::from_utf8_lossy(&source.stderr)
+    );
+    let view: Value = serde_json::from_slice(&source.stdout).unwrap();
+    assert!(view["files"]["src/main.modl"].is_array());
+    assert_eq!(view["manifest"]["hardware_revision"], 2);
+    write_project_file(&root, "src/main.modl", "on draw:\n clear(0)\n").unwrap();
+    assert_eq!(
+        binary()
+            .args(["fmt", "--check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    assert!(
+        binary()
+            .args(["fmt", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        binary()
+            .args(["fmt", "--check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(file).unwrap();
 }
 
 #[test]
@@ -563,14 +809,13 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
         .output()
         .expect("CLI starts");
     assert!(create.status.success());
-    fs::create_dir(project.join("tests")).expect("test directory creates");
-    fs::write(
-        project.join("tests/pure.modl"),
+    write_project_file(&project, "tests/pure.modl",
         "fn twice(value: Int) -> Int:\n  return value * 2\non start:\n  assert twice(3) == 6, \"pure assertion\"\n",
     )
     .expect("pure test writes");
-    fs::write(
-        project.join("tests/name.fail.modl"),
+    write_project_file(
+        &project,
+        "tests/name.fail.modl",
         "// expect M013002\non start:\n  missing_name()\n",
     )
     .expect("compile-fail test writes");
@@ -605,8 +850,9 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
             "finalStateSha256": baseline["summary"]["finalStateSha256"]
         }
     });
-    fs::write(
-        project.join("tests/boot.m01run.json"),
+    write_project_file(
+        &project,
+        "tests/boot.m01run.json",
         serde_json::to_vec_pretty(&snapshot).expect("snapshot serializes"),
     )
     .expect("scripted test writes");
@@ -629,72 +875,135 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
 }
 
 #[test]
-fn watch_serves_and_refreshes_a_loopback_player() {
+fn watch_repacks_native_cartridges_without_a_server() {
     let project =
         std::env::temp_dir().join(format!("mod01-watch-{}-{}", std::process::id(), line!()));
-    let create = binary()
-        .args(["new", project.to_str().expect("UTF-8 project path")])
-        .output()
-        .expect("CLI starts");
-    assert!(create.status.success());
+    assert!(
+        binary()
+            .args(["new", project.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let packed = project.with_extension("watch.m01c");
     let mut child = binary()
         .args([
             "watch",
-            project.to_str().expect("UTF-8 project path"),
-            "--no-open",
+            project.to_str().unwrap(),
+            "--output",
+            packed.to_str().unwrap(),
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("watch starts");
-    let mut output = BufReader::new(child.stdout.take().expect("watch stdout"));
+    let mut output = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
-    output.read_line(&mut line).expect("watch announces URL");
-    let url = line
-        .split_whitespace()
-        .find(|part| part.starts_with("http://"))
-        .expect("watch URL")
-        .trim_end_matches('/');
-    let address = url.strip_prefix("http://").expect("loopback URL");
-    let html = http_get(address, "/");
-    assert!(html.contains("MOD-01 standalone cartridge player"));
-    assert!(html.contains("fetch('/revision'"));
-    assert!(http_get(address, "/revision").ends_with('1'));
-
-    fs::write(project.join("src/main.modl"), "on draw:\n  clear(1)\n")
-        .expect("watched source changes");
+    output.read_line(&mut line).unwrap();
+    assert!(line.starts_with("packed "), "{line}");
+    let before = fs::read(&packed).unwrap();
+    write_project_file(&project, "src/main.modl", "on draw:\n  clear(1)\n").unwrap();
     let mut refreshed = false;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(50));
-        if http_get(address, "/revision").ends_with('2') {
+        if fs::read(&packed)
+            .is_ok_and(|bytes| bytes != before && modl_core::decode_cartridge(&bytes).is_ok())
+        {
             refreshed = true;
             break;
         }
     }
-    child.kill().expect("watch stops");
+    child.kill().unwrap();
     let _ = child.wait();
-    assert!(refreshed, "watch did not publish rebuilt revision");
-    fs::remove_dir_all(project).expect("temporary project removes");
+    assert!(
+        refreshed,
+        "watch did not publish the rebuilt native cartridge"
+    );
+    fs::remove_dir_all(project).unwrap();
+    fs::remove_file(packed).unwrap();
 }
 
-fn http_get(address: &str, path: &str) -> String {
-    let mut stream = TcpStream::connect(address).expect("watch server accepts request");
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("request writes");
-    let mut response = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(length) => response.extend_from_slice(&chunk[..length]),
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
-            Err(error) => panic!("response reads: {error}"),
+#[test]
+fn watch_observes_only_the_single_workcart_even_with_output_inside_the_project() {
+    struct Running(std::process::Child);
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
         }
     }
-    String::from_utf8(response).expect("response is UTF-8")
+    let project = std::env::temp_dir().join(format!(
+        "mod01-watch-input-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    assert!(
+        binary()
+            .arg("new")
+            .arg(&project)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let packed = project.join("live.m01c");
+    let mut child = Running(
+        binary()
+            .arg("watch")
+            .arg(&project)
+            .arg("--output")
+            .arg(&packed)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let output = BufReader::new(child.0.stdout.take().unwrap());
+    let (send, receive) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in output.lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("packed ")
+    );
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("watching ")
+    );
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "output must not trigger another pack"
+    );
+    fs::write(project.join("unrelated.modl"), "on draw:\n  clear(3)\n").unwrap();
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "unembedded neighbouring source is not an input"
+    );
+    let before = fs::read(&packed).unwrap();
+    write_project_file(&project, "src/main.modl", "on draw:\n  clear(1)\n").unwrap();
+    assert!(
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .starts_with("packed ")
+    );
+    assert_ne!(fs::read(&packed).unwrap(), before);
+    assert!(
+        receive.recv_timeout(Duration::from_millis(350)).is_err(),
+        "repacked output must not feed back into watch"
+    );
+    drop(child);
+    fs::remove_dir_all(project).unwrap();
 }
 
 #[test]
@@ -786,6 +1095,7 @@ fn bundled_cartridges_compile_and_pack_within_capacity() {
         "pocket-relay",
         "hardware-gauntlet",
         "modl-tutorial",
+        "prism-corridor",
     ] {
         let project = cartridges.join(id);
         let check = binary()
@@ -900,13 +1210,15 @@ fn new_pack_and_info_form_a_deterministic_project_workflow() {
         "{}",
         String::from_utf8_lossy(&create.stderr)
     );
-    fs::write(
-        project.join("src/math.modl"),
+    write_project_file(
+        &project,
+        "src/math.modl",
         "fn twice(value: Int) -> Int:\n  return value * 2\n",
     )
     .expect("module writes");
-    fs::write(
-        project.join("src/main.modl"),
+    write_project_file(
+        &project,
+        "src/main.modl",
         "import src.math as math\nstate score: Int = 1\non update:\n  score = math.twice(score)\n",
     )
     .expect("entry writes");
@@ -1078,6 +1390,18 @@ fn lsp_serves_diagnostics_completion_and_symbol_navigation() {
             .expect("response id exists")
     };
     assert_eq!(response(1)["result"]["serverInfo"]["name"], "mod01");
+    for definition in modl_core::builtin_definitions() {
+        assert!(
+            response(2)["result"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["label"] == definition.name
+                    && item["detail"] == definition.signature),
+            "{}",
+            definition.name
+        );
+    }
     assert!(
         response(2)["result"]
             .as_array()

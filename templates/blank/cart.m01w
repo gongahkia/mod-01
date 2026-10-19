@@ -1,0 +1,23 @@
+format = 2
+asset = []
+file = []
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "blank-cart"
+title = "BLANK CART"
+author = "@gongahkia"
+version = "0.1.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+on draw:
+  clear(1)
+"""

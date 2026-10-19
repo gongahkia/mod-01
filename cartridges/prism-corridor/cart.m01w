@@ -1,0 +1,244 @@
+format = 2
+file = []
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "prism-corridor"
+title = "PRISM CORRIDOR"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+// PRISM CORRIDOR: a complete software-rendered maze, not a host 3D engine.
+// Geometry and projection are ordinary MODL. Texture sampling is the public API.
+enum Mode:
+  Title
+  Explore
+  Complete
+
+record Hit:
+  distance: Num
+  u: Num
+  side: Bool
+
+state mode: Mode = Mode.Title
+state px: Num = 1.5
+state py: Num = 1.5
+state yaw: Num = 0.0
+state has_prism: Bool = false
+state show_map: Bool = false
+state elapsed: Int = 0
+state best: Int = 0
+
+fn cell(x: Int, y: Int) -> Int:
+  if x < 0 or y < 0 or x >= 8 or y >= 8:
+    return 1
+  return map_cell(#layout, 0, x, y)
+
+fn walkable(x: Num, y: Num) -> Bool:
+  return cell(floor(x - 0.16), floor(y - 0.16)) == 0 and cell(floor(x + 0.16), floor(y - 0.16)) == 0 and cell(floor(x - 0.16), floor(y + 0.16)) == 0 and cell(floor(x + 0.16), floor(y + 0.16)) == 0
+
+fn restart() -> Unit:
+  px = 1.5
+  py = 1.5
+  yaw = 0.0
+  elapsed = 0
+  has_prism = false
+  show_map = false
+  mode = Mode.Explore
+
+fn cast(rx: Num, ry: Num) -> Hit:
+  var gx = floor(px)
+  var gy = floor(py)
+  var delta_x = 1000000.0
+  var delta_y = 1000000.0
+  if abs(rx) > 0.000001:
+    delta_x = abs(1.0 / rx)
+  if abs(ry) > 0.000001:
+    delta_y = abs(1.0 / ry)
+  var step_x = 1
+  var step_y = 1
+  var next_x = (gx + 1.0 - px) * delta_x
+  var next_y = (gy + 1.0 - py) * delta_y
+  if rx < 0.0:
+    step_x = -1
+    next_x = (px - gx) * delta_x
+  if ry < 0.0:
+    step_y = -1
+    next_y = (py - gy) * delta_y
+  var distance = 0.0
+  var side = false
+  var found = false
+  var hops = 0
+  while not found and hops < 32:
+    if next_x < next_y:
+      distance = next_x
+      next_x += delta_x
+      gx += step_x
+      side = false
+    else:
+      distance = next_y
+      next_y += delta_y
+      gy += step_y
+      side = true
+    found = cell(gx, gy) != 0
+    hops += 1
+  assert found, "bounded maze ray must hit a wall"
+  var along = py + distance * ry
+  if side:
+    along = px + distance * rx
+  var tex_u = (along - floor(along)) * 8.0
+  if (not side and rx > 0.0) or (side and ry < 0.0):
+    tex_u = 7.999 - tex_u
+  return Hit(max(0.12, distance), clamp(tex_u, 0.0, 7.999), side)
+
+on start:
+  best = save_get_int("best", 0)
+
+on update:
+  if mode == Mode.Title or mode == Mode.Complete:
+    if btnp(pad1, a):
+      restart()
+    return
+  elapsed += 1
+  if btnp(pad1, x):
+    show_map = not show_map
+  if btn(pad1, left):
+    yaw -= 0.0523598775598299
+  if btn(pad1, right):
+    yaw += 0.0523598775598299
+  if yaw > 3.141592653589793:
+    yaw -= 6.283185307179586
+  if yaw < -3.141592653589793:
+    yaw += 6.283185307179586
+  var speed = 0.0
+  if btn(pad1, up):
+    speed += 0.04
+  if btn(pad1, down):
+    speed -= 0.04
+  let nx = px + cos(yaw) * speed
+  let ny = py + sin(yaw) * speed
+  if walkable(nx, py):
+    px = nx
+  if walkable(px, ny):
+    py = ny
+  if not has_prism and floor(px) == 4 and floor(py) == 5:
+    has_prism = true
+    sfx(#chime)
+  if has_prism and floor(px) == 6 and floor(py) == 1:
+    mode = Mode.Complete
+    sfx(#chime)
+    if best == 0 or elapsed < best:
+      best = elapsed
+      save_set_int("best", best)
+
+on draw:
+  clear(24)
+  fill_pattern(23130, 25, false)
+  rect_fill(0, 12, 240, 60, 24)
+  fill_pattern_reset()
+  let dx = cos(yaw)
+  let dy = sin(yaw)
+  let plane_x = -dy * 0.66
+  let plane_y = dx * 0.66
+  // A horizontal floor is affine along each screen row. No per-pixel host code.
+  for row in 73..128:
+    let depth = 50.0 / (row - 72)
+    let u = (px + depth * (dx - plane_x)) * 8.0
+    let v = (py + depth * (dy - plane_y)) * 8.0
+    texture_line(#floor_texture, 0, row, 239, row, u, v, depth * plane_x / 15.0, depth * plane_y / 15.0, true)
+    // Forty perspective rays, each displayed as six adjacent sampled columns.
+  for column in 0..40:
+    let offset = (column + 0.5) / 20.0 - 1.0
+    let hit = cast(dx + plane_x * offset, dy + plane_y * offset)
+    let height = 96.0 / hit.distance
+    let top = 72.0 - height / 2.0
+    let first = max(12, floor(top))
+    let last = min(127, ceil(top + height) - 1)
+    if hit.side:
+      pal(13, 12)
+      pal(14, 13)
+    else:
+      pal(13, 13)
+      pal(14, 14)
+    for stripe in 0..6:
+      texture_line(#brick, column * 6 + stripe, first, column * 6 + stripe, last, hit.u, (first - top) * 8.0 / height, 0.0, 8.0 / height, false)
+  pal_reset()
+  rect_fill(0, 0, 240, 12, 32)
+  rect_fill(0, 128, 240, 16, 32)
+  print("PRISM CORRIDOR", 4, 3, 7)
+  print(format_int(elapsed / 60, 10, 3) + "s", 208, 3, 23)
+  if has_prism:
+    print("PRISM OK / EXIT: 6,1", 4, 132, 23)
+  else:
+    print("FIND PRISM / A: MAP", 4, 132, 15)
+  if show_map and mode == Mode.Explore:
+    rect_fill(173, 15, 67, 68, 32)
+    map(#layout, 176, 18)
+    circle_fill(176 + floor(px * 8.0), 18 + floor(py * 8.0), 2, 7)
+    line(176 + floor(px * 8.0), 18 + floor(py * 8.0), 176 + floor(px * 8.0 + dx * 6.0), 18 + floor(py * 8.0 + dy * 6.0), 7)
+    rect_fill(225, 27, 5, 5, 23)
+    if not has_prism:
+      rect_fill(209, 59, 5, 5, 15)
+  if mode == Mode.Title:
+    rect_fill(18, 36, 204, 68, 32)
+    rect(18, 36, 204, 68, 23)
+    print("RECOVER THE PRISM AT 4,5", 51, 46, 15)
+    print("THEN REACH EXIT AT 6,1", 57, 58, 7)
+    print("ARROWS WALK / TURN", 69, 76, 6)
+    print("Z START / A TOGGLE MAP", 57, 90, 23)
+  elif mode == Mode.Complete:
+    rect_fill(24, 40, 192, 58, 32)
+    rect(24, 40, 192, 58, 23)
+    print("PRISM RECOVERED", 78, 50, 23)
+    print("BEST " + format_int(best / 60, 10, 3) + "s", 93, 66, 15)
+    print("Z EXPLORE AGAIN", 78, 84, 7)
+"""
+
+[[asset]]
+name = "blueprint"
+kind = "tile_set"
+path = "assets/blueprint.m01g"
+payload = """
+{"revision":2,"kind":"tile_set","tiles":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[26,26,26,26,26,26,26,26,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25,26,25,25,25,25,25,25,25]],"flags":[0,1]}
+"""
+
+[[asset]]
+name = "brick"
+kind = "sprite"
+path = "assets/brick.m01g"
+payload = """
+{"revision":2,"kind":"sprite","width":8,"height":8,"frames":[[12,12,12,12,12,12,12,12,12,14,14,14,14,14,14,14,12,13,13,13,13,13,13,13,12,13,13,13,13,13,13,13,12,12,12,12,12,12,12,12,14,14,14,14,12,14,14,14,13,13,13,13,12,13,13,13,13,13,13,13,12,13,13,13]]}
+"""
+
+[[asset]]
+name = "chime"
+kind = "sound"
+path = "assets/chime.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"triangle","note":81,"durationFrames":10,"volume":0.35,"pan":0,"envelope":{"attackFrames":0,"decayFrames":5,"sustainLevel":0.4,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0.5,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "floor_texture"
+kind = "sprite"
+path = "assets/floor.m01g"
+payload = """
+{"revision":2,"kind":"sprite","width":8,"height":8,"frames":[[16,16,16,16,16,16,16,16,16,17,17,17,18,18,18,18,16,17,17,17,18,18,18,18,16,17,17,17,18,18,18,18,16,18,18,18,17,17,17,17,16,18,18,18,17,17,17,17,16,18,18,18,17,17,17,17,16,18,18,18,17,17,17,17]]}
+"""
+
+[[asset]]
+name = "layout"
+kind = "map"
+path = "assets/layout.m01m"
+payload = """
+{"revision":1,"kind":"map","layers":[{"width":8,"height":8,"cells":[1,1,1,1,1,1,1,1,1,0,0,0,0,1,0,1,1,0,1,1,0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,1,1,0,1,1,0,0,0,0,0,0,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1],"tileSet":"blueprint"}]}
+"""

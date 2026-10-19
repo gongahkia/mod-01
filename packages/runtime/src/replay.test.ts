@@ -69,7 +69,7 @@ describe('M01REC revision 1', () => {
     }).toThrow(/schema/);
   });
 
-  it('rejects pre-MOD-01 replay envelopes', () => {
+  it('rejects obsolete or unversioned replay envelopes', () => {
     const legacy = new TextEncoder().encode(
       JSON.stringify({
         revision: 0,
@@ -77,5 +77,14 @@ describe('M01REC revision 1', () => {
       }),
     );
     expect(() => decodeReplayTrace(legacy)).toThrow(/schema/);
+    expect(() =>
+      decodeReplayTrace(
+        new TextEncoder().encode(
+          JSON.stringify({
+            frames: [{ frame: 0, controllers: [] }],
+          }),
+        ),
+      ),
+    ).toThrow(/schema/);
   });
 });

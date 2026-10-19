@@ -1,5 +1,6 @@
 //! Native, source-visible editors for the non-sprite cartridge assets.
 
+use crate::tracker::{Action, TrackerEditor};
 use eframe::egui::{self, Color32, Sense};
 use modl_core::AssetKind;
 use serde_json::{Value, json};
@@ -27,10 +28,8 @@ pub struct AssetWorkbench {
     raster_default: bool,
     raster_clipboard: Option<Value>,
     logical_color: usize,
-    pattern: String,
-    order_text: String,
-    row: usize,
-    channel: usize,
+    tracker: TrackerEditor,
+    tracker_actions: Vec<Action>,
     map_origin: [usize; 2],
     map_mode: MapMode,
     map_anchor: Option<[usize; 2]>,
@@ -44,15 +43,6 @@ pub struct AssetWorkbench {
 impl AssetWorkbench {
     pub fn new(kind: AssetKind, source: &str) -> Result<Self, String> {
         let document: Value = serde_json::from_str(source).map_err(|error| error.to_string())?;
-        let order_text = document["order"]
-            .as_array()
-            .map_or_else(String::new, |order| {
-                order
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
         Ok(Self {
             kind,
             display: false,
@@ -65,10 +55,8 @@ impl AssetWorkbench {
             raster_default: false,
             raster_clipboard: None,
             logical_color: 0,
-            pattern: String::new(),
-            order_text,
-            row: 0,
-            channel: 0,
+            tracker: TrackerEditor::new(),
+            tracker_actions: Vec::new(),
             map_origin: [0, 0],
             map_mode: MapMode::Paint,
             map_anchor: None,
@@ -93,6 +81,66 @@ impl AssetWorkbench {
                 source
             })
             .map_err(|error| error.to_string())
+    }
+
+    pub fn is_display(&self) -> bool {
+        self.display
+    }
+
+    pub fn retained_bytes(&self) -> usize {
+        use crate::asset_sessions::json_bytes;
+        std::mem::size_of::<Self>()
+            + json_bytes(&self.document)
+            + self
+                .history
+                .iter()
+                .chain(&self.future)
+                .map(json_bytes)
+                .sum::<usize>()
+            + self.raster_clipboard.as_ref().map_or(0, json_bytes)
+            + self.map_clipboard.as_ref().map_or(0, |(_, _, cells)| {
+                cells.iter().map(json_bytes).sum::<usize>()
+            })
+            + self.font_preview.capacity()
+            + self.tracker.retained_bytes()
+    }
+
+    pub fn replace_document(&mut self, document: Value) {
+        if document != self.document {
+            self.history
+                .push(std::mem::replace(&mut self.document, document));
+            if self.history.len() > 32 {
+                self.history.remove(0);
+            }
+            self.future.clear();
+            self.dirty = true;
+        }
+    }
+
+    pub fn tracker_cursor(&self) -> Option<(String, usize, usize)> {
+        (self.kind == AssetKind::Music)
+            .then(|| self.tracker.cursor(&self.document))
+            .flatten()
+    }
+
+    pub fn take_tracker_actions(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.tracker_actions)
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(previous) = self.history.pop() {
+            self.future
+                .push(std::mem::replace(&mut self.document, previous));
+            self.dirty = true;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.future.pop() {
+            self.history
+                .push(std::mem::replace(&mut self.document, next));
+            self.dirty = true;
+        }
     }
 
     pub fn export_tile_png(&self, palette: &[[u8; 3]; 256]) -> Result<Vec<u8>, String> {
@@ -132,69 +180,16 @@ impl AssetWorkbench {
         Ok(output.into_inner())
     }
 
-    pub fn import_tile_png(&mut self, png: &[u8], palette: &[[u8; 3]; 256]) -> Result<(), String> {
+    pub fn import_tile_png(&mut self, png: &[u8]) -> Result<(), String> {
+        use modl_core::asset_import::{PngAssetKind, decode_png, indexed_asset};
         if self.kind != AssetKind::TileSet || self.display {
             return Err("OPEN A TILE SET FIRST".to_owned());
         }
-        if png.len() < 24 || png[..8] != [137, 80, 78, 71, 13, 10, 26, 10] {
-            return Err("FILE IS NOT A PNG".to_owned());
-        }
-        let width =
-            u32::from_be_bytes(png[16..20].try_into().map_err(|_| "invalid PNG width")?) as usize;
-        let height =
-            u32::from_be_bytes(png[20..24].try_into().map_err(|_| "invalid PNG height")?) as usize;
-        let count = (width / 8).saturating_mul(height / 8);
-        if width == 0
-            || height == 0
-            || width % 8 != 0
-            || height % 8 != 0
-            || !(1..=4096).contains(&count)
-        {
-            return Err("TILE PNG MUST CONTAIN 1-4096 COMPLETE 8x8 TILES".to_owned());
-        }
-        let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-            .map_err(|error| error.to_string())?
-            .into_rgba8();
-        if image.width() as usize != width || image.height() as usize != height {
-            return Err("PNG DIMENSIONS CHANGED WHILE DECODING".to_owned());
-        }
-        let columns = width / 8;
-        let rows = height / 8;
-        let mut tiles = Vec::with_capacity(count);
-        for tile_y in 0..rows {
-            for tile_x in 0..columns {
-                let mut tile = Vec::with_capacity(64);
-                for y in 0..8 {
-                    for x in 0..8 {
-                        let pixel = image
-                            .get_pixel((tile_x * 8 + x) as u32, (tile_y * 8 + y) as u32)
-                            .0;
-                        tile.push(json!(if pixel[3] <= 127 {
-                            0
-                        } else {
-                            nearest_palette([pixel[0], pixel[1], pixel[2]], palette)
-                        }));
-                    }
-                }
-                tiles.push(Value::Array(tile));
-            }
-        }
-        let previous = self.document.clone();
-        let mut flags = self.document["flags"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        flags.resize(count, json!(0));
-        flags.truncate(count);
-        self.document["tiles"] = Value::Array(tiles);
-        self.document["flags"] = Value::Array(flags);
-        self.history.push(previous);
-        if self.history.len() > 32 {
-            self.history.remove(0);
-        }
-        self.future.clear();
+        let source = decode_png(png, PngAssetKind::TileSet).map_err(|error| error.to_string())?;
+        let document = indexed_asset(&source, PngAssetKind::TileSet, Some(&self.document))
+            .map_err(|error| error.to_string())?;
+        self.replace_document(document);
         self.tile = 0;
-        self.dirty = true;
         Ok(())
     }
 
@@ -203,19 +198,22 @@ impl AssetWorkbench {
         ui: &mut egui::Ui,
         palette: &[[u8; 3]; 256],
         tile_sets: &[(String, Value)],
+        sounds: &[String],
+        tracker_position: Option<&Value>,
     ) -> bool {
+        let original = self.document.clone();
         ui.horizontal(|ui| {
-            if ui.button("UNDO").clicked() {
-                if let Some(previous) = self.history.pop() {
-                    self.future
-                        .push(std::mem::replace(&mut self.document, previous));
-                }
+            if ui
+                .add_enabled(!self.history.is_empty(), egui::Button::new("UNDO"))
+                .clicked()
+            {
+                self.undo();
             }
-            if ui.button("REDO").clicked() {
-                if let Some(next) = self.future.pop() {
-                    self.history
-                        .push(std::mem::replace(&mut self.document, next));
-                }
+            if ui
+                .add_enabled(!self.future.is_empty(), egui::Button::new("REDO"))
+                .clicked()
+            {
+                self.redo();
             }
             ui.label(if self.display {
                 "DISPLAY / SOURCE-VISIBLE".to_owned()
@@ -224,31 +222,38 @@ impl AssetWorkbench {
             });
         });
         let before = self.document.clone();
-        egui::ScrollArea::both().show(ui, |ui| {
-            if self.display {
-                self.palette_ui(ui, palette);
-            } else {
-                match self.kind {
-                    AssetKind::Map => self.map_ui(ui, palette, tile_sets),
-                    AssetKind::TileSet => self.tiles_ui(ui, palette),
-                    AssetKind::Font => self.font_ui(ui),
-                    AssetKind::Sound => self.sound_ui(ui),
-                    AssetKind::Music => self.music_ui(ui),
-                    AssetKind::Sprite | AssetKind::Animation => {}
+        if self.display {
+            self.palette_ui(ui, palette);
+        } else {
+            match self.kind {
+                AssetKind::Map => self.map_ui(ui, palette, tile_sets),
+                AssetKind::TileSet => self.tiles_ui(ui, palette),
+                AssetKind::Font => self.font_ui(ui),
+                AssetKind::Sound => self.sound_ui(ui),
+                AssetKind::Music => {
+                    self.tracker
+                        .show(ui, &mut self.document, sounds, tracker_position)
                 }
+                AssetKind::Sprite | AssetKind::Animation => {}
             }
-        });
+        }
         if self.document != before {
             self.history.push(before);
             if self.history.len() > 32 {
                 self.history.remove(0);
             }
             self.future.clear();
-            self.dirty = true;
-            return true;
         }
-        self.dirty = !self.history.is_empty() || !self.future.is_empty();
-        false
+        for action in self.tracker.take_actions() {
+            match action {
+                Action::Undo => self.undo(),
+                Action::Redo => self.redo(),
+                action => self.tracker_actions.push(action),
+            }
+        }
+        let changed = self.document != original;
+        self.dirty |= changed;
+        changed
     }
 
     fn map_ui(
@@ -815,137 +820,10 @@ impl AssetWorkbench {
             });
         }
     }
-
-    fn music_ui(&mut self, ui: &mut egui::Ui) {
-        let mut speed = integer(&self.document["framesPerRow"]).clamp(1, 60);
-        ui.horizontal(|ui| {
-            ui.label("FRAMES / ROW");
-            if ui
-                .add(egui::DragValue::new(&mut speed).range(1..=60))
-                .changed()
-            {
-                self.document["framesPerRow"] = json!(speed);
-            }
-            let mut looping = self.document["loop"].as_bool().unwrap_or(false);
-            if ui.checkbox(&mut looping, "LOOP").changed() {
-                self.document["loop"] = json!(looping);
-            }
-        });
-        let Some(patterns) = self.document["patterns"].as_object_mut() else {
-            return;
-        };
-        if self.pattern.is_empty() || !patterns.contains_key(&self.pattern) {
-            self.pattern = patterns.keys().next().cloned().unwrap_or_default();
-        }
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("pattern")
-                .selected_text(&self.pattern)
-                .show_ui(ui, |ui| {
-                    for name in patterns.keys() {
-                        ui.selectable_value(&mut self.pattern, name.clone(), name);
-                    }
-                });
-            if ui.button("+ PATTERN").clicked() && patterns.len() < 256 {
-                if let Some(name) = (0..=255)
-                    .map(|n| format!("{n:02X}"))
-                    .find(|name| !patterns.contains_key(name))
-                {
-                    patterns.insert(name.clone(), json!({"rows":vec![vec![Value::Null;8];16]}));
-                    self.pattern = name;
-                }
-            }
-        });
-        let Some(rows) = patterns
-            .get_mut(&self.pattern)
-            .and_then(|pattern| pattern["rows"].as_array_mut())
-        else {
-            return;
-        };
-        if rows.is_empty() {
-            return;
-        }
-        self.row = self.row.min(rows.len() - 1);
-        self.channel = self.channel.min(7);
-        ui.horizontal(|ui| {
-            ui.label("ROW");
-            ui.add(egui::DragValue::new(&mut self.row).range(0..=rows.len() - 1));
-            ui.label("CHANNEL");
-            ui.add(egui::DragValue::new(&mut self.channel).range(0..=7));
-            if ui.button("+ ROW").clicked() && rows.len() < 256 {
-                rows.push(json!(vec![Value::Null; 8]));
-            }
-            if ui.button("- ROW").clicked() && rows.len() > 1 {
-                rows.remove(self.row);
-                self.row = self.row.min(rows.len() - 1);
-            }
-        });
-        let Some(cells) = rows[self.row].as_array_mut() else {
-            return;
-        };
-        if cells.len() != 8 {
-            return;
-        }
-        let cell = &mut cells[self.channel];
-        let mut enabled = !cell.is_null();
-        if ui.checkbox(&mut enabled, "NOTE ON").changed() {
-            *cell = if enabled {
-                json!({"note":60,"sound":"blip"})
-            } else {
-                Value::Null
-            };
-        }
-        if enabled {
-            let mut note = integer(&cell["note"]).clamp(0, 127);
-            let mut sound = cell["sound"].as_str().unwrap_or("").to_owned();
-            ui.horizontal(|ui| {
-                ui.label("NOTE");
-                if ui
-                    .add(egui::DragValue::new(&mut note).range(0..=127))
-                    .changed()
-                {
-                    cell["note"] = json!(note);
-                }
-                ui.label("SOUND");
-                if ui.text_edit_singleline(&mut sound).changed() {
-                    cell["sound"] = json!(sound);
-                }
-            });
-        }
-        ui.label("ORDER: edit the pattern sequence below");
-        let pattern_names = patterns.keys().cloned().collect::<Vec<_>>();
-        if let Some(order) = self.document["order"].as_array_mut() {
-            let response = ui.text_edit_singleline(&mut self.order_text);
-            if response.lost_focus() || ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                let listed = self
-                    .order_text
-                    .split_whitespace()
-                    .filter(|name| pattern_names.iter().any(|pattern| pattern == name))
-                    .map(|name| json!(name))
-                    .collect::<Vec<_>>();
-                if !listed.is_empty() {
-                    *order = listed;
-                }
-            }
-        }
-    }
 }
 
 fn integer(value: &Value) -> usize {
     value.as_u64().unwrap_or(0) as usize
-}
-
-fn nearest_palette(rgb: [u8; 3], palette: &[[u8; 3]; 256]) -> usize {
-    palette
-        .iter()
-        .enumerate()
-        .skip(1)
-        .min_by_key(|(_, color)| {
-            rgb.iter()
-                .zip(color.iter())
-                .map(|(a, b)| (i32::from(*a) - i32::from(*b)).pow(2))
-                .sum::<i32>()
-        })
-        .map_or(1, |(index, _)| index)
 }
 
 fn number_path(value: &Value, path: &str) -> f64 {
@@ -1266,7 +1144,7 @@ mod tests {
         let editor = AssetWorkbench::new(AssetKind::TileSet, &source).unwrap();
         let png = editor.export_tile_png(&palette).unwrap();
         let mut imported = AssetWorkbench::new(AssetKind::TileSet, &source).unwrap();
-        imported.import_tile_png(&png, &palette).unwrap();
+        imported.import_tile_png(&png).unwrap();
         assert_eq!(imported.document["tiles"], editor.document["tiles"]);
         assert_eq!(imported.document["flags"], editor.document["flags"]);
     }
@@ -1276,5 +1154,88 @@ mod tests {
         let workbench =
             AssetWorkbench::new(AssetKind::Sound, r#"{"kind":"sound","note":60}"#).unwrap();
         assert!(workbench.source().unwrap().contains("\"note\":60"));
+    }
+
+    #[test]
+    fn native_tracker_keyboard_undo_redo_reports_changes_and_round_trips_optional_metadata() {
+        use eframe::egui::{self, Key, Modifiers};
+        let source = json!({"revision":1,"kind":"music","framesPerRow":240,"loop":true,"order":["A"],"patterns":{"A":{"rows":vec![vec![serde_json::Value::Null;8];16],"memo":"preserve pattern"}},"memo":"preserve song"}).to_string();
+        let mut workbench = AssetWorkbench::new(AssetKind::Music, &source).unwrap();
+        let original = workbench.document.clone();
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut frame = |events: Vec<egui::Event>, focus: bool| {
+            let mut changed = false;
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 800.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if focus {
+                            ui.memory_mut(|memory| {
+                                memory.request_focus(ui.make_persistent_id("tracker-grid"))
+                            });
+                        }
+                        changed = workbench.ui(
+                            ui,
+                            &crate::sprite::palette(),
+                            &[],
+                            &["beep".to_owned()],
+                            None,
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            (
+                changed,
+                workbench.document.clone(),
+                workbench.source().unwrap(),
+            )
+        };
+        let key = |key, modifiers| {
+            vec![
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ]
+        };
+        assert!(!frame(Vec::new(), true).0);
+        let (changed, edited, text) = frame(key(Key::Z, Modifiers::NONE), false);
+        assert!(changed);
+        assert_eq!(edited["patterns"]["A"]["rows"][0][0]["note"], 60);
+        assert_eq!(edited["framesPerRow"], 240);
+        assert_eq!(edited["memo"], "preserve song");
+        assert_eq!(
+            AssetWorkbench::new(AssetKind::Music, &text)
+                .unwrap()
+                .document,
+            edited
+        );
+        let (changed, restored, _) =
+            frame(key(Key::Z, Modifiers::CTRL | Modifiers::COMMAND), false);
+        assert!(changed);
+        assert_eq!(restored, original);
+        let (changed, restored, _) =
+            frame(key(Key::Y, Modifiers::CTRL | Modifiers::COMMAND), false);
+        assert!(changed);
+        assert_eq!(restored, edited);
     }
 }

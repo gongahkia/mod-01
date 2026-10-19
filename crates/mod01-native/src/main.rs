@@ -19,14 +19,35 @@
     clippy::assigning_clones
 )]
 
+mod asset_meter;
+mod asset_sessions;
 mod asset_tools;
 mod audio;
+mod gamepad_controller;
+mod keyboard_controller;
+mod launch;
+mod library;
+mod library_preview;
+mod library_store;
+mod live_audio;
+mod pause_menu;
+mod player;
+mod playground;
 mod project;
 mod replay;
 mod runtime;
 mod save_manager;
+mod source_editor;
 mod sprite;
+#[cfg(test)]
+mod studio_asset_tests;
+#[cfg(test)]
+mod studio_menu_tests;
+#[cfg(test)]
+mod studio_replay_tests;
 mod syntax;
+mod touch_controller;
+mod tracker;
 mod ui_assets;
 mod ui_theme;
 
@@ -41,8 +62,8 @@ use asset_tools::AssetWorkbench;
 use audio::AudioOutput;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use directories::ProjectDirs;
-use eframe::egui::{self, Color32, ColorImage, Key, RichText, TextureHandle, TextureOptions};
-use gilrs::{Axis, Button, Gilrs};
+use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
+use gilrs::Gilrs;
 use project::NativeProject;
 use runtime::RuntimeBridge;
 use serde_json::{Value, json};
@@ -51,15 +72,30 @@ use ui_assets::PixelCursors;
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
-const fn manual_topics() -> [(&'static str, &'static str); 9] {
+#[derive(Clone, Copy)]
+enum AudioPreviewMode {
+    Song(usize),
+    Pattern,
+    Note,
+}
+const fn manual_topics() -> [(&'static str, &'static str); 15] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
         ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
         ("API", include_str!("../../../docs/API.md")),
+        (
+            "MATH / TEXT / BITS",
+            include_str!("../../../docs/STANDARD_LIBRARY.md"),
+        ),
+        ("SOURCE TOOLS", include_str!("../../../docs/EDITOR.md")),
+        ("PLAYGROUND", include_str!("../../../docs/PLAYGROUND.md")),
+        ("SOFTWARE 3D", include_str!("../../../docs/SOFTWARE_3D.md")),
         ("ASSETS", include_str!("../../../docs/ASSETS.md")),
         ("HARDWARE", include_str!("../../../docs/HARDWARE.md")),
         ("LIMITS", include_str!("../../../docs/LIMITS.md")),
         ("DEBUGGING", include_str!("../../../docs/DEBUGGING.md")),
+        ("PAUSE ACTIONS", include_str!("../../../docs/MENU.md")),
+        ("LOCAL LIBRARY", include_str!("../../../docs/LIBRARY.md")),
         (
             "CARTRIDGES",
             include_str!("../../../docs/CARTRIDGE_FORMAT.md"),
@@ -67,41 +103,6 @@ const fn manual_topics() -> [(&'static str, &'static str); 9] {
         ("STUDIO", include_str!("../../../docs/STUDIO.md")),
     ]
 }
-const PALETTE: [[u8; 3]; 32] = [
-    [23, 20, 31],
-    [41, 37, 50],
-    [64, 57, 70],
-    [93, 80, 84],
-    [128, 106, 99],
-    [170, 139, 116],
-    [213, 185, 146],
-    [244, 229, 189],
-    [91, 41, 56],
-    [139, 60, 71],
-    [191, 85, 88],
-    [237, 123, 105],
-    [90, 57, 40],
-    [137, 87, 46],
-    [193, 132, 54],
-    [231, 189, 80],
-    [38, 60, 50],
-    [52, 95, 70],
-    [75, 139, 88],
-    [127, 189, 104],
-    [32, 59, 71],
-    [46, 101, 113],
-    [67, 150, 154],
-    [117, 203, 192],
-    [36, 52, 81],
-    [52, 88, 129],
-    [75, 125, 179],
-    [115, 169, 209],
-    [62, 49, 84],
-    [101, 71, 119],
-    [147, 99, 151],
-    [195, 138, 174],
-];
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Code,
@@ -129,16 +130,24 @@ struct SourceBreakpoint {
 
 struct StudioApp {
     cursors: PixelCursors,
+    library: library::Library,
+    show_library: bool,
+    library_was_paused: bool,
+    pending_library_open: Option<library::OpenRequest>,
     project: Option<NativeProject>,
     manifest_text: String,
     view: View,
     runtime: RuntimeBridge,
     preview_runtime: RuntimeBridge,
+    live_audio: live_audio::AudioPreview,
+    playground: playground::Playground,
+    show_playground: bool,
     audio: Option<AudioOutput>,
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
     sprite: Option<SpriteEditor>,
     modl_highlighter: syntax::ModlHighlighter,
+    source_editor: source_editor::SourceEditor,
     sprite_texture: Option<TextureHandle>,
     sprite_name: String,
     asset_name: String,
@@ -146,11 +155,22 @@ struct StudioApp {
     asset_text: String,
     asset_dirty: bool,
     asset_workbench: Option<AssetWorkbench>,
+    asset_sessions: asset_sessions::AssetSessions,
+    asset_meter: asset_meter::AssetMeter,
     color_hex: String,
     sprite_painting: bool,
     last_sprite_point: Option<(i32, i32)>,
     selection_anchor: Option<(usize, usize)>,
     running: bool,
+    player_mode: bool,
+    player_paused: bool,
+    touch_controller: touch_controller::TouchController,
+    keyboard_controller: keyboard_controller::KeyboardController,
+    gamepad_controller: gamepad_controller::GamepadController,
+    pause_menu: pause_menu::PauseMenu,
+    pause_navigation: gamepad_controller::Navigation,
+    pending_menu_action: Option<u8>,
+    resume_debug: bool,
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
@@ -175,13 +195,16 @@ struct StudioApp {
     recording_replay: bool,
     replay_frames: Vec<(u32, Value)>,
     replay_playback: Option<BTreeMap<u32, Value>>,
-    preview_wav: Vec<u8>,
-    preview_offset: usize,
-    preview_export: bool,
     preview_pending: bool,
+    preview_cancelling: bool,
+    preview_name: String,
     loaded: bool,
     pending: bool,
     frame: u32,
+    input_frame: u32,
+    frame_input: Option<Value>,
+    debug_booted: bool,
+    debug_frame_boundary: bool,
     work: u32,
     last_tick: Instant,
     screen_rect: Option<egui::Rect>,
@@ -204,19 +227,39 @@ struct StudioApp {
 
 impl StudioApp {
     fn new(start: Option<PathBuf>, context: &egui::Context) -> Self {
+        Self::new_with_devices(start, context, true)
+    }
+
+    fn new_with_devices(start: Option<PathBuf>, context: &egui::Context, devices: bool) -> Self {
         let host_path = native_host_path();
         let mut app = Self {
             cursors: PixelCursors::new(context),
+            library: library::Library::new(
+                devices
+                    .then(|| {
+                        ProjectDirs::from("", "MOD-01", "Native Studio")
+                            .map(|directories| directories.data_dir().join("library.json"))
+                    })
+                    .flatten(),
+                bundled_samples(),
+            ),
+            show_library: true,
+            library_was_paused: false,
+            pending_library_open: None,
             project: None,
             manifest_text: String::new(),
             view: View::Code,
             runtime: RuntimeBridge::new(host_path.clone()),
             preview_runtime: RuntimeBridge::new(host_path),
-            audio: AudioOutput::new().ok(),
-            gamepads: Gilrs::new().ok(),
+            live_audio: live_audio::AudioPreview::new(),
+            playground: playground::Playground::new(),
+            show_playground: false,
+            audio: devices.then(|| AudioOutput::new().ok()).flatten(),
+            gamepads: devices.then(|| Gilrs::new().ok()).flatten(),
             texture: None,
             sprite: None,
             modl_highlighter: syntax::ModlHighlighter::default(),
+            source_editor: source_editor::SourceEditor::default(),
             sprite_texture: None,
             sprite_name: "hero".to_owned(),
             asset_name: String::new(),
@@ -224,11 +267,22 @@ impl StudioApp {
             asset_text: String::new(),
             asset_dirty: false,
             asset_workbench: None,
+            asset_sessions: asset_sessions::AssetSessions::default(),
+            asset_meter: asset_meter::AssetMeter::default(),
             color_hex: "ED7B69FF".to_owned(),
             sprite_painting: false,
             last_sprite_point: None,
             selection_anchor: None,
             running: false,
+            player_mode: false,
+            player_paused: false,
+            touch_controller: touch_controller::TouchController::default(),
+            keyboard_controller: keyboard_controller::KeyboardController::default(),
+            gamepad_controller: gamepad_controller::GamepadController::default(),
+            pause_menu: pause_menu::PauseMenu::default(),
+            pause_navigation: gamepad_controller::Navigation::default(),
+            pending_menu_action: None,
+            resume_debug: false,
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
@@ -253,13 +307,16 @@ impl StudioApp {
             recording_replay: false,
             replay_frames: Vec::new(),
             replay_playback: None,
-            preview_wav: Vec::new(),
-            preview_offset: 0,
-            preview_export: false,
             preview_pending: false,
+            preview_cancelling: false,
+            preview_name: String::new(),
             loaded: false,
             pending: false,
             frame: 0,
+            input_frame: 0,
+            frame_input: None,
+            debug_booted: false,
+            debug_frame_boundary: true,
             work: 0,
             last_tick: Instant::now(),
             screen_rect: None,
@@ -286,41 +343,11 @@ impl StudioApp {
     }
 
     fn open(&mut self, path: PathBuf) {
-        match NativeProject::open(&path) {
-            Ok(project) => {
-                self.stop();
-                self.manifest_text = project.manifest_source.clone();
-                self.status = format!("OPENED {}", project.manifest.title);
-                self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
-                self.view = View::Code;
-            }
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn open_sample(&mut self, path: PathBuf, play: bool) {
-        match NativeProject::open(&path) {
-            Ok(mut project) => {
-                project.root = None;
-                self.stop();
-                self.manifest_text = project.manifest_source.clone();
-                self.status = format!("OPENED SAMPLE {}", project.manifest.title);
-                self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
-                self.view = View::Code;
-                if play {
-                    self.run();
-                }
-            }
-            Err(error) => self.status = error,
-        }
+        self.request_library_open(library::OpenRequest {
+            path,
+            bundled: false,
+            play: false,
+        });
     }
 
     fn recover_revision(&mut self, path: PathBuf) {
@@ -337,9 +364,7 @@ impl StudioApp {
                 project.dirty = true;
                 self.manifest_text = project.manifest_source.clone();
                 self.project = Some(project);
-                self.asset_workbench = None;
-                self.sprite = None;
-                self.asset_name.clear();
+                self.reset_asset_editors();
                 self.view = View::Code;
                 self.status = "RECOVERY REVISION LOADED; SAVE TO APPLY".to_owned();
             }
@@ -354,11 +379,9 @@ impl StudioApp {
                 self.manifest_text = project.manifest_source.clone();
                 self.status = format!("CREATED {}", project.manifest.id);
                 self.project = Some(project);
-                self.sprite = None;
-                self.asset_name.clear();
-                self.asset_dirty = false;
-                self.asset_workbench = None;
+                self.reset_asset_editors();
                 self.show_new = false;
+                self.show_library = false;
                 self.view = View::Code;
             }
             Err(error) => self.status = error,
@@ -377,11 +400,12 @@ impl StudioApp {
                 return;
             }
         }
-        let Some(project) = self.project.as_mut() else {
-            return;
-        };
         match modl_core::parse_project_manifest(&requested_manifest) {
             Ok(manifest) => {
+                self.cache_asset_editors();
+                let Some(project) = self.project.as_mut() else {
+                    return;
+                };
                 project.manifest_source = requested_manifest.clone();
                 self.manifest_text = requested_manifest;
                 project.manifest = manifest;
@@ -457,8 +481,8 @@ impl StudioApp {
         };
         project.sync_editor();
         let mut folder_project = project.clone();
+        folder_project.workcart_path = Some(path.join("cart.m01w"));
         folder_project.root = Some(path);
-        folder_project.detach_workcart();
         match folder_project.save() {
             Ok(()) => {
                 folder_project.dirty = false;
@@ -778,42 +802,44 @@ impl StudioApp {
         }
     }
 
-    fn export_player(&mut self, zip: bool) {
+    fn export_native_player(&mut self) {
         if let Err(error) = self.sync_asset() {
             self.status = error;
             return;
         }
-        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
-            if let Err(error) = self.save_sprite() {
-                self.status = error;
-                return;
-            }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
         }
+        let Some(parent) = rfd::FileDialog::new()
+            .set_title("Choose a parent directory for a NEW native game folder")
+            .pick_folder()
+        else {
+            return;
+        };
         let Some(project) = self.project.as_mut() else {
             return;
         };
         project.sync_editor();
-        let output = if zip {
-            modl_core::export_itch_zip(&project.manifest_source, &project.files)
-        } else {
-            modl_core::export_standalone_html(&project.manifest_source, &project.files)
-                .map(String::into_bytes)
+        let result = (|| -> Result<PathBuf, String> {
+            let player = std::env::current_exe().map_err(|error| error.to_string())?;
+            let tools = modl_core::NativeToolchain::discover(
+                Some(&player),
+                None,
+                Some(&native_host_path()),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+            let output = parent.join(format!("{}-native", project.manifest.id));
+            modl_core::export_native_game(&output, &project.pack()?, &tools)
+                .map_err(|error| error.to_string())
+        })();
+        self.status = match result {
+            Ok(path) => format!("EXPORTED {}", path.display()),
+            Err(error) => error,
         };
-        match output {
-            Ok(bytes) => {
-                let extension = if zip { "zip" } else { "html" };
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_file_name(format!("{}.{}", project.manifest.id, extension))
-                    .save_file()
-                {
-                    self.status = match fs::write(path, &bytes) {
-                        Ok(()) => format!("EXPORTED {} BYTES", bytes.len()),
-                        Err(error) => error.to_string(),
-                    };
-                }
-            }
-            Err(error) => self.status = error.to_string(),
-        }
     }
 
     fn export_cartridge_png(&mut self) {
@@ -968,6 +994,18 @@ impl StudioApp {
         };
     }
 
+    fn start_replay_recording(&mut self) {
+        let debug = self.running && self.debugging;
+        self.stop();
+        self.replay_playback = None;
+        self.replay_frames.clear();
+        self.recording_replay = true;
+        self.run_mode(debug);
+        if !self.running {
+            self.recording_replay = false;
+        }
+    }
+
     fn load_replay(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("MOD-01 replay", &["m01rec"])
@@ -993,55 +1031,117 @@ impl StudioApp {
         };
     }
 
-    fn render_asset_wav(&mut self, export: bool) {
-        let Some(project) = &self.project else {
-            return;
-        };
-        let Some(declaration) = project.manifest.assets.get(&self.asset_name) else {
-            return;
-        };
-        if !matches!(
-            declaration.kind,
-            modl_core::AssetKind::Sound | modl_core::AssetKind::Music
-        ) {
+    fn selected_audio_document(&self) -> Result<Value, String> {
+        self.asset_workbench.as_ref().map_or_else(
+            || serde_json::from_str(&self.asset_text).map_err(|error| error.to_string()),
+            |editor| Ok(editor.document.clone()),
+        )
+    }
+
+    fn start_live_audio(&mut self, mode: AudioPreviewMode) {
+        let prepared = (|| {
+            let project = self.project.as_ref().ok_or("no project is open")?;
+            let document = self.selected_audio_document()?;
+            let cursor = self
+                .asset_workbench
+                .as_ref()
+                .and_then(AssetWorkbench::tracker_cursor);
+            let pattern = if matches!(mode, AudioPreviewMode::Pattern) {
+                Some(
+                    cursor
+                        .as_ref()
+                        .ok_or("select a tracker pattern")?
+                        .0
+                        .as_str(),
+                )
+            } else {
+                None
+            };
+            let bank = live_audio::project_bank(project, &self.asset_name, &document, pattern)?;
+            let note = if matches!(mode, AudioPreviewMode::Note) {
+                if document["kind"] == "music" {
+                    let (pattern, row, channel) = cursor.as_ref().ok_or("select a tracker cell")?;
+                    let cell = &document["patterns"][pattern]["rows"][*row][*channel];
+                    let sound = cell["sound"]
+                        .as_str()
+                        .ok_or("select a non-empty tracker cell")?
+                        .to_owned();
+                    let note = cell["note"]
+                        .as_f64()
+                        .ok_or("tracker note must be numeric")?;
+                    let volume = cell.get("volume").map_or(Ok(1.0), |value| {
+                        value.as_f64().ok_or("tracker volume must be numeric")
+                    })?;
+                    Some((sound, note, volume))
+                } else {
+                    Some((
+                        self.asset_name.clone(),
+                        document["note"]
+                            .as_f64()
+                            .ok_or("patch note must be numeric")?,
+                        1.0,
+                    ))
+                }
+            } else {
+                None
+            };
+            Ok::<_, String>((bank, note, cursor.map_or(0, |cursor| cursor.1)))
+        })();
+        match prepared {
+            Ok((bank, Some((sound, note, volume)), _)) => {
+                self.live_audio.audition(bank, &sound, note, volume)
+            }
+            Ok((bank, None, row)) => self.live_audio.play(
+                bank,
+                &self.asset_name,
+                if let AudioPreviewMode::Song(order) = mode {
+                    order
+                } else {
+                    0
+                },
+                if matches!(mode, AudioPreviewMode::Pattern) {
+                    row
+                } else {
+                    0
+                },
+            ),
+            Err(error) => self.status = format!("AUDIO PREVIEW ERROR: {error}"),
+        }
+    }
+
+    fn render_asset_wav(&mut self) {
+        if self.preview_pending || self.preview_cancelling {
             return;
         }
-        let mut asset: Value = match self
-            .asset_workbench
-            .as_ref()
-            .map(AssetWorkbench::source)
-            .transpose()
-            .and_then(|source| {
-                serde_json::from_str(source.as_deref().unwrap_or(&self.asset_text))
-                    .map_err(|error| error.to_string())
-            }) {
-            Ok(value) => value,
+        let prepared = (|| {
+            let project = self.project.as_ref().ok_or("no project is open")?;
+            let selected = self.selected_audio_document()?;
+            let bank = live_audio::project_bank(project, &self.asset_name, &selected, None)?;
+            let asset = bank
+                .iter()
+                .find(|asset| asset["name"] == self.asset_name)
+                .cloned()
+                .ok_or("selected audio asset is missing")?;
+            let sounds = bank
+                .into_iter()
+                .filter(|asset| asset["kind"] == "sound")
+                .collect::<Vec<_>>();
+            Ok::<_, String>((asset, sounds))
+        })();
+        let (asset, sounds) = match prepared {
+            Ok(values) => values,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
-        asset["name"] = json!(self.asset_name);
-        let sounds = project
-            .manifest
-            .assets
-            .iter()
-            .filter_map(|(name, declared)| {
-                if declared.kind != modl_core::AssetKind::Sound {
-                    return None;
-                }
-                let mut value: Value =
-                    serde_json::from_slice(project.files.get(&declared.path)?).ok()?;
-                value["name"] = json!(name);
-                Some(value)
-            })
-            .collect::<Vec<_>>();
-        self.preview_export = export;
+        let kind = asset["kind"].clone();
         self.preview_pending = true;
-        self.status = "RENDERING PRODUCTION SYNTH AUDIO".to_owned();
-        if let Err(error) = self.preview_runtime.send(json!({"type":"render-wav",
-            "kind":if declaration.kind == modl_core::AssetKind::Sound { "sound" } else { "music" },
-            "asset":asset,"sounds":sounds}))
+        self.preview_name = self.asset_name.clone();
+        self.status = "RENDERING PRODUCTION SYNTH WAV".to_owned();
+        if let Err(error) = self
+            .preview_runtime
+            .send(json!({"type":"render-wav", "kind":kind, "asset":asset, "sounds":sounds}))
         {
             self.status = error;
             self.preview_pending = false;
@@ -1050,13 +1150,13 @@ impl StudioApp {
 
     fn process_preview(&mut self, context: &egui::Context) {
         while let Some(event) = self.preview_runtime.poll() {
-            self.preview_pending = false;
             match event["type"].as_str() {
-                Some("wav") => {
-                    let decoded = event["bytes"]
+                Some("wav") if self.preview_pending => {
+                    self.preview_pending = false;
+                    let Some(bytes) = event["bytes"]
                         .as_str()
-                        .and_then(|encoded| STANDARD.decode(encoded).ok());
-                    let Some(bytes) = decoded else {
+                        .and_then(|encoded| STANDARD.decode(encoded).ok())
+                    else {
                         self.status = "INVALID WAV RESPONSE".to_owned();
                         continue;
                     };
@@ -1064,49 +1164,28 @@ impl StudioApp {
                         self.status = "INVALID WAV HEADER".to_owned();
                         continue;
                     }
-                    if self.preview_export {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("{}.wav", self.asset_name))
-                            .save_file()
-                        {
-                            self.status = match fs::write(path, bytes) {
-                                Ok(()) => "WAV SAVED".to_owned(),
-                                Err(error) => error.to_string(),
-                            };
-                        }
-                    } else {
-                        if let Some(audio) = &self.audio {
-                            audio.clear();
-                        }
-                        self.preview_wav = bytes;
-                        self.preview_offset = 44;
-                        self.status = "PREVIEWING AUDIO".to_owned();
-                        context.request_repaint();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name(format!("{}.wav", self.preview_name))
+                        .save_file()
+                    {
+                        self.status = match fs::write(path, bytes) {
+                            Ok(()) => "WAV SAVED".to_owned(),
+                            Err(error) => error.to_string(),
+                        };
                     }
                 }
-                Some("error") => {
+                Some("error") if self.preview_pending => {
+                    self.preview_pending = false;
                     self.status = event["message"]
                         .as_str()
-                        .unwrap_or("AUDIO PREVIEW FAILED")
-                        .to_owned()
+                        .unwrap_or("WAV EXPORT FAILED")
+                        .to_owned();
                 }
+                Some("stopped") => self.preview_cancelling = false,
                 _ => {}
             }
         }
-        if self.preview_pending {
-            context.request_repaint_after(Duration::from_millis(16));
-        }
-        if self.preview_offset + 4 <= self.preview_wav.len() {
-            let end = (self.preview_offset + 800 * 4).min(self.preview_wav.len());
-            let aligned = self.preview_offset + ((end - self.preview_offset) / 4) * 4;
-            if let Some(audio) = &self.audio {
-                if let Err(error) =
-                    audio.push_pcm16_stereo(&self.preview_wav[self.preview_offset..aligned])
-                {
-                    self.status = error;
-                }
-            }
-            self.preview_offset = aligned;
+        if self.preview_pending || self.preview_cancelling {
             context.request_repaint_after(Duration::from_millis(16));
         }
     }
@@ -1116,6 +1195,8 @@ impl StudioApp {
     }
 
     fn run_mode(&mut self, debug: bool) {
+        self.show_library = false;
+        self.touch_controller.clear();
         if let Err(error) = self.sync_asset() {
             self.status = error;
             return;
@@ -1130,61 +1211,20 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let (Ok(rom), Ok(javascript)) = (project.pack(), project.javascript(debug)) else {
-            self.status = project.check().unwrap_or_else(|error| error);
-            return;
+        let save = match read_save(&project.manifest.id) {
+            Ok(save) => save,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
         };
-        let symbol_names = if debug {
-            modl_core::compile_project(
-                &project.manifest_source,
-                &project.files,
-                modl_core::CompileMode::Debug,
-            )
-            .map(|compiled| {
-                compiled
-                    .analysis
-                    .symbols
-                    .into_iter()
-                    .map(|symbol| (format!("s{}", symbol.id.0), symbol.name))
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default()
-        } else {
-            BTreeMap::new()
+        let command = match project.load_command(debug, &save) {
+            Ok(command) => command,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
         };
-        let files: serde_json::Map<String, Value> = project
-            .manifest
-            .assets
-            .values()
-            .filter_map(|asset| {
-                project
-                    .files
-                    .get(&asset.path)
-                    .map(|bytes| (asset.path.clone(), Value::String(STANDARD.encode(bytes))))
-            })
-            .chain(project.manifest.display.iter().filter_map(|path| {
-                project
-                    .files
-                    .get(path)
-                    .map(|bytes| (path.clone(), Value::String(STANDARD.encode(bytes))))
-            }))
-            .collect();
-        let save = read_save(&project.manifest.id).unwrap_or_default();
-        let command = json!({
-            "type":"load", "javascript":javascript,
-            "manifest": {
-                "id": project.manifest.id,
-                "hardwareRevision": project.manifest.hardware_revision,
-                "updateRate": project.manifest.update_rate,
-                "display": project.manifest.display,
-                "assets": project.manifest.assets,
-            },
-            "files": files,
-            "rom": STANDARD.encode(rom),
-            "save": STANDARD.encode(save),
-            "debug": debug,
-            "symbolNames": symbol_names,
-        });
         if let Some(audio) = &self.audio {
             audio.clear();
         }
@@ -1193,6 +1233,12 @@ impl StudioApp {
         match self.runtime.send(command) {
             Ok(()) => {
                 self.running = true;
+                self.keyboard_controller.quarantine();
+                self.gamepad_controller.quarantine();
+                self.pause_menu = pause_menu::PauseMenu::default();
+                self.pending_menu_action = None;
+                self.resume_debug = false;
+                self.player_paused = false;
                 self.debugging = debug;
                 self.snapshot = None;
                 self.debug_event.clear();
@@ -1204,6 +1250,13 @@ impl StudioApp {
                 self.loaded = false;
                 self.pending = true;
                 self.frame = 0;
+                self.input_frame = 0;
+                self.frame_input = None;
+                self.debug_booted = !debug;
+                self.debug_frame_boundary = true;
+                if self.recording_replay {
+                    self.replay_frames.clear();
+                }
                 self.last_pixels.clear();
                 self.status = if debug {
                     "LOADING DEBUG CARTRIDGE"
@@ -1218,19 +1271,57 @@ impl StudioApp {
     }
 
     fn stop(&mut self) {
+        self.keyboard_controller.quarantine();
+        self.gamepad_controller.quarantine();
+        self.pending_menu_action = None;
+        self.resume_debug = false;
+        self.pause_menu = pause_menu::PauseMenu::default();
+        self.touch_controller.clear();
+        self.live_audio.stop();
+        if self.preview_pending && !self.preview_cancelling {
+            self.preview_pending = false;
+            self.preview_cancelling = true;
+            let _ = self.preview_runtime.send(json!({"type":"stop"}));
+        }
         self.running = false;
+        self.player_paused = false;
         self.debug_running = false;
         self.loaded = false;
         self.pending = false;
+        self.frame_input = None;
         if let Some(audio) = &self.audio {
             audio.clear();
         }
         let _ = self.runtime.send(json!({"type":"stop"}));
     }
 
+    fn set_player_paused(&mut self, paused: bool) {
+        if paused && !self.player_paused {
+            self.resume_debug = self.debug_running;
+            self.debug_running = false;
+            self.pause_menu.reset_selection();
+        } else if !paused && self.player_paused {
+            self.debug_running = self.resume_debug;
+            self.resume_debug = false;
+        }
+        self.player_paused = paused;
+        self.touch_controller.clear();
+        self.keyboard_controller.quarantine();
+        self.gamepad_controller.quarantine();
+        if let Some(audio) = &self.audio {
+            audio.clear();
+        }
+        self.last_tick = Instant::now();
+    }
+
     fn process_events(&mut self, context: &egui::Context) {
         while let Some(event) = self.runtime.poll() {
             self.pending = false;
+            if let Some(items) = event.get("menuItems") {
+                if let Err(error) = self.pause_menu.update_items(items) {
+                    self.status = error;
+                }
+            }
             match event["type"].as_str() {
                 Some("loaded") => {
                     self.loaded = true;
@@ -1248,6 +1339,8 @@ impl StudioApp {
                         self.accept_frame(&event["frame"], context);
                         self.status = format!("DEBUG FRAME {} COMPLETE", self.frame);
                     } else if event["booted"] == true {
+                        self.debug_booted = true;
+                        self.debug_frame_boundary = true;
                         self.status = "DEBUG BOOT COMPLETE".to_owned();
                     } else if event["event"].is_object() {
                         self.debug_inspection = event["inspection"].clone();
@@ -1262,6 +1355,7 @@ impl StudioApp {
                         self.status = "PAUSED AT SOURCE STEP".to_owned();
                         if self.hit_breakpoint(&event["event"], &event["conditions"]) {
                             self.debug_running = false;
+                            self.resume_debug = false;
                             self.status = "BREAKPOINT".to_owned();
                         }
                     }
@@ -1269,7 +1363,13 @@ impl StudioApp {
                 Some("snapshot") => {
                     self.snapshot = event["snapshot"].as_str().map(str::to_owned);
                     if let Some(snapshot) = &self.snapshot {
-                        self.debug_snapshots.push((self.frame, snapshot.clone()));
+                        self.debug_snapshots.push((
+                            event["frame"]
+                                .as_u64()
+                                .unwrap_or(u64::from(self.input_frame))
+                                as u32,
+                            snapshot.clone(),
+                        ));
                         if self.debug_snapshots.len() > 120 {
                             self.debug_snapshots.remove(0);
                         }
@@ -1277,6 +1377,19 @@ impl StudioApp {
                     self.status = "DEBUG SNAPSHOT CAPTURED".to_owned();
                 }
                 Some("restored") => {
+                    self.touch_controller.clear();
+                    self.keyboard_controller.quarantine();
+                    self.gamepad_controller.quarantine();
+                    self.pending_menu_action = None;
+                    self.resume_debug = false;
+                    self.input_frame = event["frame"].as_u64().unwrap_or(0) as u32;
+                    self.frame = self.input_frame.saturating_sub(1);
+                    self.frame_input = None;
+                    self.debug_booted = event["booted"] == true;
+                    self.debug_frame_boundary = true;
+                    self.debug_running = false;
+                    self.replay_frames
+                        .retain(|(frame, _)| *frame < self.input_frame);
                     self.status = "DEBUG SNAPSHOT RESTORED".to_owned();
                     if let Some(audio) = &self.audio {
                         audio.clear();
@@ -1311,6 +1424,10 @@ impl StudioApp {
                 }
                 Some("memory-edited") => self.status = "MEMORY UPDATED".to_owned(),
                 Some("error") => {
+                    self.set_player_paused(false);
+                    self.debug_running = false;
+                    self.resume_debug = false;
+                    self.pending_menu_action = None;
                     self.status = event["message"]
                         .as_str()
                         .unwrap_or("runtime error")
@@ -1321,9 +1438,7 @@ impl StudioApp {
                 _ => self.status = format!("UNEXPECTED RUNTIME MESSAGE: {}", event["type"]),
             }
         }
-        if self.debug_running && self.running && self.loaded && !self.pending {
-            self.step(context);
-        }
+        self.pending = self.runtime.has_pending();
     }
 
     fn hit_breakpoint(&self, event: &Value, conditions: &Value) -> bool {
@@ -1352,7 +1467,20 @@ impl StudioApp {
     }
 
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
+        if let Some(items) = event.get("menuItems") {
+            if let Err(error) = self.pause_menu.update_items(items) {
+                self.status = error;
+            }
+        }
         self.frame = event["frame"].as_u64().unwrap_or(0) as u32;
+        self.input_frame = self.frame.saturating_add(1);
+        self.debug_frame_boundary = true;
+        if let Some(input) = self.frame_input.take()
+            && self.recording_replay
+            && self.replay_frames.len() < 36000
+        {
+            self.replay_frames.push((self.frame, input));
+        }
         self.work = event["workUnits"].as_u64().unwrap_or(0) as u32;
         if let Some(encoded) = event["pixels"].as_str() {
             if let Ok(pixels) = STANDARD.decode(encoded) {
@@ -1381,15 +1509,18 @@ impl StudioApp {
                 }
             }
         }
-        if let (Some(audio), Some(left), Some(right)) =
-            (&self.audio, event["left"].as_str(), event["right"].as_str())
+        if !self.player_paused
+            && let (Some(audio), Some(left), Some(right)) =
+                (&self.audio, event["left"].as_str(), event["right"].as_str())
         {
             if let Err(error) = audio.push(left, right) {
                 self.status = format!("AUDIO: {error}");
             }
         }
-        if let (Some(project), Some(encoded)) =
-            (self.project.as_ref(), event["saveCommit"].as_str())
+        if !self.debugging
+            && self.replay_playback.is_none()
+            && let (Some(project), Some(encoded)) =
+                (self.project.as_ref(), event["saveCommit"].as_str())
         {
             if let Ok(bytes) = STANDARD.decode(encoded) {
                 if let Err(error) = write_save(&project.manifest.id, &bytes) {
@@ -1404,6 +1535,7 @@ impl StudioApp {
             || !self.loaded
             || self.pending
             || self.debugging
+            || self.player_paused
             || self.view != View::Player
         {
             return;
@@ -1416,7 +1548,7 @@ impl StudioApp {
     }
 
     fn step(&mut self, context: &egui::Context) {
-        if self.running && self.loaded && !self.pending && self.debugging {
+        if self.running && self.loaded && !self.pending && self.debugging && !self.player_paused {
             self.send_input(context, "step");
         }
     }
@@ -1497,7 +1629,7 @@ impl StudioApp {
             }
             DebugTab::Memory => {
                 ui.horizontal(|ui| {
-                    ui.label("ADDRESS"); ui.add(egui::DragValue::new(&mut self.memory_address).range(0..=0x0030_ffff).hexadecimal(6, false, true));
+                    ui.label("ADDRESS"); ui.add(egui::DragValue::new(&mut self.memory_address).range(0..=0x003f_ffff).hexadecimal(6, false, true));
                     ui.label("BYTES"); ui.add(egui::DragValue::new(&mut self.memory_length).range(1..=256));
                     if ui.button("READ").clicked() {
                         self.pending = self.runtime.send(json!({"type":"memory","address":self.memory_address,"length":self.memory_length})).is_ok();
@@ -1524,9 +1656,8 @@ impl StudioApp {
                 for event in self.debug_trace.iter().rev().take(8) { ui.label(format!("{}", event["sourceSpan"])); }
                 ui.label("SAVED DEBUG SNAPSHOTS");
                 for (frame, snapshot) in self.debug_snapshots.iter().rev() {
-                    if ui.button(format!("RESTORE FRAME {frame}")).clicked() {
+                    if ui.button(format!("RESTORE BEFORE FRAME {frame}")).clicked() {
                         self.pending = self.runtime.send(json!({"type":"restore","snapshot":snapshot})).is_ok();
-                        self.frame = *frame;
                         self.debug_running = false;
                     }
                 }
@@ -1534,30 +1665,23 @@ impl StudioApp {
         });
     }
 
+    fn capture_keyboard(&mut self, context: &egui::Context) {
+        let enabled = self.running
+            && self.loaded
+            && !self.show_library
+            && !self.player_paused
+            && (self.player_mode || self.view == View::Player)
+            && self.replay_playback.is_none();
+        self.keyboard_controller.capture(context, enabled);
+        self.gamepad_controller.capture(
+            context,
+            &mut self.gamepads,
+            enabled && !context.text_edit_focused(),
+        );
+    }
+
     fn send_input(&mut self, context: &egui::Context, kind: &str) {
-        let buttons = context.input(|input| {
-            let mut buttons = serde_json::Map::new();
-            for name in [
-                "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "menu",
-            ] {
-                let key = match name {
-                    "up" => Key::ArrowUp,
-                    "down" => Key::ArrowDown,
-                    "left" => Key::ArrowLeft,
-                    "right" => Key::ArrowRight,
-                    "a" => Key::Z,
-                    "b" => Key::X,
-                    "x" => Key::A,
-                    "y" => Key::S,
-                    "l" => Key::Q,
-                    "r" => Key::W,
-                    "start" => Key::Enter,
-                    _ => Key::Escape,
-                };
-                buttons.insert(name.to_owned(), Value::Bool(input.key_down(key)));
-            }
-            buttons
-        });
+        self.capture_keyboard(context);
         let pointer = context.input(|input| {
             let position = input.pointer.hover_pos();
             if let (Some(position), Some(rect)) = (position, self.screen_rect) {
@@ -1572,72 +1696,26 @@ impl StudioApp {
             }
             json!({"x":0,"y":0,"primary":false,"secondary":false,"inside":false})
         });
-        let empty = || {
-            let mut values = serde_json::Map::new();
-            for key in buttons.keys() {
-                values.insert(key.clone(), Value::Bool(false));
-            }
-            json!({"buttons":values})
-        };
-        let mut controllers = vec![json!({"buttons":buttons}), empty(), empty(), empty()];
-        if let Some(gamepads) = self.gamepads.as_mut() {
-            while gamepads.next_event().is_some() {}
-            for (port, (_, gamepad)) in gamepads
-                .gamepads()
-                .filter(|(_, gamepad)| gamepad.is_connected())
-                .take(4)
-                .enumerate()
-            {
-                let states = [
-                    (
-                        "up",
-                        gamepad.is_pressed(Button::DPadUp) || gamepad.value(Axis::LeftStickY) > 0.5,
-                    ),
-                    (
-                        "down",
-                        gamepad.is_pressed(Button::DPadDown)
-                            || gamepad.value(Axis::LeftStickY) < -0.5,
-                    ),
-                    (
-                        "left",
-                        gamepad.is_pressed(Button::DPadLeft)
-                            || gamepad.value(Axis::LeftStickX) < -0.5,
-                    ),
-                    (
-                        "right",
-                        gamepad.is_pressed(Button::DPadRight)
-                            || gamepad.value(Axis::LeftStickX) > 0.5,
-                    ),
-                    ("a", gamepad.is_pressed(Button::South)),
-                    ("b", gamepad.is_pressed(Button::East)),
-                    ("x", gamepad.is_pressed(Button::West)),
-                    ("y", gamepad.is_pressed(Button::North)),
-                    ("l", gamepad.is_pressed(Button::LeftTrigger)),
-                    ("r", gamepad.is_pressed(Button::RightTrigger)),
-                    ("start", gamepad.is_pressed(Button::Start)),
-                    ("menu", gamepad.is_pressed(Button::Select)),
-                ];
-                for (name, pressed) in states {
-                    let before = controllers[port]["buttons"][name]
-                        .as_bool()
-                        .unwrap_or(false);
-                    controllers[port]["buttons"][name] = Value::Bool(before || pressed);
-                }
-            }
+        let mut live_input = replay::empty_input();
+        live_input["pointer"] = pointer;
+        self.keyboard_controller.apply_to(&mut live_input);
+        self.gamepad_controller.apply_to(&mut live_input);
+        self.touch_controller.apply_to(&mut live_input);
+        if let Some(action) = self.pending_menu_action {
+            live_input = replay::empty_input();
+            live_input["menuAction"] = action.into();
         }
-        let live_input = json!({"controllers":controllers,"pointer":pointer});
-        let input = self.replay_playback.as_ref().map_or_else(
-            || live_input.clone(),
-            |frames| {
-                frames
-                    .get(&self.frame)
-                    .cloned()
-                    .unwrap_or_else(replay::empty_input)
-            },
-        );
-        if self.recording_replay && self.replay_frames.len() < 36_000 {
-            self.replay_frames.push((self.frame, input.clone()));
-        }
+        let input = self.frame_input.clone().unwrap_or_else(|| {
+            self.replay_playback.as_ref().map_or_else(
+                || live_input.clone(),
+                |frames| {
+                    frames
+                        .get(&self.input_frame)
+                        .cloned()
+                        .unwrap_or_else(replay::empty_input)
+                },
+            )
+        });
         let command = if kind == "step" {
             json!({"type":kind,"input":input,"watches":self.watches,
                 "conditions":self.breakpoints.iter().map(|point| point.condition.as_str()).collect::<Vec<_>>()})
@@ -1648,6 +1726,16 @@ impl StudioApp {
             self.status = error;
             self.running = false;
         } else {
+            if self.frame_input.is_none() && (kind != "step" || self.debug_booted) {
+                self.frame_input = Some(input);
+                self.pending_menu_action = None;
+                self.touch_controller.consume();
+                self.keyboard_controller.consume();
+                self.gamepad_controller.consume();
+            }
+            if kind == "step" {
+                self.debug_frame_boundary = false;
+            }
             self.pending = true;
         }
     }
@@ -1658,11 +1746,14 @@ impl StudioApp {
             ui.separator();
             ui_theme::legend(ui, "COLOR DEVELOPMENT UNIT");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui_theme::legend(ui, "REV. 01  /  1999");
+                ui_theme::legend(ui, "REV. 02  /  1999");
             });
         });
         ui.add_space(3.0);
         ui.horizontal_wrapped(|ui| {
+            if ui.button("LIBRARY").clicked() {
+                self.enter_library();
+            }
             ui.menu_button("PROJECT", |ui| {
                 if ui.button("OPEN PROJECT").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_folder() {
@@ -1727,24 +1818,37 @@ impl StudioApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("TOOLS", |ui| {
-                    if ui.button("COMPILER EXPLORER").clicked() {
-                        self.open_explorer();
-                        ui.close();
-                    }
-                    if ui.button("SAVE MANAGER").clicked() {
-                        self.show_save_manager = true;
-                        self.confirm_save_action = None;
-                        ui.close();
-                    }
-                });
+            });
+            ui.menu_button("TOOLS", |ui| {
+                if ui.button("MODL PLAYGROUND / REPL").clicked() {
+                    self.show_playground = true;
+                    self.source_editor.dismiss_completion();
+                    self.playground.focus();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        self.project.is_some(),
+                        egui::Button::new("COMPILER EXPLORER"),
+                    )
+                    .clicked()
+                {
+                    self.open_explorer();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.project.is_some(), egui::Button::new("SAVE MANAGER"))
+                    .clicked()
+                {
+                    self.show_save_manager = true;
+                    self.confirm_save_action = None;
+                    ui.close();
+                }
+            });
+            ui.add_enabled_ui(self.project.is_some(), |ui| {
                 ui.menu_button("EXPORT", |ui| {
-                    if ui.button("STANDALONE HTML").clicked() {
-                        self.export_player(false);
-                        ui.close();
-                    }
-                    if ui.button("ITCH.IO ZIP").clicked() {
-                        self.export_player(true);
+                    if ui.button("NATIVE GAME").clicked() {
+                        self.export_native_player();
                         ui.close();
                     }
                     if ui.button("CARTRIDGE PNG").clicked() {
@@ -1786,8 +1890,7 @@ impl StudioApp {
                         if self.recording_replay {
                             self.finish_replay();
                         } else {
-                            self.replay_frames.clear();
-                            self.recording_replay = true;
+                            self.start_replay_recording();
                         }
                         ui.close();
                     }
@@ -1811,9 +1914,15 @@ impl StudioApp {
             if ui.button("HELP").clicked() {
                 self.show_manual = true;
             }
+            if self.running && ui.button("MENU").clicked() {
+                self.set_player_paused(!self.player_paused);
+            }
             ui.separator();
             if ui
-                .add_enabled(self.running, egui::Button::new("STOP"))
+                .add_enabled(
+                    self.running || self.live_audio.active() || self.preview_pending,
+                    egui::Button::new("STOP"),
+                )
                 .clicked()
             {
                 self.stop();
@@ -1842,7 +1951,11 @@ impl StudioApp {
                     self.step(ui.ctx());
                 }
                 if ui
-                    .add_enabled(self.loaded && !self.pending, egui::Button::new("SNAPSHOT"))
+                    .add_enabled(
+                        self.loaded && !self.pending && self.debug_frame_boundary,
+                        egui::Button::new("SNAPSHOT"),
+                    )
+                    .on_disabled_hover_text("Snapshots require a completed frame or boot boundary")
                     .clicked()
                 {
                     self.pending = self.runtime.send(json!({"type":"snapshot"})).is_ok();
@@ -1878,12 +1991,114 @@ impl StudioApp {
         let _: Value = serde_json::from_str(&self.asset_text)
             .map_err(|error| format!("{}: {error}", self.asset_path))?;
         let project = self.project.as_mut().ok_or("no project is open")?;
-        project
-            .files
-            .insert(self.asset_path.clone(), self.asset_text.as_bytes().to_vec());
-        project.dirty = true;
+        if project.files.get(&self.asset_path).map(Vec::as_slice)
+            != Some(self.asset_text.as_bytes())
+        {
+            project
+                .files
+                .insert(self.asset_path.clone(), self.asset_text.as_bytes().to_vec());
+            project.dirty = true;
+        }
         self.asset_dirty = false;
+        if let Some(workbench) = self.asset_workbench.as_mut() {
+            workbench.dirty = false;
+        }
         Ok(())
+    }
+
+    // Discard project-local UI state when replacing the current cartridge.
+    fn reset_asset_editors(&mut self) {
+        self.asset_sessions.clear();
+        self.asset_meter = asset_meter::AssetMeter::default();
+        self.asset_workbench = None;
+        self.sprite = None;
+        self.asset_name.clear();
+        self.asset_path.clear();
+        self.asset_text.clear();
+        self.asset_dirty = false;
+        self.sprite_texture = None;
+        self.sprite_painting = false;
+        self.last_sprite_point = None;
+        self.selection_anchor = None;
+    }
+
+    // Call only after current buffers have been synchronized into project memory.
+    fn cache_asset_editors(&mut self) {
+        let Some(project) = &self.project else { return };
+        let mut retained = true;
+        if let Some(editor) = self.asset_workbench.take() {
+            retained &= self.asset_sessions.stash_structured(
+                project,
+                &self.asset_name,
+                &self.asset_path,
+                editor,
+            );
+        }
+        if let Some(editor) = self.sprite.take() {
+            retained &= self.asset_sessions.stash_sprite(project, editor);
+        }
+        self.asset_name.clear();
+        self.asset_path.clear();
+        self.asset_text.clear();
+        self.asset_dirty = false;
+        self.sprite_texture = None;
+        self.sprite_painting = false;
+        self.last_sprite_point = None;
+        self.selection_anchor = None;
+        if !retained {
+            self.status =
+                "ASSET RETAINED IN PROJECT / SESSION EXCEEDS HISTORY CACHE LIMIT".to_owned();
+        }
+    }
+
+    fn asset_meter_ui(&mut self, ui: &mut egui::Ui) {
+        let now = Instant::now();
+        if self.asset_meter.due(now)
+            && let Some(project) = &self.project
+        {
+            let overlay = if let Some(editor) = self.sprite.as_ref().filter(|editor| editor.dirty) {
+                let source = serde_json::to_vec(&json!({"revision":2,"kind":"sprite","width":editor.document.width,"height":editor.document.height,"frames":editor.document.indexed_frames()})).expect("indexed sprite is serializable");
+                Some(asset_meter::Overlay {
+                    path: editor.asset_path.clone(),
+                    source,
+                    declaration: Some((
+                        editor.name.clone(),
+                        if editor.document.frames.len() > 1 {
+                            modl_core::AssetKind::Animation
+                        } else {
+                            modl_core::AssetKind::Sprite
+                        },
+                    )),
+                })
+            } else if let Some(editor) = self.asset_workbench.as_ref().filter(|editor| editor.dirty)
+            {
+                Some(asset_meter::Overlay {
+                    path: self.asset_path.clone(),
+                    source: editor
+                        .source()
+                        .expect("asset JSON is serializable")
+                        .into_bytes(),
+                    declaration: None,
+                })
+            } else if self.asset_dirty {
+                Some(asset_meter::Overlay {
+                    path: self.asset_path.clone(),
+                    source: self.asset_text.as_bytes().to_vec(),
+                    declaration: None,
+                })
+            } else {
+                None
+            };
+            self.asset_meter.refresh(project, overlay, now);
+        }
+        if let Some(name) = self.asset_meter.ui(ui) {
+            if name == "DISPLAY" {
+                self.open_display();
+            } else if name != "BANK" {
+                self.open_asset(&name);
+            }
+        }
+        ui.separator();
     }
 
     fn import_asset_file(&mut self) {
@@ -1931,19 +2146,11 @@ impl StudioApp {
             self.status = format!("ASSET KIND MUST BE {expected}");
             return;
         }
-        let editor = if self.asset_name == "DISPLAY" {
-            AssetWorkbench::new_display(&source)
-        } else {
-            AssetWorkbench::new(current.kind, &source)
-        };
-        match editor {
-            Ok(editor) => {
-                self.asset_text = source;
-                self.asset_workbench = Some(editor);
-                self.asset_dirty = true;
-                self.status = format!("IMPORTED {}", path.display());
-            }
-            Err(error) => self.status = error,
+        if let Some(current) = self.asset_workbench.as_mut() {
+            current.replace_document(parsed);
+            self.asset_text = source;
+            self.asset_dirty = true;
+            self.status = format!("IMPORTED {} / UNDO AVAILABLE", path.display());
         }
     }
 
@@ -1978,19 +2185,15 @@ impl StudioApp {
         else {
             return;
         };
-        let bytes = match fs::read(&path) {
-            Ok(bytes) if bytes.len() <= 16 * 1024 * 1024 => bytes,
-            Ok(_) => {
-                self.status = "PNG EXCEEDS 16 MIB".to_owned();
-                return;
-            }
+        let bytes = match modl_core::asset_import::read_png_source(&path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 self.status = error.to_string();
                 return;
             }
         };
         self.status = match self.asset_workbench.as_mut() {
-            Some(workbench) => match workbench.import_tile_png(&bytes, &sprite::palette()) {
+            Some(workbench) => match workbench.import_tile_png(&bytes) {
                 Ok(()) => {
                     self.asset_dirty = true;
                     "TILE ATLAS IMPORTED".to_owned()
@@ -2052,14 +2255,24 @@ impl StudioApp {
             self.status = format!("ASSET FILE {} IS MISSING", asset.path);
             return;
         };
+        if self.asset_name == name && self.asset_path == asset.path {
+            self.view = View::Assets;
+            return;
+        }
+        let asset_path = asset.path.clone();
+        let kind = asset.kind;
         match String::from_utf8(bytes.clone()) {
             Ok(source) => {
-                self.sprite = None;
+                let editor = self
+                    .asset_sessions
+                    .take_structured(project, name, &asset_path, Some(kind))
+                    .or_else(|| AssetWorkbench::new(kind, &source).ok());
+                self.cache_asset_editors();
                 self.asset_name = name.to_owned();
-                self.asset_path = asset.path.clone();
+                self.asset_path = asset_path;
                 self.asset_text = source;
                 self.asset_dirty = false;
-                self.asset_workbench = AssetWorkbench::new(asset.kind, &self.asset_text).ok();
+                self.asset_workbench = editor;
                 self.view = View::Assets;
             }
             Err(error) => self.status = error.to_string(),
@@ -2068,6 +2281,12 @@ impl StudioApp {
 
     fn open_display(&mut self) {
         if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
             self.status = error;
             return;
         }
@@ -2087,7 +2306,11 @@ impl StudioApp {
                     return;
                 }
             };
-            manifest["display"] = toml::Value::String(path.clone());
+            let Some(table) = manifest.as_table_mut() else {
+                self.status = "MANIFEST MUST BE A TABLE".to_owned();
+                return;
+            };
+            table.insert("display".to_owned(), toml::Value::String(path.clone()));
             project.manifest_source = match toml::to_string_pretty(&manifest) {
                 Ok(value) => value,
                 Err(error) => {
@@ -2101,7 +2324,7 @@ impl StudioApp {
         }
         let source = project.files.entry(path.clone()).or_insert_with(|| {
             serde_json::to_vec(&json!({
-                "revision":1,"kind":"display",
+                "revision":2,"kind":"display",
                 "remap":(0..32).collect::<Vec<_>>(),"raster":[]
             }))
             .unwrap_or_default()
@@ -2113,7 +2336,22 @@ impl StudioApp {
                 return;
             }
         };
-        self.asset_workbench = AssetWorkbench::new_display(&source).ok();
+        if self.asset_name == "DISPLAY"
+            && self.asset_path == path
+            && self
+                .asset_workbench
+                .as_ref()
+                .is_some_and(AssetWorkbench::is_display)
+        {
+            self.view = View::Assets;
+            return;
+        }
+        let editor = self
+            .asset_sessions
+            .take_structured(project, "DISPLAY", &path, None)
+            .or_else(|| AssetWorkbench::new_display(&source).ok());
+        self.cache_asset_editors();
+        self.asset_workbench = editor;
         self.asset_text = source;
         self.asset_name = "DISPLAY".to_owned();
         self.asset_path = path;
@@ -2233,6 +2471,10 @@ impl StudioApp {
     }
 
     fn load_sprite(&mut self, name: &str) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
         if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
             if let Err(error) = self.save_sprite() {
                 self.status = error;
@@ -2242,12 +2484,22 @@ impl StudioApp {
         let Some(project) = self.project.as_ref() else {
             return;
         };
+        if self
+            .sprite
+            .as_ref()
+            .is_some_and(|editor| editor.name == name)
+        {
+            self.view = View::Sprites;
+            return;
+        }
         let Some(asset) = project.manifest.assets.get(name) else {
             return;
         };
         let sidecar = format!("editor/sprites/{name}.m01paint");
         let palette = sprite::palette();
-        let editor = if let Some(source) = project.files.get(&sidecar) {
+        let editor = if let Some(editor) = self.asset_sessions.take_sprite(project, name) {
+            Ok(editor)
+        } else if let Some(source) = project.files.get(&sidecar) {
             serde_json::from_slice::<SpriteDocument>(source)
                 .map_err(|error| error.to_string())
                 .and_then(|document| {
@@ -2260,6 +2512,7 @@ impl StudioApp {
         };
         match editor {
             Ok(editor) => {
+                self.cache_asset_editors();
                 self.sprite = Some(editor);
                 self.asset_name.clear();
                 self.sprite_texture = None;
@@ -2271,6 +2524,10 @@ impl StudioApp {
     }
 
     fn create_sprite(&mut self) {
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
         if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty) {
             if let Err(error) = self.save_sprite() {
                 self.status = error;
@@ -2303,6 +2560,7 @@ impl StudioApp {
         );
         match editor {
             Ok(editor) => {
+                self.cache_asset_editors();
                 self.sprite = Some(editor);
                 self.sprite_texture = None;
                 if let Err(error) = self.save_sprite() {
@@ -2321,7 +2579,7 @@ impl StudioApp {
         let name = editor.name.clone();
         let asset_path = editor.asset_path.clone();
         let sidecar = format!("editor/sprites/{name}.m01paint");
-        let frames = editor.document.indexed_frames(&sprite::palette());
+        let frames = editor.document.indexed_frames();
         let asset = json!({
             "revision": 2,
             "kind": "sprite",
@@ -2532,7 +2790,7 @@ impl StudioApp {
                                     .add_filter("PNG", &["png"])
                                     .pick_file()
                                 {
-                                    match fs::read(path)
+                                    match modl_core::asset_import::read_png_source(&path)
                                         .map_err(|error| error.to_string())
                                         .and_then(|bytes| editor.import_png(&bytes))
                                     {
@@ -2692,8 +2950,22 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
+        self.capture_keyboard(&context);
+        self.handle_system_menu_toggle(&context);
         self.process_events(&context);
         self.process_preview(&context);
+        if (self.player_mode || self.view != View::Assets) && self.live_audio.active() {
+            self.live_audio.stop();
+        }
+        self.live_audio.poll(&context, self.audio.as_ref());
+        self.playground.poll(&context);
+        if !self.player_mode {
+            self.touch_controller.clear();
+        }
+        if self.player_mode {
+            self.player_ui(root);
+            return;
+        }
         egui::Panel::top("toolbar")
             .frame(ui_theme::case_frame())
             .show(root, |ui| self.toolbar(ui));
@@ -2785,45 +3057,25 @@ impl eframe::App for StudioApp {
             self.show_new_asset &= open;
         }
         self.help_windows(&context);
-        if self.project.is_none() {
+        if self.show_playground {
+            self.playground
+                .ui(&context, &mut self.show_playground, self.project.as_ref());
+        }
+        if self.show_library || self.project.is_none() {
+            let mut action = None;
+            let navigation = self.gamepad_controller.take_navigation();
             egui::CentralPanel::default()
                 .frame(ui_theme::screen_frame())
                 .show(root, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(34.0);
-                        ui_theme::legend(ui, "MOD-01 / SYSTEM ROM / REVISION 01");
-                        ui.add_space(15.0);
-                        ui.heading(RichText::new("COLOR DEVELOPMENT UNIT").color(ui_theme::CREAM));
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("INSERT A CARTRIDGE OR OPEN A PROJECT")
-                                .color(ui_theme::CYAN),
-                        );
-                        ui.add_space(29.0);
-                        ui_theme::legend(ui, "--- CARTRIDGE LIBRARY ---");
-                        ui.add_space(10.0);
-                        egui::Grid::new("sample-cartridges")
-                            .spacing([20.0, 10.0])
-                            .show(ui, |ui| {
-                                for path in bundled_samples() {
-                                    let title = path
-                                        .file_name()
-                                        .and_then(|value| value.to_str())
-                                        .unwrap_or("CARTRIDGE")
-                                        .replace('-', " ")
-                                        .to_uppercase();
-                                    ui.label(RichText::new(title).color(ui_theme::CREAM));
-                                    if ui.button("EDIT").clicked() {
-                                        self.open_sample(path.clone(), false);
-                                    }
-                                    if ui.button("PLAY").clicked() {
-                                        self.open_sample(path, true);
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                    ui.add_enabled_ui(self.pending_library_open.is_none(), |ui| {
+                        action = self.library.ui(ui, navigation, self.project.is_some());
                     });
                 });
+            if let Some(action) = action {
+                self.library_action(action);
+            }
+            self.library_confirmation(&context);
+            self.cursors.paint(&context);
             return;
         }
         egui::Panel::left("project")
@@ -2917,28 +3169,14 @@ impl eframe::App for StudioApp {
             .show(root, |ui| match self.view {
                 View::Code => {
                     if let Some(project) = self.project.as_mut() {
-                        ui_theme::legend(ui, "SOURCE / LIVE EDITOR");
-                        ui.heading(&project.selected_file);
-                        let highlighter = &mut self.modl_highlighter;
-                        let mut layouter =
-                            |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                                highlighter.layout(ui, text.as_str(), wrap_width)
-                            };
-                        let response = ui.add_sized(
-                            ui.available_size(),
-                            egui::TextEdit::multiline(&mut project.editor_text)
-                                .font(egui::TextStyle::Monospace)
-                                .code_editor()
-                                .desired_rows(30)
-                                .layouter(&mut layouter),
-                        );
-                        if response.changed() {
-                            project.dirty = true;
-                        }
+                        self.source_editor
+                            .show(ui, project, &mut self.modl_highlighter);
                     }
                 }
-                View::Sprites => self.sprite_ui(ui),
+                View::Sprites => { self.asset_meter_ui(ui); self.sprite_ui(ui); }
                 View::Assets => {
+                    self.asset_meter_ui(ui);
+                    egui::ScrollArea::vertical().id_salt("asset-workspace").show(ui, |ui| {
                     if self.asset_name.is_empty() {
                         ui.heading("ASSETS");
                         ui.label("Choose a map, font, sound or music asset from the project list.");
@@ -2998,14 +3236,50 @@ impl eframe::App for StudioApp {
                                 )
                             })
                         {
-                            ui.horizontal(|ui| {
-                                if ui.button("PREVIEW AUDIO").clicked() {
-                                    self.render_asset_wav(false);
+                            ui.horizontal_wrapped(|ui| {
+                                let music = self
+                                    .project
+                                    .as_ref()
+                                    .and_then(|project| {
+                                        project.manifest.assets.get(&self.asset_name)
+                                    })
+                                    .is_some_and(|asset| asset.kind == modl_core::AssetKind::Music);
+                                if music && ui.button("LIVE SONG").clicked() {
+                                    self.start_live_audio(AudioPreviewMode::Song(0));
                                 }
-                                if ui.button("EXPORT WAV").clicked() {
-                                    self.render_asset_wav(true);
+                                if music && ui.button("PATTERN FROM CURSOR").clicked() {
+                                    self.start_live_audio(AudioPreviewMode::Pattern);
+                                }
+                                if ui
+                                    .button(if music {
+                                        "AUDITION CELL"
+                                    } else {
+                                        "PREVIEW PATCH"
+                                    })
+                                    .clicked()
+                                {
+                                    self.start_live_audio(AudioPreviewMode::Note);
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.live_audio.active(),
+                                        egui::Button::new("STOP AUDIO"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.live_audio.stop();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        !self.preview_pending && !self.preview_cancelling,
+                                        egui::Button::new("EXPORT WAV"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.render_asset_wav();
                                 }
                             });
+                            self.live_audio.telemetry_ui(ui);
                         }
                         ui.collapsing("EDIT RAW JSON", |ui| {
                             if let Some(workbench) = &self.asset_workbench {
@@ -3016,6 +3290,8 @@ impl eframe::App for StudioApp {
                             if ui
                                 .add(
                                     egui::TextEdit::multiline(&mut self.asset_text)
+                                        .id_salt(("asset-json", self.asset_sessions.generation(), &self.asset_name, &self.asset_path))
+                                        .desired_width(f32::INFINITY)
                                         .font(egui::TextStyle::Monospace)
                                         .code_editor()
                                         .desired_rows(12),
@@ -3026,15 +3302,43 @@ impl eframe::App for StudioApp {
                                 self.asset_workbench = None;
                             }
                         });
+                        let sounds = self.project.as_ref().map_or_else(Vec::new, |project| {
+                            project.manifest.assets.iter().filter(|(_, asset)| asset.kind == modl_core::AssetKind::Sound).map(|(name, _)| name.clone()).collect::<Vec<_>>()
+                        });
+                        let position = self.live_audio.playhead(&self.asset_name);
+                        let mut tracker_actions = Vec::new();
                         if let Some(workbench) = self.asset_workbench.as_mut() {
                             ui.separator();
-                            if workbench.ui(ui, &sprite::palette(), &tile_sets) {
+                            if workbench.ui(ui, &sprite::palette(), &tile_sets, &sounds, position.as_ref()) {
                                 self.asset_dirty = true;
+                            }
+                            tracker_actions = workbench.take_tracker_actions();
+                        }
+                        for action in tracker_actions {
+                            match action {
+                                tracker::Action::Pattern => self.start_live_audio(AudioPreviewMode::Pattern),
+                                tracker::Action::Song(order) => self.start_live_audio(AudioPreviewMode::Song(order)),
+                                tracker::Action::Stop => self.live_audio.stop(),
+                                tracker::Action::Audition { sound, note, volume } => {
+                                    let prepared = self.project.as_ref().ok_or_else(|| "no project is open".to_owned()).and_then(|project| {
+                                        let document = self.selected_audio_document()?;
+                                        live_audio::project_bank(project, &self.asset_name, &document, None)
+                                    });
+                                    match prepared {
+                                        Ok(bank) => self.live_audio.audition(bank, &sound, f64::from(note), volume),
+                                        Err(error) => self.status = format!("AUDIO PREVIEW ERROR: {error}"),
+                                    }
+                                }
+                                tracker::Action::Undo | tracker::Action::Redo => unreachable!("history is handled by the asset workbench"),
                             }
                         }
                     }
+                    });
                 }
                 View::Player => {
+                    if ui.button("OPEN GAME VIEW").clicked() {
+                        self.player_mode = true;
+                    }
                     ui_theme::legend(ui, "DISPLAY / 240 x 144");
                     ui.heading("CARTRIDGE PLAYER");
                     ui.label(
@@ -3087,7 +3391,7 @@ impl eframe::App for StudioApp {
                     }
                 }
                 View::Manifest => {
-                    ui.heading("cart.toml");
+                    ui.heading("CARTRIDGE METADATA");
                     if ui.button("APPLY MANIFEST").clicked() {
                         self.apply_manifest();
                     }
@@ -3099,7 +3403,8 @@ impl eframe::App for StudioApp {
                     );
                 }
             });
-        self.send_frame(&context);
+        self.system_menu_ui(&context);
+        self.advance_runtime(&context);
         self.cursors.paint(&context);
         if self.running {
             context.request_repaint_after(Duration::from_millis(4));
@@ -3145,7 +3450,7 @@ fn bundled_samples() -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.join("cart.toml").is_file())
+        .filter(|path| path.join("cart.m01w").is_file())
         .collect();
     paths.sort();
     paths
@@ -3449,12 +3754,51 @@ fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn main() -> eframe::Result {
-    let start = std::env::args_os().nth(1).map(PathBuf::from);
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let bundled = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|directory| directory.join("game.m01c")))
+        .filter(|path| path.is_file());
+    let launch = match launch::parse(&args, bundled) {
+        Ok(launch) => launch,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
+    let (start, player_mode) = match launch {
+        launch::Launch::Verify { path, frames } => {
+            match player::verify(&path, frames) {
+                Ok(result) => println!("{result}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        launch::Launch::Help => {
+            println!(
+                "mod01-studio [PATH | --play PATH | --studio PATH | --verify PATH [--frames N]]"
+            );
+            return Ok(());
+        }
+        launch::Launch::Studio(path) => (path, false),
+        launch::Launch::Player(path) => (Some(path), true),
+    };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MOD-01 / Color Development Unit")
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([900.0, 600.0]),
+            .with_inner_size(if player_mode {
+                [960.0, 650.0]
+            } else {
+                [1280.0, 800.0]
+            })
+            .with_min_inner_size(if player_mode {
+                [480.0, 320.0]
+            } else {
+                [900.0, 600.0]
+            }),
         ..Default::default()
     };
     eframe::run_native(
@@ -3463,7 +3807,19 @@ fn main() -> eframe::Result {
         Box::new(move |creation| {
             ui_assets::install_font(&creation.egui_ctx);
             ui_theme::install(&creation.egui_ctx);
-            Ok(Box::new(StudioApp::new(start, &creation.egui_ctx)))
+            let mut app = StudioApp::new(start, &creation.egui_ctx);
+            app.player_mode = player_mode;
+            if player_mode {
+                if let Some(project) = &app.project {
+                    creation
+                        .egui_ctx
+                        .send_viewport_cmd(egui::ViewportCommand::Title(
+                            project.manifest.title.clone(),
+                        ));
+                }
+                app.run();
+            }
+            Ok(Box::new(app))
         }),
     )
 }

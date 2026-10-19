@@ -140,7 +140,7 @@ describe('hardware byte bus', () => {
     );
     const command = (name: string, args: number[]) => ({ name, arguments: args, sourceSpan: span });
     expect(bus.read(MEMORY.draw + 48 + 7, 1, span)).toBe(7);
-    expect(bus.read(MEMORY.transparency, 1, span)).toBe(0);
+    expect(bus.read(MEMORY.transparency, 1, span)).toBe(1);
     graphics.beginFrame();
     graphics.executeCommand(command('camera', [2, 3]));
     expect(bus.read(MEMORY.draw + 6, 2, span)).toBe(0x4000);

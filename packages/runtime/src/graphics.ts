@@ -1,4 +1,4 @@
-import { HARDWARE, MASTER_PALETTE_RGBA } from './hardware';
+import { HARDWARE } from './hardware';
 import { BITMAP_FONT, glyphRows } from './font';
 import type { ConsoleCommand } from './protocol';
 import { MEMORY, type ByteMemoryRegion } from './bus';
@@ -109,7 +109,8 @@ export class IndexedGraphics {
   private readonly assets: VisualAssetStore;
   private readonly display: DisplayConfiguration;
   private readonly drawRegisters = new Uint8Array(80);
-  private readonly transparency = Uint8Array.of(HARDWARE.transparentColor);
+  private readonly transparency = new Uint8Array(HARDWARE.paletteSize / 8);
+  private readonly pattern = new Uint8Array(8);
   private readonly state = new MemoryDrawState(this.drawRegisters);
   private readonly rasterBytes = new Uint8Array(HARDWARE.height * MEMORY.rasterStride);
   private readonly rasterView = new DataView(this.rasterBytes.buffer);
@@ -132,6 +133,7 @@ export class IndexedGraphics {
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.displayRemap.set(identityRemap());
+    this.resetTransparency();
   }
 
   public executeFrame(commands: readonly ConsoleCommand[]): GraphicsFrame {
@@ -145,7 +147,9 @@ export class IndexedGraphics {
   public beginFrame(): void {
     this.back.set(this.front);
     this.drawRegisters.fill(0);
+    this.resetTransparency();
     this.state.clipWidth = HARDWARE.width;
+    this.pattern.fill(0);
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.rasterBytes.fill(0);
@@ -265,10 +269,25 @@ export class IndexedGraphics {
         },
       },
       {
-        name: 'transparency index',
+        name: 'blit transparency mask',
         address: MEMORY.transparency,
         bytes: this.transparency,
-        writable: false,
+        writable: true,
+      },
+      {
+        name: 'primitive fill pattern',
+        address: MEMORY.pattern,
+        bytes: this.pattern,
+        writable: true,
+        validate: (offset, bytes) => {
+          const candidate = this.pattern.slice();
+          candidate.set(bytes, offset);
+          return (
+            (candidate[3] ?? 0) <= 1 &&
+            (candidate[4] ?? 0) <= 1 &&
+            candidate.subarray(5).every((value) => value === 0)
+          );
+        },
       },
       {
         name: 'raster callback state',
@@ -324,7 +343,7 @@ export class IndexedGraphics {
       }
       case 'pixel': {
         const [x, y, color] = expectIntegers(command, 3);
-        this.plot(x, y, color, state);
+        this.plot(x, y, color, state, true);
         return;
       }
       case 'line': {
@@ -376,6 +395,36 @@ export class IndexedGraphics {
         expectIntegers(command, 0);
         state.remap.set(identityRemap());
         return;
+      case 'palt': {
+        if (command.arguments.length !== 2) throw new TypeError('palt expects two arguments');
+        const color = expectColor(expectInteger(command.arguments[0]));
+        const transparent = expectBoolean(command.arguments[1]);
+        const byte = color >>> 3;
+        const bit = 1 << (color & 7);
+        this.transparency[byte] = transparent
+          ? (this.transparency[byte] ?? 0) | bit
+          : (this.transparency[byte] ?? 0) & ~bit;
+        return;
+      }
+      case 'palt_reset':
+        expectIntegers(command, 0);
+        this.resetTransparency();
+        return;
+      case 'fill_pattern': {
+        if (command.arguments.length !== 3)
+          throw new TypeError('fill_pattern expects three arguments');
+        const mask = expectInteger(command.arguments[0]);
+        const second = expectColor(expectInteger(command.arguments[1]));
+        const transparent = expectBoolean(command.arguments[2]);
+        if (mask < 0 || mask > 65535)
+          throw new RangeError('fill pattern mask must be between 0 and 65535');
+        this.pattern.set([mask & 255, mask >>> 8, second, 1, Number(transparent), 0, 0, 0]);
+        return;
+      }
+      case 'fill_pattern_reset':
+        expectIntegers(command, 0);
+        this.pattern.fill(0);
+        return;
       case 'sprite': {
         const [handle, x, y] = command.arguments;
         this.drawSprite(readAssetName(handle, 'Sprite'), expectInteger(x), expectInteger(y), state);
@@ -402,6 +451,43 @@ export class IndexedGraphics {
           expectInteger(quarterTurns),
           expectBoolean(flipX),
           expectBoolean(flipY),
+          state,
+        );
+        return;
+      }
+      case 'sprite_region': {
+        if (command.arguments.length !== 11)
+          throw new TypeError('sprite_region expects eleven arguments');
+        this.drawSpriteRegion(
+          readAssetName(command.arguments[0], 'Sprite'),
+          expectInteger(command.arguments[1]),
+          expectInteger(command.arguments[2]),
+          expectInteger(command.arguments[3]),
+          expectInteger(command.arguments[4]),
+          expectInteger(command.arguments[5]),
+          expectInteger(command.arguments[6]),
+          expectInteger(command.arguments[7]),
+          expectInteger(command.arguments[8]),
+          expectBoolean(command.arguments[9]),
+          expectBoolean(command.arguments[10]),
+          state,
+        );
+        return;
+      }
+      case 'texture_line': {
+        if (command.arguments.length !== 10)
+          throw new TypeError('texture_line expects ten arguments');
+        this.textureLine(
+          readAssetName(command.arguments[0], 'Sprite'),
+          expectInteger(command.arguments[1]),
+          expectInteger(command.arguments[2]),
+          expectInteger(command.arguments[3]),
+          expectInteger(command.arguments[4]),
+          textureFixed(command.arguments[5]),
+          textureFixed(command.arguments[6]),
+          textureFixed(command.arguments[7]),
+          textureFixed(command.arguments[8]),
+          expectBoolean(command.arguments[9]),
           state,
         );
         return;
@@ -441,7 +527,7 @@ export class IndexedGraphics {
     }
   }
 
-  private plot(x: number, y: number, color: number, state: DrawState): void {
+  private plot(x: number, y: number, color: number, state: DrawState, patterned = false): void {
     const screenX = x - state.cameraX;
     const screenY = y - state.cameraY;
     if (
@@ -455,6 +541,14 @@ export class IndexedGraphics {
       screenY >= state.clipY + state.clipHeight
     ) {
       return;
+    }
+    if (patterned && this.pattern[3] === 1) {
+      const mask = (this.pattern[0] ?? 0) | ((this.pattern[1] ?? 0) << 8);
+      const bit = wrap(screenY, 4) * 4 + wrap(screenX, 4);
+      if ((mask & (1 << bit)) !== 0) {
+        if (this.pattern[4] === 1) return;
+        color = this.pattern[2] ?? 0;
+      }
     }
     this.back[screenY * HARDWARE.width + screenX] = state.remap[expectColor(color)] ?? color;
   }
@@ -475,7 +569,7 @@ export class IndexedGraphics {
     const stepY = startY < endY ? 1 : -1;
     let error = deltaX + deltaY;
     for (;;) {
-      this.plot(x, y, color, state);
+      this.plot(x, y, color, state, true);
       if (x === endX && y === endY) {
         return;
       }
@@ -546,7 +640,7 @@ export class IndexedGraphics {
           [centerX + y, centerY - x],
           [centerX + x, centerY - y],
         ] as const) {
-          this.plot(plotX, plotY, color, state);
+          this.plot(plotX, plotY, color, state, true);
         }
       }
       y += 1;
@@ -588,7 +682,7 @@ export class IndexedGraphics {
           (area > 0 && first >= 0 && second >= 0 && third >= 0) ||
           (area < 0 && first <= 0 && second <= 0 && third <= 0)
         ) {
-          this.plot(x, y, color, state);
+          this.plot(x, y, color, state, true);
         }
       }
     }
@@ -657,10 +751,135 @@ export class IndexedGraphics {
           sourceY = sprite.height - 1 - sourceY;
         }
         const color = sprite.pixels[sourceY * sprite.width + sourceX] ?? HARDWARE.transparentColor;
-        if (color !== this.transparency[0]) {
-          this.plot(x + outputX, y + outputY, color, state);
-        }
+        this.plotTexture(x + outputX, y + outputY, color, state);
       }
+    }
+  }
+
+  private drawSpriteRegion(
+    name: string,
+    sourceX: number,
+    sourceY: number,
+    sourceWidth: number,
+    sourceHeight: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    flipX: boolean,
+    flipY: boolean,
+    state: DrawState,
+  ): void {
+    const sprite = this.assets.get(name);
+    if (sprite?.kind !== 'sprite') throw new TypeError(`missing Sprite asset '${name}'`);
+    if (sourceWidth <= 0 || sourceHeight <= 0 || width <= 0 || height <= 0) return;
+    if (
+      sourceWidth > HARDWARE.spriteMaximumAxis ||
+      sourceHeight > HARDWARE.spriteMaximumAxis ||
+      width > 2048 ||
+      height > 2048
+    )
+      throw new RangeError(
+        'sprite region source axes must be at most 128 and destination axes at most 2048',
+      );
+    if (
+      sourceX >= sprite.width ||
+      sourceY >= sprite.height ||
+      sourceX <= -sourceWidth ||
+      sourceY <= -sourceHeight
+    )
+      return;
+    const left = x - state.cameraX;
+    const top = y - state.cameraY;
+    const screenState = { ...state, cameraX: 0, cameraY: 0 };
+    const firstX = Math.max(0, Math.max(0, state.clipX) - left);
+    const firstY = Math.max(0, Math.max(0, state.clipY) - top);
+    const lastX = Math.min(width, Math.min(HARDWARE.width, state.clipX + state.clipWidth) - left);
+    const lastY = Math.min(height, Math.min(HARDWARE.height, state.clipY + state.clipHeight) - top);
+    for (let row = firstY; row < lastY; row++) {
+      let sy = Math.floor((row * sourceHeight) / height);
+      if (flipY) sy = sourceHeight - 1 - sy;
+      sy += sourceY;
+      if (sy < 0 || sy >= sprite.height) continue;
+      for (let column = firstX; column < lastX; column++) {
+        let sx = Math.floor((column * sourceWidth) / width);
+        if (flipX) sx = sourceWidth - 1 - sx;
+        sx += sourceX;
+        if (sx < 0 || sx >= sprite.width) continue;
+        this.plotTexture(
+          left + column,
+          top + row,
+          sprite.pixels[sy * sprite.width + sx] ?? 0,
+          screenState,
+        );
+      }
+    }
+  }
+
+  private plotTexture(x: number, y: number, color: number, state: DrawState): void {
+    if (((this.transparency[color >>> 3] ?? 0) & (1 << (color & 7))) === 0)
+      this.plot(x, y, color, state);
+  }
+
+  private textureLine(
+    name: string,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    u: number,
+    v: number,
+    du: number,
+    dv: number,
+    repeat: boolean,
+    state: DrawState,
+  ): void {
+    const sprite = this.assets.get(name);
+    if (sprite?.kind !== 'sprite') throw new TypeError(`missing Sprite asset '${name}'`);
+    const dx = Math.abs(endX - startX),
+      dy = -Math.abs(endY - startY);
+    if (Math.max(dx, -dy) >= 4096)
+      throw new RangeError('texture line must contain at most 4096 raster samples');
+    let x = startX - state.cameraX,
+      y = startY - state.cameraY;
+    const targetX = endX - state.cameraX,
+      targetY = endY - state.cameraY;
+    const left = Math.max(0, state.clipX),
+      right = Math.min(HARDWARE.width, state.clipX + state.clipWidth);
+    const top = Math.max(0, state.clipY),
+      bottom = Math.min(HARDWARE.height, state.clipY + state.clipHeight);
+    if (
+      Math.max(x, targetX) < left ||
+      Math.min(x, targetX) >= right ||
+      Math.max(y, targetY) < top ||
+      Math.min(y, targetY) >= bottom
+    )
+      return;
+    const stepX = startX < endX ? 1 : -1,
+      stepY = startY < endY ? 1 : -1;
+    let error = dx + dy;
+    const screenState = { ...state, cameraX: 0, cameraY: 0 };
+    for (;;) {
+      let sx = Math.floor(u / 65536),
+        sy = Math.floor(v / 65536);
+      if (repeat) {
+        sx = wrap(sx, sprite.width);
+        sy = wrap(sy, sprite.height);
+      }
+      if (sx >= 0 && sx < sprite.width && sy >= 0 && sy < sprite.height)
+        this.plotTexture(x, y, sprite.pixels[sy * sprite.width + sx] ?? 0, screenState);
+      if (x === targetX && y === targetY) return;
+      const doubled = error * 2;
+      if (doubled >= dy) {
+        error += dy;
+        x += stepX;
+      }
+      if (doubled <= dx) {
+        error += dx;
+        y += stepY;
+      }
+      u += du;
+      v += dv;
     }
   }
 
@@ -764,65 +983,10 @@ export class IndexedGraphics {
       cursorX += font.advanceX;
     }
   }
-}
 
-/** WebGL2 palette resolver. The GPU sees only indexed pixels and the immutable RGB table. */
-export class WebGlIndexedRenderer {
-  private readonly gl: WebGL2RenderingContext;
-  private readonly program: WebGLProgram;
-  private readonly indexTexture: WebGLTexture;
-  private readonly paletteTexture: WebGLTexture;
-  private readonly vertexArray: WebGLVertexArrayObject;
-
-  public constructor(canvas: HTMLCanvasElement) {
-    canvas.width = HARDWARE.width;
-    canvas.height = HARDWARE.height;
-    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false });
-    if (gl === null) {
-      throw new Error('WebGL2 is required by the MOD-01 alpha renderer');
-    }
-    this.gl = gl;
-    this.program = createProgram(gl);
-    this.indexTexture = requireObject(gl.createTexture(), 'index texture');
-    this.paletteTexture = requireObject(gl.createTexture(), 'palette texture');
-    this.vertexArray = requireObject(gl.createVertexArray(), 'vertex array');
-    gl.bindVertexArray(this.vertexArray);
-    gl.useProgram(this.program);
-    configureIndexTexture(gl, this.indexTexture);
-    configurePaletteTexture(gl, this.paletteTexture);
-    setSampler(gl, this.program, 'indexedFrame', 0);
-    setSampler(gl, this.program, 'masterPalette', 1);
-    gl.viewport(0, 0, HARDWARE.width, HARDWARE.height);
-  }
-
-  public render(indexedPixels: Uint8Array): void {
-    if (indexedPixels.length !== HARDWARE.width * HARDWARE.height) {
-      throw new RangeError('indexed frame has the wrong dimensions');
-    }
-    const gl = this.gl;
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.indexTexture);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      HARDWARE.width,
-      HARDWARE.height,
-      gl.RED_INTEGER,
-      gl.UNSIGNED_BYTE,
-      indexedPixels,
-    );
-    gl.bindVertexArray(this.vertexArray);
-    gl.useProgram(this.program);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
-
-  public destroy(): void {
-    this.gl.deleteTexture(this.indexTexture);
-    this.gl.deleteTexture(this.paletteTexture);
-    this.gl.deleteVertexArray(this.vertexArray);
-    this.gl.deleteProgram(this.program);
+  private resetTransparency(): void {
+    this.transparency.fill(0);
+    this.transparency[HARDWARE.transparentColor >>> 3] = 1 << (HARDWARE.transparentColor & 7);
   }
 }
 
@@ -971,6 +1135,14 @@ function expectInteger(value: unknown): number {
   return value;
 }
 
+function textureFixed(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 32768)
+    throw new RangeError(
+      'texture coordinates and deltas must be finite numbers within -32768..32768',
+    );
+  return Math.trunc(value * 65536);
+}
+
 function expectBoolean(value: unknown): boolean {
   if (typeof value !== 'boolean') {
     throw new TypeError('graphics argument must be Bool');
@@ -1049,110 +1221,4 @@ function wrap(value: number, modulus: number): number {
 
 function clampInt16(value: number): number {
   return Math.max(-32_768, Math.min(32_767, value));
-}
-
-function createProgram(gl: WebGL2RenderingContext): WebGLProgram {
-  const vertex = compileShader(
-    gl,
-    gl.VERTEX_SHADER,
-    `#version 300 es
-    const vec2 positions[3] = vec2[3](vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
-    void main(){gl_Position=vec4(positions[gl_VertexID],0.0,1.0);}`,
-  );
-  const fragment = compileShader(
-    gl,
-    gl.FRAGMENT_SHADER,
-    `#version 300 es
-    precision highp float;
-    precision highp usampler2D;
-    uniform usampler2D indexedFrame;
-    uniform sampler2D masterPalette;
-    out vec4 color;
-    void main(){
-      ivec2 point=ivec2(int(gl_FragCoord.x),${String(HARDWARE.height - 1)}-int(gl_FragCoord.y));
-      uint index=texelFetch(indexedFrame,point,0).r;
-      color=texelFetch(masterPalette,ivec2(int(index),0),0);
-    }`,
-  );
-  const program = requireObject(gl.createProgram(), 'shader program');
-  gl.attachShader(program, vertex);
-  gl.attachShader(program, fragment);
-  gl.linkProgram(program);
-  gl.deleteShader(vertex);
-  gl.deleteShader(fragment);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error(`WebGL2 link failed: ${gl.getProgramInfoLog(program) ?? 'unknown error'}`);
-  }
-  return program;
-}
-
-function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
-  const shader = requireObject(gl.createShader(type), 'shader');
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    throw new Error(`WebGL2 shader failed: ${gl.getShaderInfoLog(shader) ?? 'unknown error'}`);
-  }
-  return shader;
-}
-
-function configureIndexTexture(gl: WebGL2RenderingContext, texture: WebGLTexture): void {
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.R8UI,
-    HARDWARE.width,
-    HARDWARE.height,
-    0,
-    gl.RED_INTEGER,
-    gl.UNSIGNED_BYTE,
-    null,
-  );
-}
-
-function configurePaletteTexture(gl: WebGL2RenderingContext, texture: WebGLTexture): void {
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(
-    gl.TEXTURE_2D,
-    0,
-    gl.RGBA8,
-    HARDWARE.paletteSize,
-    1,
-    0,
-    gl.RGBA,
-    gl.UNSIGNED_BYTE,
-    Uint8Array.from(MASTER_PALETTE_RGBA),
-  );
-}
-
-function setSampler(
-  gl: WebGL2RenderingContext,
-  program: WebGLProgram,
-  name: string,
-  unit: number,
-): void {
-  const location = gl.getUniformLocation(program, name);
-  if (location === null) {
-    throw new Error(`WebGL2 sampler '${name}' is missing`);
-  }
-  gl.uniform1i(location, unit);
-}
-
-function requireObject<Value>(value: Value | null, description: string): Value {
-  if (value === null) {
-    throw new Error(`WebGL2 could not create ${description}`);
-  }
-  return value;
 }

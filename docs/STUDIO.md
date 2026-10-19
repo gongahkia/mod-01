@@ -1,180 +1,173 @@
-# Studio and external workflow
+# Native Studio
 
-## Native desktop Studio
-
-Run `pnpm native` during development or `pnpm native:package` to make a distributable folder for
-the current OS. The desktop interface is Rust/egui and contains no webview. It opens a project
-directory, canonical `.m01c`, cartridge PNG, or `.m01w` workcart; it can save an imported cartridge as a new project and rewrites workcarts while preserving recipes and tests. It edits MODL modules
-and the manifest, checks and packs with `modl-core`, and plays through the shared console runtime.
-The MODL editor colors compiler tokens as you type, including comments, keywords, types,
-durations, strings, and asset references.
-The start screen includes the eight first-party cartridges; opening one makes an editable copy that
-asks for a project folder on save.
-Keyboard, pointer, four gamepad ports, PCM audio, and cartridge save commits use native host APIs.
-The bundled Node child has restricted filesystem/process permissions and a five-second response
-limit. Debug mode offers source-step events, source breakpoints, memory inspection/editing, and
-snapshot restore. The native Studio includes structured editors for maps, tile sets, fonts, sounds,
-music, and display raster remaps. Each editor preserves source-visible JSON. Tile sets accept and
-export PNG atlases; sound and music assets can be previewed or exported as WAV. The player can
-capture nearest-neighbour PNGs, a short GIF, and deterministic `.m01rec` input replays. The native
-save manager imports and exports the browser-compatible checksummed `.m01save` format, retaining
-recovery copies for destructive actions. The manual and compiler explorer are embedded in the app.
-
-All native text uses BigBlue Terminal Plus; the bundled Kenney pixel cursors indicate ordinary,
-action, text, busy, and canvas targets. The application bundles attribution and license texts in
-the `visual-credits` directory of each desktop package.
-The interface follows the development unit's case and display palette: amber labels mark controls,
-cyan marks the selected mode, and the recessed screen holds source, editors, and the cartridge
-player. PROJECT contains open, new, save, and recovery actions; BUILD contains check and pack.
-RUN, DEBUG, and STOP remain on the main control strip. The status strip reports power, execution,
-cartridge state, frame count, and work. Sprite tools scroll beside the fixed pixel canvas.
-
-The native sprite editor draws on RGBA layers, supports rename/reorder/visibility/locking,
-brushes, fill, pick, selection recolour/erase, frames with onion skinning, zoom/pan, undo/redo,
-PNG import/export, and 256-colour quantization. New sprites start at 64×64, can reach 128×128, and
-save both a runtime `.m01g` file and an editable `editor/sprites/*.m01paint` document. Hardware
-Revision 2 cartridges retain the layered source when packed and unpacked. Colour index zero is
-the sprite transparency key; the zero swatch selects the eraser. Layer pixels are base64 RGBA in
-the source-visible JSON document, and the editor also reads earlier numeric-array documents.
-
-The browser Studio below remains available while native parity is completed. Its debugger still
-has precise rewind, memory watchpoints, deeper profiling and audio inspection that the native
-debugger does not yet provide. Its editors also have operations
-the native tools lack, including the complete eight-channel tracker grid, font selections, and
-map sprite-to-tile-set conversion. The browser app must stay until these workflows are covered;
-standalone HTML cartridge exports remain a supported optional output format.
-
-The browser studio is local-only. Its project repository stores the current project, ten bounded
-pre-save recovery revisions, settings, and capability-scoped cartridge saves in IndexedDB. A
-cartridge worker receives only a validated copy of its own integer save values; it never receives
-the repository, another cartridge ID, or an IndexedDB handle.
-
-The production app boots directly into the monitor shell. `new`, `dir`, `load`, `save`, `recover`,
-`import`, `edit`, `run`, `debug`, `pack`, `cart`, `export`, `share`, `inspect`, `info`, `help`, `clear`/`cls`, and `reboot`
-operate on real project/compiler/runtime paths. `import` validates an untrusted `.m01c`, reconstructs
-its editable project, and also accepts a `.m01c.png` only after validating its bounded PNG chunks and
-embedded canonical cartridge. It preserves the previous same-ID revision for recovery. `inspect` displays the
-canonical packed metadata and all original source modules. `export` downloads one offline HTML
-player with its own visible source inspector. `cart` downloads the MOD-01 320x240 cartridge-object
-PNG with title/author/year/player/control identity and the byte-exact `.m01c` payload.
-
-The monitor prints a fixed catalog of the eight bundled cartridges at boot. There is no graphical
-shelf or click-to-launch path: players launch a cartridge with `run <id>`, and `dir` prints every
-current local/imported project. The remaining project operations are terminal commands: `inspect <id>`,
-`copy <id>`, `name <id> <title>`, `star <id>`, `save <id>`, `pack <id>`, and `remove <id>`. `remove <id>`
-requires the exact command a second time; running it for a bin item restores the cartridge. Bin
-restore retains the exact project revision, recovery history, and isolated save. All records are
-IndexedDB-local and survive offline reload; there is no account, sync, gallery, rating, or telemetry path.
-The selected cart's `SAVE` service displays stable cartridge identity and schema, exports/imports a
-bounded `.m01save` with checksum validation, and requires a second action before reset or delete.
-Every replacement retains a local recovery envelope. Raw alpha save bytes migrate to schema zero
-without deleting the original; application code can explicitly migrate to a higher schema.
-The source editor has MODL highlighting, live compiler diagnostics, completion, symbol navigation,
-canonical formatting, explicit save, run, and external-revision reload controls.
-Edits debounce to a 750 ms autosave and pass through a revision check before writing; an externally
-newer revision stops the save and surfaces F6 reload instead of knowingly overwriting it. Explicit
-F3 save and leaving the editor flush the same serialized path. Every successful write retains the
-previous revision in the ten-entry recovery ring.
-`folder` uses the File System Access API only after an explicit read/write directory grant. It
-preflights modification times for every file before any write. F6 pulls a conflicting folder
-revision; F7 is the explicit overwrite action. The handle remains session-local. Browsers without
-that API continue to use import/download and IndexedDB with no reduced cartridge compatibility.
-Running a project uses the Rust compiler WebAssembly bridge, a dedicated worker, indexed WebGL
-output, four-port browser input, frame/work status, and isolated save flushing. Shift+Escape returns
-from a cartridge to the shell. Player capture writes deterministic native or 2x-4x nearest PNG,
-bounded five-second 30 fps GIF sampled from the 60 Hz indexed stream, and revision-1 `.m01rec` input.
-The same player validates an imported `.m01rec`, restarts from frame zero, and applies its four-port
-and pointer stream without mixing live input. GIF and replay histories are independently bounded.
-
-`project`, `sprite`, `map`, `palette`, `font`, `sfx`, and `music` open cartridge settings and source-visible
-asset editors in the same 240x144 display. The sprite tool provides frames, onion skinning,
-selection transforms, palette painting, undo/redo, and capacity feedback. The map tool provides
-every declared tileset, ordered/visible layers, tile flags, region select/copy/stamp/move, fill,
-transactional resize, undo/redo, and whole-project shared-capacity feedback. Visibility is an editor
-view aid; revision-1 map files preserve runtime layer order and tileset references without adding
-host-only fields. Old one-tileset maps open directly and gain no incompatible wrapper.
-Palette/raster editing covers all 144 lines as sparse keyframes with enable/disable, exact cost,
-default or per-row remaps, signed scroll, copy/paste/fill/range interpolation, undo/redo, and a live
-scanout preview. It exposes only the scroll/remap state present in the Hardware Revision 1 raster
-table. The font tool edits canonical byte-code glyph maps, baseline and advances, required fallback,
-selection transforms and preview text while leaving `print`'s system font unchanged. Sound patches and eight-channel tracker
-patterns can be previewed after a browser audio gesture. The tracker edits named patterns and an
-ordered playback sequence, preserves existing patch references, loops on request, and provides
-bounded note/pattern undo/redo. The shell, editors, controls, and cartridges use the same original
-MOD-01 glyph design; the Studio font is generated locally from the runtime's glyph matrix.
-`manual`, `man <topic>`, and `help <symbol>` search built-in syntax/API/hardware/diagnostic help;
-F1 in the source editor opens help for the symbol at the cursor. `load modl-tutorial` starts the
-ordinary public-API FIRST SIGNAL lesson. The compact runnable API tour and genre starters are
-indexed in `examples/README.md` and `templates/README.md`. `explore` exposes tokens, AST, symbols,
-typed IR, JavaScript, source maps, diagnostics, and exact size accounting.
-`debug` opens source breakpoints and trace stepping, state/task/watch inspection,
-synthetic-work profiling, hardware inspectors, and deterministic frame rewind. Its precise
-source stepping and pause semantics are documented in [DEBUGGING.md](DEBUGGING.md). Escape
-returns from a creation tool; F3 saves asset changes.
-Creation-tool changes show a dirty state and autosave through the same 750 ms serialized path as an
-explicit F3 save. A newer stored revision rejects the write and asks the author to reopen instead
-of overwriting another tab.
-
-## Native commands
-
-From the repository, use `cargo run --package mod01-cli --` in place of an installed `mod01`:
+Studio is a native Rust/egui desktop application. It has no webview, browser
+frontend, PWA, JavaScript UI or network server. Rust owns source, files, saves,
+input and presentation; a disposable Node child executes the shared console core.
 
 ```sh
-mod01 new my-game --title "MY GAME"
-mod01 check my-game
-mod01 build my-game
-mod01 test my-game
-mod01 watch my-game
-mod01 pack my-game
-mod01 export html my-game
-mod01 export png my-game --output dist/my-game.m01c.png
-mod01 export zip my-game --output dist/my-game-itch.zip
-mod01 run my-game
-mod01 run my-game --headless --frames 120 --input tests/replays/my-game.json
-mod01 info my-game/dist/my-game.m01c
-mod01 lsp
+pnpm install --frozen-lockfile
+pnpm native
+# Or after building:
+target/debug/mod01-studio PATH
+target/debug/mod01-studio --play PATH
 ```
 
-`watch --once` performs the same initial deterministic pack and exits for CI checks. Otherwise it
-serves a loopback-only offline player, rebuilds only when project bytes change, and reloads after a
-successful revision. A compiler failure stays in the terminal without replacing the last good
-player. `fmt --check` reports source
-that differs from canonical two-space formatting. `run` writes the same standalone HTML artifact to
-`dist/` and opens it with `xdg-open`; `--no-open` performs only the validated export for CI or a
-headless environment. `run --headless` instead drives the production console core under Node and
-emits revisioned JSON framebuffer/state/audio/PCM/save hashes. It accepts a project directory or
-`.m01c`, an explicit seed/frame count, compact controller trace and optional raw save image.
+The [offline library](LIBRARY.md) opens bundled and user cartridges for editing or
+play, with cover art, search, labels, favourites and controller navigation. The workspace
+contains code, layered sprites, structured assets, player and manifest views.
+PROJECT opens/creates/saves projects and cartridges and exposes recovery.
+BUILD checks, runs, debugs and packs. TOOLS provides compiler/source inspection
+and save management. Its [MODL playground](PLAYGROUND.md) runs expressions and
+drawing in an isolated production console, with optional copied project context.
+It is available even before opening a cartridge. EXPORT offers native games and cartridge PNGs.
+There is no browser export menu.
 
-The HTML player has pause/reset/fullscreen/source controls, presentation metadata, and a `#embed`
-mode. Studio `EXPORT ZIP` stores the same single HTML as `index.html`. `SHARE` offers only complete
-carts up to 6,000 bytes as an 8,192-character maximum `#m01c=` fragment, displays the exact count
-before copy, and never sends cartridge bytes in a request or query string.
+## Source, assets and recovery
 
-The browser production build runs `scripts/build-wasm.sh`, which builds the Rust compiler for
-`wasm32-unknown-unknown` and generates pinned web bindings before Vite bundles it. Cartridge
-compilation therefore does not depend on a backend or a second TypeScript compiler implementation.
-The production build also emits a generated same-origin service worker containing the exact hashed
-build inventory. After its first successful load, the Studio boots and operates offline. The web
-app manifest and maskable icon are static repository assets.
+The source editor uses the compiler lexer for highlighting. Module selection
+keeps unsaved text synchronized into the project. Workcarts retain authored
+modules, assets, auxiliary files, generation recipes and tests; source remains
+inspectable when distributed as a packed cartridge or native game.
+Find/replace, line/routine navigation, block shortcuts, undo/redo, compiler API
+completion, cross-module definitions and clickable diagnostics are available in
+CODE. GRAPH shows resolved compiler call/state/asset relationships. See
+[source editor](EDITOR.md) for shortcuts and precise behaviour.
 
-## Language-server clients
+The layered RGBA sprite editor supports animation frames, layers, selection,
+drawing/fill tools, PNG import/export, palette picking and undo. Structured tools
+edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
+raw asset text remains visible.
 
-The stdio server supports full-document synchronization, dependency-aware diagnostics, project
-completion, hover/signature help, cross-file definition/references/rename, formatting, and document
-and workspace symbols. MODL/1 is ASCII-only, so LSP UTF-16 columns and compiler byte columns
-coincide for valid files.
+The music workbench shows all eight channels together, with MIDI note, patch and
+optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
+chromatic notes from the selected octave; comma/L/period/semicolon/slash extend
+the range. STEP controls row advance (zero repeats the same row). AUDITION ONLY
+plays notes without editing. Patch choices come from declared sound assets.
+Arrows, Tab/Shift-Tab, Home/End and Page Up/Down navigate; Shift+arrows selects a
+rectangular block. Delete/Backspace clears; Insert inserts an eight-cell row.
+Ctrl/Cmd+A/C/X/V selects/copies/cuts/pastes a block, clipping at the pattern edge.
+Clipboard operations use the tracker's local block buffer, not arbitrary OS text.
+Ctrl/Cmd+Z/Y (or Shift+Z) undo/redo whole edits, including sequence operations.
+Enter previews the pattern from the cursor; Ctrl/Cmd+Enter starts the song at the
+selected order; Escape stops preview. These keys only act while the grid owns focus.
 
-Generic Neovim setup:
+SEQUENCE / BLOCK TOOLS exposes row deletion, block operations, atomic semitone
+transpose and the order list. Pattern controls create or duplicate patterns,
+rename every order reference together, and refuse deletion while referenced.
+Order entries can be inserted/replaced/removed/reordered; the final entry cannot
+be removed. Patterns retain 1–256 rows; tempo supports the full 1–240 frames/row.
+Existing optional fields/annotations survive unrelated edits and duplicate/copy
+operations. Invalid shapes remain recoverable as raw JSON without silent repair.
 
-```lua
-vim.api.nvim_create_autocmd('FileType', {
-  pattern = 'modl',
-  callback = function()
-    vim.lsp.start({ name = 'mod01', cmd = { 'mod01', 'lsp' }, root_dir = vim.fn.getcwd() })
-  end,
-})
-```
+Structured assets and layered sprites keep separate editor sessions when you
+switch assets, including undo/redo and selection/tool state. Synchronization and
+ordinary saves do not erase that history; importing a structured asset is one
+undoable replacement. Each editor retains up to 32 edits. Inactive sessions use
+a 64-session / conservative 64 MiB allocation budget; least-recently-used history
+expires at the limit, never the asset stored in project memory. A session too
+large for that budget is not cached. History is session-local, not an on-disk
+format: opening/recovering/creating another cartridge clears it. Changed asset
+kind/path/bytes or layered source invalidate cached state. Raw JSON text widgets
+also use separate asset/project identities so their text undo cannot cross assets.
 
-For another LSP-capable editor, register `.modl` as MODL and configure the server command as
-`mod01 lsp`. Clients send full-document changes; the server invalidates the edited module and its
-direct importers without reanalyzing unrelated open modules.
+ASSET BANK shows the shared Rust validator's live visual-byte/allocation-slot
+usage in Assets and Sprites, including unsaved JSON, structured edits and sprite
+frame changes. It refreshes at most four times per second; REFRESH requests the
+next check immediately. Reports never apply buffers or change project dirty state.
+Invalid banks are visibly marked, with bounded, scrollable file/JSON-field
+diagnostics; click an asset name to select its editor. Any diagnostic means the
+bank cannot load, even if its partial usage is low. CLI `mod01 assets PATH` exposes
+the same report, and `check`/pack/packed import enforce the same rules.
+
+Sound/music previews run the production synth in a separate, disposable native
+runtime: LIVE SONG starts the order list; PATTERN FROM CURSOR plays a non-looping
+copy of the selected pattern; AUDITION CELL/PREVIEW PATCH triggers the actual
+patch and eight-voice allocator. Frames are paced at 60 Hz, not per UI repaint.
+The collapsible LIVE TELEMETRY reports real order/row/tick, voice notes and stereo
+PCM peaks; the grid highlights playback using the frozen preview asset, not later
+source edits. Channel headings remain visible during vertical scrolling. Unsaved
+edits are copied into previews, never written to the cartridge or save memory.
+Restart playback to hear later edits; successive auditions can overlap while
+their patch bank is unchanged. STOP AUDIO, leaving Assets, opening another
+project or running the cartridge stops and discards queued preview audio.
+Without an audio device the same preview runs silently. EXPORT WAV is a separate
+offline render and never starts playback.
+
+Saving keeps bounded local recovery revisions. The save manager exports/imports
+checksummed cartridge-bound save containers and retains recovery before
+replacement. Local saves are keyed by validated cartridge identity.
+
+## Running and debugging
+
+Keyboard port one uses arrows plus Z/X/A/S, Q/W and Enter. Native gamepads fill
+four logical ports. Pointer coordinates map to indexed display pixels. Runtime
+frames return indexed pixels, stereo PCM and complete committed save bytes.
+Keyboard events are sampled on UI passes independently of runtime replies:
+short taps remain latched until one display-frame input accepts them. Source
+boot/partial steps do not consume later frame taps. Pause, session/restore,
+text editing and focus loss discard pending taps and block held keys until
+release; Ctrl/Cmd/Alt shortcuts do not become gameplay. Escape is host-only.
+The host never receives a cartridge-selected filesystem path.
+Runtime loads, stops and isolated previews carry private native session generations;
+queued replies/commands from an abandoned session cannot update a new cartridge's
+frame, audio, debugger or committed save. The child-process JSON protocol is
+unchanged. Missing-bundle startup errors remain visible across generation changes.
+
+Debug compilation supports source statement stepping, breakpoint conditions,
+watches, memory inspection/editing, state/tasks and snapshot restore. It uses the
+same compiler IR and device implementation as ordinary play. A paused debugger
+does not advance machine frame time.
+
+RECORD REPLAY starts a fresh run (using the current save), clears loaded playback
+and records one input per completed display frame, including frame zero exactly
+once. Source stepping locks that input for the entire frame; boot and individual
+statements do not add trace entries. Reproducing an input-only trace requires the
+same cartridge, seed and initial save. SNAPSHOT is available only before boot or
+at completed boot/frame boundaries. RESTORE uses the runtime's next-frame cursor,
+clears the suspended continuation and trims any later recorded inputs. Native
+request tracking waits for all outstanding replies before advancing debug steps.
+
+The standalone game surface is available through `--play PATH` or OPEN GAME VIEW.
+It uses the same execution/input/audio/save devices. Studio and that game surface
+share the native system menu: MENU/PAUSE, Escape, controller Select or touch MENU
+opens it without advancing machine time. Up/down and Z/Enter (controller A/Start)
+select; X/controller B/Escape resumes. Resume/restart/source inspection and the
+cartridge's typed actions use this common path. RESTART preserves debug mode;
+SOURCE stops execution and opens authored modules/assets unchanged in Studio.
+`menu_item` and `on menu(action: Int)` are documented in [MENU.md](MENU.md), with
+the runnable `examples/menu-actions` demonstration. Actions use one neutral input
+frame, are recorded/replayed and cannot be selected during replay or inside a
+partial debug frame. Gamepad taps are latched across response latency and other
+controllers disconnecting do not renumber surviving logical ports. Software
+events/model tests do not claim physical-controller QA.
+[native games](NATIVE_GAMES.md) documents package layout and bridge verification.
+
+TOUCH enables an optional native port-one D-pad, A/B/X/Y, L/R and Start pad in
+that game surface. It uses independent device/finger IDs (up to 32 contacts),
+including diagonal D-pad corners. Fingers must start inside their controller
+zone; moving out releases its held bits and moving back can press again. An
+ended short tap remains latched until one input submission; cancellation drops
+an undelivered tap. Releasing one finger never releases another finger's buttons.
+Mouse emulation is available for desktop QA, with touch-generated mouse aliases
+ignored. Owned controller gestures never inject game-pointer clicks.
+
+MENU pauses/resumes the native player and is not delivered as a game button.
+Pause, focus loss, hide/disable, project stop/reload, snapshot restore or layout
+change clears controller ownership; lift and touch again after interruption.
+Paused/debugger/replay playback controls cannot queue live gameplay input.
+The overlay merges into the ordinary controller frame before replay recording,
+without a separate simulation/input format. At 900×600 it retains a 2× game view.
+The renderer does not submit additional VM frames while paused; an already
+submitted frame may finish, but its PCM is discarded while paused.
+
+## Presentation and verification
+
+BigBlue Terminal Plus and Kenney pixel cursors are embedded in the native UI;
+their attribution/license files ship with native distributions. Presentation
+does not change the console's indexed pixels or replay state.
+
+Run `make check` for the repository gate. Display-free native verification is
+`mod01-studio --verify PATH --frames 120`. It verifies process/device execution,
+not graphical layout, multi-touch, physical controller or audible output quality.
+Native visual/interaction QA is separately required by the
+[implementation ledger](NATIVE_IMPLEMENTATION.md).

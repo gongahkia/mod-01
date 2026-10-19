@@ -27,8 +27,6 @@ interface Allocation {
   readonly validate?: (offset: number, bytes: Uint8Array) => boolean;
 }
 
-const LEGACY_VISUAL_BYTES = 128 * 1024;
-
 /** A single packed, little-endian visual image; all drawing views alias these bytes. */
 export class VisualAssetStore {
   private readonly entries = new Map<string, StoredVisualAsset>();
@@ -38,7 +36,6 @@ export class VisualAssetStore {
   private readonly descriptors: Uint8Array;
   private readonly allocationTable: Uint8Array;
   private readonly info = new Uint8Array(24);
-  private readonly addressBase: number;
   public readonly display: DisplayConfiguration | undefined;
   public readonly usedBytes: number;
 
@@ -58,7 +55,6 @@ export class VisualAssetStore {
     if (usedBytes > HARDWARE.visualCapacityBytes)
       throw new RangeError('visual assets exceed the 1 MiB shared capacity');
     this.usedBytes = usedBytes;
-    this.addressBase = usedBytes > LEGACY_VISUAL_BYTES ? MEMORY.visualExtended : MEMORY.visual;
     this.descriptors = new Uint8Array(sorted.length * MEMORY.assetStride);
     const descriptorView = new DataView(this.descriptors.buffer);
     for (const [id, asset] of sorted.entries()) {
@@ -86,7 +82,7 @@ export class VisualAssetStore {
       const offset = index * MEMORY.allocationStride;
       [
         entry.kind,
-        this.addressBase + entry.offset,
+        MEMORY.visual + entry.offset,
         entry.bytes.length,
         entry.width,
         entry.height,
@@ -102,7 +98,7 @@ export class VisualAssetStore {
       MEMORY.assets,
       this.allocations.length,
       MEMORY.allocations,
-      display === undefined ? 0 : this.addressBase + usedBytes - 32 - display.raster.length * 38,
+      display === undefined ? 0 : MEMORY.visual + usedBytes - 32 - display.raster.length * 38,
     ].forEach((value, field) => {
       info.setUint32(field * 4, value, true);
     });
@@ -143,21 +139,10 @@ export class VisualAssetStore {
       {
         name: 'visual store',
         address: MEMORY.visual,
-        bytes: this.bytes.subarray(0, LEGACY_VISUAL_BYTES),
+        bytes: this.bytes,
         writable: true,
         validate: (offset: number, bytes: Uint8Array) => this.validate(offset, bytes),
       },
-      ...(this.addressBase === MEMORY.visualExtended
-        ? [
-            {
-              name: 'visual store extended',
-              address: MEMORY.visualExtended,
-              bytes: this.bytes,
-              writable: true,
-              validate: (offset: number, bytes: Uint8Array) => this.validate(offset, bytes),
-            },
-          ]
-        : []),
       {
         name: 'visual allocation status',
         address: MEMORY.visualInfo,
@@ -201,6 +186,8 @@ export class VisualAssetStore {
     reference = 0,
     validate?: Allocation['validate'],
   ): Uint8Array {
+    if (this.allocations.length >= HARDWARE.visualAllocations)
+      throw new RangeError('visual allocation descriptors exceed 8192 slots');
     const previous = this.allocations.at(-1);
     const offset = previous === undefined ? 0 : previous.offset + previous.bytes.length;
     const bytes = this.bytes.subarray(offset, offset + data.length);

@@ -11,6 +11,7 @@ import {
   type IndexedTileSet,
 } from './graphics';
 import { HARDWARE, MASTER_PALETTE } from './hardware';
+import { MEMORY, MemoryBus } from './bus';
 import type { ConsoleCommand } from './protocol';
 
 const sourceSpan = { start: 0, end: 1 };
@@ -29,6 +30,83 @@ function command(
 }
 
 describe('indexed graphics hardware', () => {
+  it('masks any of the 256 original blit colours before remapping and resets every frame', () => {
+    const sprite: IndexedSprite = {
+      kind: 'sprite',
+      name: 'colors',
+      width: 128,
+      height: 2,
+      pixels: Uint8Array.from({ length: 256 }, (_, index) => index),
+    };
+    const graphics = new IndexedGraphics(
+      new VisualAssetStore([sprite, { kind: 'animation', name: 'motion', frames: [sprite] }]),
+    );
+    const handle = { name: 'colors', kind: 'Sprite' };
+    graphics.beginFrame();
+    graphics.executeCommand(command('clear', [32]));
+    graphics.executeCommand(command('palt', [0, false]));
+    for (let color = 1; color < 256; color += 2)
+      graphics.executeCommand(command('palt', [color, true]));
+    graphics.executeCommand(command('pal', [2, 7]));
+    graphics.executeCommand(command('pal', [3, 8]));
+    graphics.executeCommand(command('palt', [7, true]));
+    graphics.executeCommand(command('sprite', [handle, 0, 0]));
+    graphics.executeCommand(command('animation', [{ name: 'motion', kind: 'Animation' }, 0, 0, 4]));
+    graphics.executeCommand(command('sprite_xform', [handle, 0, 8, 1, 0, false, false]));
+    graphics.executeCommand(command('pixel', [200, 0, 7]));
+    const frame = graphics.finishFrame();
+    for (const offsetY of [0, 4, 8])
+      for (let color = 0; color < 256; color++)
+        expect(frame.indexedPixels[(offsetY + Math.floor(color / 128)) * 240 + (color % 128)]).toBe(
+          color % 2 === 1 ? 32 : color === 2 ? 7 : color,
+        );
+    expect(frame.indexedPixels[200]).toBe(7); // solid primitives ignore the blit mask
+    const reset = graphics.executeFrame([
+      command('clear', [32]),
+      command('sprite', [handle, 0, 0]),
+    ]);
+    expect(reset.indexedPixels[0]).toBe(32);
+    expect(reset.indexedPixels[1]).toBe(1);
+    expect(reset.indexedPixels[2]).toBe(2);
+  });
+
+  it('shares the complete mask with writable memory, preserves it in bus snapshots and resets explicitly', () => {
+    const sprite: IndexedSprite = {
+      kind: 'sprite',
+      name: 'dot',
+      width: 1,
+      height: 1,
+      pixels: Uint8Array.of(255),
+    };
+    const graphics = new IndexedGraphics(new VisualAssetStore([sprite]));
+    const bus = new MemoryBus(graphics.memoryRegions(), () => {});
+    graphics.beginFrame();
+    expect(bus.read(MEMORY.transparency, 1, sourceSpan)).toBe(1);
+    bus.write(MEMORY.transparency + 31, 128, 1, sourceSpan);
+    const saved = bus.snapshot();
+    graphics.executeCommand(command('palt_reset', []));
+    expect(bus.read(MEMORY.transparency + 31, 1, sourceSpan)).toBe(0);
+    bus.restore(saved);
+    graphics.executeCommand(command('clear', [7]));
+    graphics.executeCommand(command('sprite', [{ name: 'dot', kind: 'Sprite' }, 0, 0]));
+    expect(graphics.finishFrame().indexedPixels[0]).toBe(7);
+    graphics.beginFrame();
+    expect(bus.read(MEMORY.transparency + 31, 1, sourceSpan)).toBe(0);
+    for (const args of [
+      [256, true],
+      [-1, true],
+      [1, 1],
+      [1, true, false],
+    ])
+      expect(() => {
+        graphics.executeCommand(command('palt', args));
+      }).toThrow();
+    expect(bus.read(MEMORY.transparency, 1, sourceSpan)).toBe(1);
+    expect(() => {
+      bus.write(MEMORY.transparency, 0, 1, sourceSpan, true);
+    }).toThrow();
+  });
+
   it('executes ordered commands before publishing scanout and resets frame-local state', () => {
     const graphics = new IndexedGraphics();
     const calls = [
@@ -59,10 +137,14 @@ describe('indexed graphics hardware', () => {
     deepStrictEqual(graphics.snapshot(), snapshot);
   });
 
-  it('uses one immutable, unique 32-colour master palette', () => {
+  it('uses one immutable, unique 256-colour master palette', () => {
     expect(MASTER_PALETTE).toHaveLength(HARDWARE.paletteSize);
     expect(new Set(MASTER_PALETTE)).toHaveLength(HARDWARE.paletteSize);
     expect(Object.isFrozen(MASTER_PALETTE)).toBe(true);
+    expect(MASTER_PALETTE[25]).toBe('#345581');
+    expect(MASTER_PALETTE[32]).toBe('#000000');
+    expect(MASTER_PALETTE[247]).toBe('#ffffff');
+    expect(MASTER_PALETTE[255]).toBe('#e5e5e5');
   });
 
   it('rasterizes primitives with camera, clipping, and logical palette remapping', () => {
@@ -154,6 +236,13 @@ describe('indexed graphics hardware', () => {
     expect(assets.mapCell('level', 0, 0, 0)).toBe(0);
     expect(assets.mapCell('level', 0, 1, 0)).toBeUndefined();
     expect(assets.mapFlag('level', 0, 0, 0, 1)).toBe(true);
+    expect(
+      graphics.executeFrame([
+        command('clear', [1]),
+        command('palt', [6, true]),
+        command('map', [{ name: 'level', kind: 'Map' }, 0, 0]),
+      ]).indexedPixels[0],
+    ).toBe(1);
   });
 
   it('reads only camera-visible map cells while preserving visible tile output', () => {

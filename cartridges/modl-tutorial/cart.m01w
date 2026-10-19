@@ -1,0 +1,94 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "modl-tutorial"
+title = "FIRST SIGNAL: MODL TUTORIAL"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+label = "presentation/label.svg"
+
+[[module]]
+path = "src/main.modl"
+source = """
+// Five-to-ten minute first-cartridge tutorial using only public MODL/1 APIs.
+// Made by @gongahkia
+
+state lesson: Int = 0
+state cursor_x: Int = 116
+state tick: Int = 0
+state completed: Int = 0
+
+on start:
+  completed = save_get_int("tutorial", 0)
+
+on update:
+  tick = (tick + 1) % 120
+  if lesson >= 2:
+    if btn(pad1, left):
+      cursor_x -= 2
+    if btn(pad1, right):
+      cursor_x += 2
+  if btnp(pad1, a):
+    sfx(#beep)
+    if lesson < 5:
+      lesson += 1
+    else:
+      completed = 1
+      save_set_int("tutorial", completed)
+      save_commit()
+  if btnp(pad1, b) and lesson > 0:
+    lesson -= 1
+
+on draw:
+  clear(1)
+  print("FIRST SIGNAL", 86, 10, 23)
+  print("A NEXT / B BACK", 76, 20, 7)
+  if lesson == 0:
+    print("1 PIXEL", 96, 46, 15)
+    print("pixel(120,72,23)", 66, 58, 6)
+    pixel(120, 72, 23)
+  elif lesson == 1:
+    print("2 DRAW", 99, 46, 15)
+    print("RECT + CIRCLE", 82, 58, 6)
+    rect_fill(104, 68, 32, 12, 11)
+    circle(120, 74, 18, 23)
+  elif lesson == 2:
+    print("3 INPUT", 96, 46, 15)
+    print("LEFT / RIGHT", 85, 58, 6)
+    rect_fill(cursor_x, 72, 8, 8, 23)
+  elif lesson == 3:
+    print("4 ANIMATE", 91, 46, 15)
+    print("FRAME TIME IS FIXED", 67, 58, 6)
+    circle_fill(120, 78, 4 + tick / 12, 19)
+  elif lesson == 4:
+    print("5 SOUND", 96, 46, 15)
+    print("A CALLS sfx(#beep)", 65, 58, 6)
+    line(70, 78, 170, 78, 7)
+  else:
+    print("6 SAVE + PACK", 82, 46, 15)
+    print("A COMMITS 8K SAVE", 70, 58, 6)
+    print("THEN ESC / PACK", 77, 69, 6)
+    if completed == 1:
+      print("LESSON SAVED", 86, 88, 23)
+"""
+
+[[asset]]
+name = "beep"
+kind = "sound"
+path = "assets/beep.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"triangle","note":72,"durationFrames":6,"volume":0.5,"pan":0,"envelope":{"attackFrames":0,"decayFrames":1,"sustainLevel":0.8,"releaseFrames":2},"pitch":{"slideSemitonesPerFrame":0.25,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[file]]
+path = "presentation/label.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="144" viewBox="0 0 240 144"><rect width="240" height="144" fill="#17141f"/><path d="M0 112 84 28h156v116H0z" fill="#79d8cf"/><path d="m0 132 104-104h18L18 132z" fill="#f07f6a"/><text x="21" y="91" fill="#f4e9ce" font-family="monospace" font-size="20" font-weight="bold">FIRST SIGNAL</text><text x="22" y="110" fill="#292725" font-family="monospace" font-size="12">MODL/1 TUTORIAL</text><text x="22" y="126" fill="#292725" font-family="monospace" font-size="9">Made by @gongahkia</text></svg>
+"""

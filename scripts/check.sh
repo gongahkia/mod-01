@@ -9,11 +9,11 @@ fi
 pnpm format:check
 pnpm lint
 pnpm typecheck
+# Native/headless process tests execute these generated hosts, not only TypeScript source.
+pnpm build
 pnpm test
-pnpm test:e2e
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo build --workspace --all-features
-cargo build --package modl-wasm --target wasm32-unknown-unknown --release
 ./scripts/verify-release-artifacts.sh

@@ -8,17 +8,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AssetCatalog, AssetKind, CARTRIDGE_FORMAT_REVISION, CompilationOutput, CompileMode, FileId,
-    LANGUAGE_REVISION, SourceFile, TokenKind, WORKCART_FORMAT_REVISION,
+    LANGUAGE_REVISION, SourceFile, TokenKind,
     ast::{Item, Module},
     codegen::{SourceOriginMap, SourceOriginRange, compile_with_origins},
     compiler_version, parse,
 };
 
-const MAGIC: &[u8; 8] = b"MOD-01\x1a\x01";
+const MAGIC: &[u8; 8] = b"MOD-01\x1a\x02";
 pub const CARTRIDGE_CAPACITY_BYTES: usize = 1024 * 1024;
-pub const LEGACY_CARTRIDGE_CAPACITY_BYTES: usize = 256 * 1024;
 const MAX_UNPACKED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
+
+/// Resource bounds belong to the container, not a second hardware/format profile.
+#[derive(Clone, Copy)]
+pub(crate) struct ArchiveLimits {
+    pub packed: usize,
+    pub unpacked: usize,
+    pub entries: usize,
+}
+pub(crate) const CARTRIDGE_ARCHIVE_LIMITS: ArchiveLimits = ArchiveLimits {
+    packed: CARTRIDGE_CAPACITY_BYTES,
+    unpacked: MAX_UNPACKED_BYTES,
+    entries: MAX_ARCHIVE_ENTRIES,
+};
 const SHA256_INITIAL: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -109,7 +121,7 @@ pub struct ProjectManifest {
     pub version: String,
     pub entry: String,
     pub update_rate: u8,
-    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    #[serde(default = "default_hardware_revision")]
     pub hardware_revision: u8,
     #[serde(default, skip_serializing_if = "is_false")]
     pub compile_on_load: bool,
@@ -142,7 +154,7 @@ pub struct PackedManifest {
     pub version: String,
     pub entry: String,
     pub update_rate: u8,
-    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    #[serde(default = "default_hardware_revision")]
     pub hardware_revision: u8,
     #[serde(default, skip_serializing_if = "is_false")]
     pub compile_on_load: bool,
@@ -201,14 +213,15 @@ impl fmt::Display for CartridgeError {
 
 impl std::error::Error for CartridgeError {}
 
-/// Parses and validates the Git-friendly `cart.toml` project manifest.
+/// Parses and validates a materialized compiler/editor metadata view, not an authoring format.
 ///
 /// # Errors
 ///
 /// Returns a stable `M014xxx` error when TOML decoding or manifest validation fails.
 pub fn parse_project_manifest(source: &str) -> Result<ProjectManifest, CartridgeError> {
-    let manifest: ProjectManifest = toml::from_str(source)
-        .map_err(|error| cartridge_error("M014001", format!("invalid cart.toml: {error}")))?;
+    let manifest: ProjectManifest = toml::from_str(source).map_err(|error| {
+        cartridge_error("M014001", format!("invalid cartridge metadata: {error}"))
+    })?;
     validate_manifest(&manifest)?;
     Ok(manifest)
 }
@@ -224,7 +237,14 @@ pub fn pack_project(
     project_files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<PackedCartridge, CartridgeError> {
     let manifest = parse_project_manifest(manifest_source)?;
-    pack_materialized_project(&manifest, project_files, CARTRIDGE_FORMAT_REVISION, None)
+    let mut files = project_files.clone();
+    for (path, bytes) in &mut files {
+        if has_modl_extension(path) {
+            *bytes = normalized_source(bytes, path)?.into_bytes();
+        }
+    }
+    let source = crate::encode_workcart(&manifest, &files, &[], &[])?;
+    pack_workcart(&source)
 }
 
 /// Packs an `M01W/2` work-cart and retains its exact source in the cartridge archive.
@@ -234,20 +254,18 @@ pub fn pack_project(
 /// Returns a stable work-cart, compilation, archive, or capacity error.
 pub fn pack_workcart(source: &str) -> Result<PackedCartridge, CartridgeError> {
     let project = crate::parse_workcart(source)?;
-    pack_materialized_project(
-        &project.manifest,
-        &project.files,
-        WORKCART_FORMAT_REVISION,
-        Some(project.source.as_bytes()),
-    )
+    if !project.bundle.is_empty() {
+        return Err(cartridge_error("M014073", "bundled workcarts require the whole-game packing path; refusing to discard dependencies".to_owned()));
+    }
+    pack_materialized_project(&project.manifest, &project.files, project.source.as_bytes())
 }
 
 fn pack_materialized_project(
     manifest: &ProjectManifest,
     project_files: &BTreeMap<String, Vec<u8>>,
-    format_revision: u16,
-    workcart_source: Option<&[u8]>,
+    source: &[u8],
 ) -> Result<PackedCartridge, CartridgeError> {
+    crate::assets::analyze_project_assets(manifest, project_files).require_valid()?;
     let normalized_entry = normalize_project_path(&manifest.entry)?;
     let mut asset_catalog = AssetCatalog::default();
     for (name, asset) in &manifest.assets {
@@ -274,28 +292,35 @@ fn pack_materialized_project(
             "entry source produced no release program".to_owned(),
         )
     })?;
-    let compiled_program = manifest.compile_on_load.then(|| FileIntegrity {
+    let compiled_program = Some(FileIntegrity {
         bytes: u32::try_from(generated.javascript.len()).unwrap_or(u32::MAX),
         sha256: sha256_hex(generated.javascript.as_bytes()),
     });
 
-    let (mut entries, packed_assets, label, thumbnail, display) = collect_project_entries(
-        manifest,
-        project_files,
-        generated.javascript,
-        generated.source_map_json,
-    )?;
-    if manifest.compile_on_load {
-        entries.remove("build/cartridge.js");
-        entries.remove("build/cartridge.js.map");
+    let mut entries = BTreeMap::from([("source/workcart.m01w".to_owned(), source.to_vec())]);
+    if !manifest.compile_on_load {
+        entries.insert(
+            "build/cartridge.js".to_owned(),
+            generated.javascript.into_bytes(),
+        );
+        entries.insert(
+            "build/cartridge.js.map".to_owned(),
+            generated.source_map_json.into_bytes(),
+        );
     }
-    if let Some(source) = workcart_source {
-        insert_unique(
-            &mut entries,
-            "source/workcart.m01w".to_owned(),
-            source.to_vec(),
-        )?;
-    }
+    let packed_assets = manifest
+        .assets
+        .iter()
+        .map(|(name, asset)| {
+            (
+                name.clone(),
+                PackedAsset {
+                    kind: asset.kind,
+                    path: asset.path.clone(),
+                },
+            )
+        })
+        .collect();
 
     let files = entries
         .iter()
@@ -310,21 +335,21 @@ fn pack_materialized_project(
         })
         .collect();
     let packed_manifest = PackedManifest {
-        format_revision,
+        format_revision: CARTRIDGE_FORMAT_REVISION,
         language_revision: LANGUAGE_REVISION.to_owned(),
         compiler_version: compiler_version().to_owned(),
         id: manifest.id.clone(),
         title: manifest.title.clone(),
         author: manifest.author.clone(),
         version: manifest.version.clone(),
-        entry: format!("source/{normalized_entry}"),
+        entry: normalized_entry,
         update_rate: manifest.update_rate,
         hardware_revision: manifest.hardware_revision,
         compile_on_load: manifest.compile_on_load,
         compiled_program,
-        label,
-        thumbnail,
-        display,
+        label: manifest.label.clone(),
+        thumbnail: manifest.thumbnail.clone(),
+        display: manifest.display.clone(),
         assets: packed_assets,
         files,
     };
@@ -336,23 +361,19 @@ fn pack_materialized_project(
     })?;
     insert_unique(&mut entries, "manifest.json".to_owned(), canonical_manifest)?;
     let bytes = encode_archive(&entries)?;
-    ensure_capacity(bytes.len(), manifest.hardware_revision)?;
+    ensure_capacity(bytes.len())?;
+    decode_cartridge(&bytes)?;
     Ok(PackedCartridge {
         bytes,
         manifest: packed_manifest,
     })
 }
 
-fn ensure_capacity(length: usize, hardware_revision: u8) -> Result<(), CartridgeError> {
-    let capacity = if hardware_revision == 1 {
-        LEGACY_CARTRIDGE_CAPACITY_BYTES
-    } else {
-        CARTRIDGE_CAPACITY_BYTES
-    };
-    if length > capacity {
+fn ensure_capacity(length: usize) -> Result<(), CartridgeError> {
+    if length > CARTRIDGE_CAPACITY_BYTES {
         return Err(cartridge_error(
             "M014005",
-            format!("packed cartridge is {length} bytes; capacity is {capacity}"),
+            format!("packed cartridge is {length} bytes; capacity is {CARTRIDGE_CAPACITY_BYTES}"),
         ));
     }
     Ok(())
@@ -398,6 +419,32 @@ struct ProjectModule {
     file: FileId,
     text: String,
     syntax: Module,
+}
+
+/// Derives navigation, diagnostics and code/state relationships from the actual linked compiler IR.
+///
+/// # Errors
+/// Returns a current metadata/link diagnostic when project structure is invalid.
+pub fn analyze_project_model(
+    manifest_source: &str,
+    project_files: &BTreeMap<String, Vec<u8>>,
+) -> Result<crate::tooling::ProjectModel, CartridgeError> {
+    let manifest = parse_project_manifest(manifest_source)?;
+    let model = crate::tooling::source_model(project_files)?;
+    if !model.diagnostics.is_empty() {
+        return Ok(model);
+    }
+    let linked = link_project_sources(&manifest.entry, project_files)?;
+    let mut assets = AssetCatalog::default();
+    for (name, asset) in &manifest.assets {
+        assets.insert(name, asset.kind);
+    }
+    let analysis = crate::analyze_module(&linked.source, &assets);
+    Ok(crate::tooling::ProjectModel::from_analysis(
+        model.sources,
+        &analysis,
+        &linked.origins,
+    ))
 }
 
 struct LinkedProject {
@@ -940,93 +987,34 @@ fn import_path<'a>(parts: impl Iterator<Item = &'a str>) -> Result<String, Cartr
     normalize_project_path(&path)
 }
 
-fn collect_project_entries(
-    manifest: &ProjectManifest,
-    project_files: &BTreeMap<String, Vec<u8>>,
-    javascript: String,
-    source_map: String,
-) -> Result<CollectedEntries, CartridgeError> {
-    let mut entries = BTreeMap::<String, Vec<u8>>::new();
-    for (path, bytes) in project_files {
-        let path = normalize_project_path(path)?;
-        if has_modl_extension(&path) && !path.starts_with("tests/") {
-            let text = normalized_source(bytes, &path)?;
-            insert_unique(&mut entries, format!("source/{path}"), text.into_bytes())?;
-        }
-    }
-    if manifest.hardware_revision == 2 {
-        for (path, bytes) in project_files {
-            if path.starts_with("editor/sprites/") && path.ends_with(".m01paint") {
-                let path = normalize_project_path(path)?;
-                insert_unique(&mut entries, path, bytes.clone())?;
-            }
-        }
-    }
-    let mut packed_assets = BTreeMap::new();
-    for (name, asset) in &manifest.assets {
-        let project_path = normalize_project_path(&asset.path)?;
-        let bytes = project_files.get(&project_path).ok_or_else(|| {
-            cartridge_error(
-                "M014002",
-                format!("asset '{name}' is missing file '{project_path}'"),
-            )
-        })?;
-        let archive_path = format!("assets/{project_path}");
-        insert_unique(&mut entries, archive_path.clone(), bytes.clone())?;
-        packed_assets.insert(
-            name.clone(),
-            PackedAsset {
-                kind: asset.kind,
-                path: archive_path,
-            },
-        );
-    }
-    let label = include_presentation_file(
-        &mut entries,
-        project_files,
-        manifest.label.as_deref(),
-        "label",
-    )?;
-    let thumbnail = include_presentation_file(
-        &mut entries,
-        project_files,
-        manifest.thumbnail.as_deref(),
-        "thumbnail",
-    )?;
-    let display = include_presentation_file(
-        &mut entries,
-        project_files,
-        manifest.display.as_deref(),
-        "display",
-    )?;
-    insert_unique(
-        &mut entries,
-        "build/cartridge.js".to_owned(),
-        javascript.into_bytes(),
-    )?;
-    insert_unique(
-        &mut entries,
-        "build/cartridge.js.map".to_owned(),
-        source_map.into_bytes(),
-    )?;
-    Ok((entries, packed_assets, label, thumbnail, display))
-}
-
-type CollectedEntries = (
-    BTreeMap<String, Vec<u8>>,
-    BTreeMap<String, PackedAsset>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
-
 /// Decodes an untrusted `.m01c`, enforcing bounds, hashes, ordering, and manifest integrity.
 ///
 /// # Errors
 ///
 /// Returns a stable `M014xxx` error for malformed, oversized, non-canonical, or corrupted input.
 pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError> {
-    if bytes.len() > CARTRIDGE_CAPACITY_BYTES {
+    let entries = decode_archive(bytes, CARTRIDGE_ARCHIVE_LIMITS)?;
+    let manifest_bytes = entries.get("manifest.json").ok_or_else(|| {
+        cartridge_error("M014012", "cartridge has no canonical manifest".to_owned())
+    })?;
+    let manifest: PackedManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
+        cartridge_error("M014012", format!("packed manifest is invalid: {error}"))
+    })?;
+    if serde_json::to_vec(&manifest).ok().as_deref() != Some(manifest_bytes) {
+        return Err(cartridge_error(
+            "M014012",
+            "packed manifest is not canonical JSON".to_owned(),
+        ));
+    }
+    validate_packed_manifest(&manifest, &entries)?;
+    Ok(DecodedCartridge { manifest, entries })
+}
+
+pub(crate) fn decode_archive(
+    bytes: &[u8],
+    limits: ArchiveLimits,
+) -> Result<BTreeMap<String, Vec<u8>>, CartridgeError> {
+    if bytes.len() > limits.packed {
         return Err(cartridge_error(
             "M014010",
             "cartridge exceeds the packed capacity".to_owned(),
@@ -1040,7 +1028,7 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
         ));
     }
     let entry_count = usize::try_from(reader.u32()?).unwrap_or(usize::MAX);
-    if entry_count == 0 || entry_count > MAX_ARCHIVE_ENTRIES {
+    if entry_count == 0 || entry_count > limits.entries {
         return Err(cartridge_error(
             "M014010",
             "cartridge entry count is outside format limits".to_owned(),
@@ -1072,7 +1060,7 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
         unpacked_bytes = unpacked_bytes
             .checked_add(raw_length)
             .ok_or_else(|| cartridge_error("M014010", "unpacked size overflow".to_owned()))?;
-        if unpacked_bytes > MAX_UNPACKED_BYTES {
+        if unpacked_bytes > limits.unpacked {
             return Err(cartridge_error(
                 "M014010",
                 "cartridge expands beyond the decoder limit".to_owned(),
@@ -1101,26 +1089,31 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
             "cartridge contains trailing bytes".to_owned(),
         ));
     }
-    let manifest_bytes = entries.get("manifest.json").ok_or_else(|| {
-        cartridge_error("M014012", "cartridge has no canonical manifest".to_owned())
-    })?;
-    let manifest: PackedManifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
-        cartridge_error("M014012", format!("packed manifest is invalid: {error}"))
-    })?;
-    if manifest.hardware_revision == 1 && bytes.len() > LEGACY_CARTRIDGE_CAPACITY_BYTES {
+    Ok(entries)
+}
+
+pub(crate) fn first_archive_path(bytes: &[u8]) -> Result<&str, CartridgeError> {
+    let mut reader = Reader::new(bytes);
+    if reader.take(MAGIC.len())? != MAGIC || reader.u32()? == 0 {
         return Err(cartridge_error(
             "M014010",
-            "legacy cartridge exceeds 256 KiB".to_owned(),
+            "invalid current archive header".to_owned(),
         ));
     }
-    if serde_json::to_vec(&manifest).ok().as_deref() != Some(manifest_bytes) {
+    let length = usize::from(reader.u16()?);
+    if length == 0 || length > 1024 {
         return Err(cartridge_error(
-            "M014012",
-            "packed manifest is not canonical JSON".to_owned(),
+            "M014010",
+            "archive path length is invalid".to_owned(),
         ));
     }
-    validate_packed_manifest(&manifest, &entries)?;
-    Ok(DecodedCartridge { manifest, entries })
+    reader.u32()?;
+    reader.u32()?;
+    reader.take(32)?;
+    let path = std::str::from_utf8(reader.take(length)?)
+        .map_err(|_| cartridge_error("M014010", "archive path is not UTF-8".to_owned()))?;
+    normalize_archive_path(path)?;
+    Ok(path)
 }
 
 /// Reconstructs the Git-friendly project representation from a validated cartridge.
@@ -1129,86 +1122,8 @@ pub fn decode_cartridge(bytes: &[u8]) -> Result<DecodedCartridge, CartridgeError
 ///
 /// Returns a stable cartridge error when archive paths cannot be mapped back to project paths.
 pub fn unpack_cartridge_project(bytes: &[u8]) -> Result<UnpackedProject, CartridgeError> {
-    let cartridge = decode_cartridge(bytes)?;
-    if cartridge.manifest.format_revision == WORKCART_FORMAT_REVISION {
-        let source = unpack_workcart(bytes)?;
-        let project = crate::parse_workcart(&source)?;
-        let manifest = toml::to_string(&project.manifest).map_err(|error| {
-            cartridge_error(
-                "M014012",
-                format!("could not materialize revision-2 work-cart project: {error}"),
-            )
-        })?;
-        return Ok(UnpackedProject {
-            manifest,
-            files: project.files,
-        });
-    }
-    let packed = &cartridge.manifest;
-    let entry = strip_archive_prefix(&packed.entry, "source/", "entry")?;
-    let mut files = BTreeMap::new();
-    for (path, contents) in &cartridge.entries {
-        if let Some(project_path) = path.strip_prefix("source/") {
-            insert_unpacked(&mut files, project_path, contents)?;
-        }
-        if packed.hardware_revision == 2
-            && path.starts_with("editor/sprites/")
-            && path.ends_with(".m01paint")
-        {
-            insert_unpacked(&mut files, path, contents)?;
-        }
-    }
-    let mut assets = BTreeMap::new();
-    for (name, asset) in &packed.assets {
-        let project_path = strip_archive_prefix(&asset.path, "assets/", "asset")?;
-        let contents = cartridge.entries.get(&asset.path).ok_or_else(|| {
-            cartridge_error(
-                "M014012",
-                format!("packed asset path '{}' is missing", asset.path),
-            )
-        })?;
-        insert_unpacked(&mut files, &project_path, contents)?;
-        assets.insert(
-            name.clone(),
-            ProjectAsset {
-                kind: asset.kind,
-                path: project_path,
-            },
-        );
-    }
-    let label = unpack_presentation(&cartridge, packed.label.as_deref(), "label", &mut files)?;
-    let thumbnail = unpack_presentation(
-        &cartridge,
-        packed.thumbnail.as_deref(),
-        "thumbnail",
-        &mut files,
-    )?;
-    let display =
-        unpack_presentation(&cartridge, packed.display.as_deref(), "display", &mut files)?;
-    let manifest = ProjectManifest {
-        format_revision: packed.format_revision,
-        language_revision: packed.language_revision.clone(),
-        id: packed.id.clone(),
-        title: packed.title.clone(),
-        author: packed.author.clone(),
-        version: packed.version.clone(),
-        entry,
-        update_rate: packed.update_rate,
-        hardware_revision: packed.hardware_revision,
-        compile_on_load: packed.compile_on_load,
-        label,
-        thumbnail,
-        display,
-        assets,
-    };
-    let manifest = toml::to_string(&manifest).map_err(|error| {
-        cartridge_error(
-            "M014012",
-            format!("could not reconstruct project manifest: {error}"),
-        )
-    })?;
-    parse_project_manifest(&manifest)?;
-    Ok(UnpackedProject { manifest, files })
+    let source = unpack_workcart(bytes)?;
+    crate::workcart_project_view(&source)
 }
 
 /// Restores the exact authored work-cart from a validated revision-2 cartridge.
@@ -1218,12 +1133,6 @@ pub fn unpack_cartridge_project(bytes: &[u8]) -> Result<UnpackedProject, Cartrid
 /// Returns a stable error when the cartridge is not revision 2 or has no valid work-cart source.
 pub fn unpack_workcart(bytes: &[u8]) -> Result<String, CartridgeError> {
     let cartridge = decode_cartridge(bytes)?;
-    if cartridge.manifest.format_revision != WORKCART_FORMAT_REVISION {
-        return Err(cartridge_error(
-            "M014027",
-            "cartridge does not contain an M01W/2 work-cart".to_owned(),
-        ));
-    }
     let source = cartridge
         .entries
         .get("source/workcart.m01w")
@@ -1239,43 +1148,52 @@ pub fn unpack_workcart(bytes: &[u8]) -> Result<String, CartridgeError> {
             "revision-2 work-cart source is not valid UTF-8".to_owned(),
         )
     })?;
-    crate::parse_workcart(source)?;
+    if !crate::parse_workcart(source)?.bundle.is_empty() {
+        return Err(cartridge_error(
+            "M014073",
+            "a logical cartridge cannot conceal bundle dependencies outside a game container"
+                .to_owned(),
+        ));
+    }
     Ok(source.to_owned())
 }
 
-/// Validates a cartridge and returns the executable release program, compiling source-only carts.
+/// Validates a cartridge and returns the authoritative recompiled release program.
 ///
 /// # Errors
 ///
 /// Rejects malformed archives, compilation diagnostics, or a generated program that does not match
-/// the hash frozen when the source-only cartridge was packed.
+/// the identity recorded when the cartridge was packed.
 pub fn load_cartridge_program(bytes: &[u8]) -> Result<(DecodedCartridge, Vec<u8>), CartridgeError> {
     let cartridge = decode_cartridge(bytes)?;
-    if let Some(program) = cartridge.entries.get("build/cartridge.js") {
-        return Ok((cartridge.clone(), program.clone()));
-    }
-    if !cartridge.manifest.compile_on_load {
-        return Err(cartridge_error(
-            "M014015",
-            "cartridge has no executable program".to_owned(),
-        ));
-    }
     let project = unpack_cartridge_project(bytes)?;
     let compilation = compile_project(&project.manifest, &project.files, CompileMode::Release)?;
     if let Some(diagnostic) = compilation.analysis.diagnostics.first() {
         return Err(cartridge_error(
             "M014015",
             format!(
-                "compile-on-load source failed: error[{}] {}",
+                "cartridge source failed: error[{}] {}",
                 diagnostic.code, diagnostic.message
             ),
         ));
     }
-    let program = compilation
+    let generated = compilation
         .generated
-        .ok_or_else(|| cartridge_error("M014015", "source produced no program".to_owned()))?
-        .javascript
-        .into_bytes();
+        .ok_or_else(|| cartridge_error("M014015", "source produced no program".to_owned()))?;
+    let program = generated.javascript.into_bytes();
+    if !cartridge.manifest.compile_on_load
+        && (cartridge.entries.get("build/cartridge.js") != Some(&program)
+            || cartridge
+                .entries
+                .get("build/cartridge.js.map")
+                .map(Vec::as_slice)
+                != Some(generated.source_map_json.as_bytes()))
+    {
+        return Err(cartridge_error(
+            "M014015",
+            "archived build differs from the authoritative source compilation".to_owned(),
+        ));
+    }
     let expected = cartridge
         .manifest
         .compiled_program
@@ -1297,73 +1215,27 @@ pub fn load_cartridge_program(bytes: &[u8]) -> Result<(DecodedCartridge, Vec<u8>
     Ok((cartridge, program))
 }
 
-fn strip_archive_prefix(path: &str, prefix: &str, role: &str) -> Result<String, CartridgeError> {
-    let project_path = path.strip_prefix(prefix).ok_or_else(|| {
-        cartridge_error(
-            "M014012",
-            format!("packed {role} path '{path}' has an invalid prefix"),
-        )
-    })?;
-    normalize_project_path(project_path)
-}
-
-fn unpack_presentation(
-    cartridge: &DecodedCartridge,
-    path: Option<&str>,
-    role: &str,
-    files: &mut BTreeMap<String, Vec<u8>>,
-) -> Result<Option<String>, CartridgeError> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let prefix = format!("presentation/{role}/");
-    let project_path = strip_archive_prefix(path, &prefix, role)?;
-    let contents = cartridge.entries.get(path).ok_or_else(|| {
-        cartridge_error("M014012", format!("presentation path '{path}' is missing"))
-    })?;
-    insert_unpacked(files, &project_path, contents)?;
-    Ok(Some(project_path))
-}
-
-fn insert_unpacked(
-    files: &mut BTreeMap<String, Vec<u8>>,
-    path: &str,
-    contents: &[u8],
-) -> Result<(), CartridgeError> {
-    match files.get(path) {
-        Some(existing) if existing == contents => Ok(()),
-        Some(_) => Err(cartridge_error(
-            "M014012",
-            format!("archive entries collide at project path '{path}'"),
-        )),
-        None => {
-            files.insert(path.to_owned(), contents.to_vec());
-            Ok(())
-        }
-    }
-}
-
 fn validate_manifest(manifest: &ProjectManifest) -> Result<(), CartridgeError> {
     if manifest.format_revision != CARTRIDGE_FORMAT_REVISION {
         return Err(cartridge_error(
             "M014006",
             format!(
-                "cart.toml requests format revision {}; expected {CARTRIDGE_FORMAT_REVISION}",
+                "cartridge metadata requests format revision {}; expected {CARTRIDGE_FORMAT_REVISION}",
                 manifest.format_revision
             ),
         ));
     }
-    if !matches!(manifest.hardware_revision, 1 | 2) {
+    if manifest.hardware_revision != 2 {
         return Err(cartridge_error(
             "M014006",
-            "hardware_revision must be 1 or 2".to_owned(),
+            "hardware_revision must be 2".to_owned(),
         ));
     }
     if manifest.language_revision != LANGUAGE_REVISION {
         return Err(cartridge_error(
             "M014006",
             format!(
-                "cart.toml requests language '{}'; expected '{LANGUAGE_REVISION}'",
+                "cartridge metadata requests language '{}'; expected '{LANGUAGE_REVISION}'",
                 manifest.language_revision
             ),
         ));
@@ -1425,26 +1297,14 @@ fn validate_packed_manifest(
     manifest: &PackedManifest,
     entries: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), CartridgeError> {
-    if !matches!(
-        manifest.format_revision,
-        CARTRIDGE_FORMAT_REVISION | WORKCART_FORMAT_REVISION
-    ) || manifest.language_revision != LANGUAGE_REVISION
+    let invalid = |message: &str| cartridge_error("M014012", message.to_owned());
+    if manifest.format_revision != CARTRIDGE_FORMAT_REVISION
+        || manifest.hardware_revision != 2
+        || manifest.language_revision != LANGUAGE_REVISION
+        || manifest.compiler_version != compiler_version()
     {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest requests an unsupported revision".to_owned(),
-        ));
-    }
-    if !matches!(manifest.hardware_revision, 1 | 2) {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest has invalid hardware revision".to_owned(),
-        ));
-    }
-    if manifest.hardware_revision == 1 && entries.keys().any(|path| path.starts_with("editor/")) {
-        return Err(cartridge_error(
-            "M014012",
-            "legacy cartridge has editor documents".to_owned(),
+        return Err(invalid(
+            "packed manifest requests an unsupported current contract",
         ));
     }
     let actual_files: BTreeMap<_, _> = entries
@@ -1461,91 +1321,70 @@ fn validate_packed_manifest(
         })
         .collect();
     if actual_files != manifest.files {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest file inventory does not match the archive".to_owned(),
+        return Err(invalid(
+            "packed manifest file inventory differs from archive",
         ));
     }
-    if !entries.contains_key(&manifest.entry) {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest is missing its source entry point".to_owned(),
-        ));
-    }
-    if manifest.format_revision == WORKCART_FORMAT_REVISION
-        && !entries.contains_key("source/workcart.m01w")
+    let source = entries
+        .get("source/workcart.m01w")
+        .ok_or_else(|| invalid("missing source/workcart.m01w"))?;
+    let source =
+        std::str::from_utf8(source).map_err(|_| invalid("workcart source is not UTF-8"))?;
+    let project = crate::parse_workcart(source)?;
+    let metadata = &project.manifest;
+    crate::assets::analyze_project_assets(metadata, &project.files).require_valid()?;
+    let assets = metadata
+        .assets
+        .iter()
+        .map(|(name, asset)| {
+            (
+                name.clone(),
+                PackedAsset {
+                    kind: asset.kind,
+                    path: asset.path.clone(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if manifest.id != metadata.id
+        || manifest.title != metadata.title
+        || manifest.author != metadata.author
+        || manifest.version != metadata.version
+        || manifest.entry != metadata.entry
+        || manifest.update_rate != metadata.update_rate
+        || manifest.compile_on_load != metadata.compile_on_load
+        || manifest.label != metadata.label
+        || manifest.thumbnail != metadata.thumbnail
+        || manifest.display != metadata.display
+        || manifest.assets != assets
     {
-        return Err(cartridge_error(
-            "M014012",
-            "revision-2 cartridge is missing source/workcart.m01w".to_owned(),
+        return Err(invalid(
+            "packed metadata disagrees with its authoritative workcart",
         ));
     }
-    let has_javascript = entries.contains_key("build/cartridge.js");
-    let has_source_map = entries.contains_key("build/cartridge.js.map");
-    if manifest.compile_on_load {
-        let valid_hash = manifest.compiled_program.as_ref().is_some_and(|compiled| {
-            compiled.bytes > 0
-                && compiled.bytes <= u32::try_from(MAX_UNPACKED_BYTES).unwrap_or(u32::MAX)
-                && compiled.sha256.len() == 64
-                && compiled.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-        });
-        if has_javascript || has_source_map || !valid_hash {
-            return Err(cartridge_error(
-                "M014012",
-                "compile-on-load cartridge has invalid archived build state".to_owned(),
-            ));
-        }
-    } else if !has_javascript || !has_source_map || manifest.compiled_program.is_some() {
-        return Err(cartridge_error(
-            "M014012",
-            "packed manifest is missing build entry points".to_owned(),
-        ));
+    let valid_hash = manifest.compiled_program.as_ref().is_some_and(|compiled| {
+        compiled.bytes > 0
+            && compiled.bytes <= u32::try_from(MAX_UNPACKED_BYTES).unwrap_or(u32::MAX)
+            && compiled.sha256.len() == 64
+            && compiled.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    if !valid_hash {
+        return Err(invalid("missing compiled program identity"));
     }
-    for asset in manifest.assets.values() {
-        if !entries.contains_key(&asset.path) {
-            return Err(cartridge_error(
-                "M014012",
-                format!("packed asset path '{}' is missing", asset.path),
-            ));
-        }
-    }
-    for path in [
-        manifest.label.as_ref(),
-        manifest.thumbnail.as_ref(),
-        manifest.display.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !entries.contains_key(path) {
-            return Err(cartridge_error(
-                "M014012",
-                format!("presentation path '{path}' is missing"),
-            ));
-        }
+    let expected = if manifest.compile_on_load {
+        vec!["manifest.json", "source/workcart.m01w"]
+    } else {
+        vec![
+            "build/cartridge.js",
+            "build/cartridge.js.map",
+            "manifest.json",
+            "source/workcart.m01w",
+        ]
+    };
+    if entries.keys().map(String::as_str).collect::<Vec<_>>() != expected {
+        return Err(invalid("archive contains unknown or missing entries"));
     }
     Ok(())
-}
-
-fn include_presentation_file(
-    entries: &mut BTreeMap<String, Vec<u8>>,
-    project_files: &BTreeMap<String, Vec<u8>>,
-    path: Option<&str>,
-    role: &str,
-) -> Result<Option<String>, CartridgeError> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let project_path = normalize_project_path(path)?;
-    let bytes = project_files.get(&project_path).ok_or_else(|| {
-        cartridge_error(
-            "M014002",
-            format!("{role} file '{project_path}' is missing"),
-        )
-    })?;
-    let archive_path = format!("presentation/{role}/{project_path}");
-    insert_unique(entries, archive_path.clone(), bytes.clone())?;
-    Ok(Some(archive_path))
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1554,11 +1393,7 @@ const fn is_false(value: &bool) -> bool {
 }
 
 const fn default_hardware_revision() -> u8 {
-    1
-}
-#[allow(clippy::trivially_copy_pass_by_ref)]
-const fn is_one(value: &u8) -> bool {
-    *value == 1
+    2
 }
 
 fn insert_unique(
@@ -1577,7 +1412,14 @@ fn insert_unique(
 }
 
 fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, CartridgeError> {
-    if entries.is_empty() || entries.len() > MAX_ARCHIVE_ENTRIES {
+    encode_archive_with_limits(entries, CARTRIDGE_ARCHIVE_LIMITS)
+}
+
+pub(crate) fn encode_archive_with_limits(
+    entries: &BTreeMap<String, Vec<u8>>,
+    limits: ArchiveLimits,
+) -> Result<Vec<u8>, CartridgeError> {
+    if entries.is_empty() || entries.len() > limits.entries {
         return Err(cartridge_error(
             "M014005",
             "archive entry count is outside format limits".to_owned(),
@@ -1590,7 +1432,17 @@ fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, Cartri
             .map_err(|_| cartridge_error("M014005", "too many archive entries".to_owned()))?
             .to_le_bytes(),
     );
+    let mut unpacked = 0_usize;
     for (path, raw) in entries {
+        unpacked = unpacked.checked_add(raw.len()).ok_or_else(|| {
+            cartridge_error("M014005", "archive unpacked size overflow".to_owned())
+        })?;
+        if unpacked > limits.unpacked {
+            return Err(cartridge_error(
+                "M014005",
+                "archive exceeds its unpacked capacity".to_owned(),
+            ));
+        }
         let path = normalize_archive_path(path)?;
         let path_bytes = path.as_bytes();
         let encoded = rle_encode(raw);
@@ -1614,10 +1466,10 @@ fn encode_archive(entries: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, Cartri
         output.extend_from_slice(&sha256(raw));
         output.extend_from_slice(path_bytes);
         output.extend_from_slice(&encoded);
-        if output.len() > CARTRIDGE_CAPACITY_BYTES {
+        if output.len() > limits.packed {
             return Err(cartridge_error(
                 "M014005",
-                "packed cartridge exceeds the 1 MiB capacity".to_owned(),
+                "packed archive exceeds its capacity".to_owned(),
             ));
         }
     }
@@ -1764,7 +1616,7 @@ fn cartridge_error(code: &'static str, message: String) -> CartridgeError {
     CartridgeError { code, message }
 }
 
-fn sha256_hex(input: &[u8]) -> String {
+pub(crate) fn sha256_hex(input: &[u8]) -> String {
     let mut output = String::with_capacity(64);
     for byte in sha256(input) {
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
@@ -1875,16 +1727,70 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_archive_codec_enforces_container_bounds_without_relaxing_cartridge_limits() {
+        use super::{ArchiveLimits, decode_archive, encode_archive_with_limits};
+        let entries = std::collections::BTreeMap::from([
+            ("cartridges/main.m01c".to_owned(), vec![7; 1024]),
+            (
+                "source/workcart.m01w".to_owned(),
+                b"authored source".to_vec(),
+            ),
+        ]);
+        let limits = ArchiveLimits {
+            packed: 4096,
+            unpacked: 2048,
+            entries: 2,
+        };
+        let bytes = encode_archive_with_limits(&entries, limits).unwrap();
+        assert_eq!(decode_archive(&bytes, limits).unwrap(), entries);
+        let exact = ArchiveLimits {
+            packed: bytes.len(),
+            unpacked: entries.values().map(Vec::len).sum(),
+            entries: 2,
+        };
+        assert_eq!(encode_archive_with_limits(&entries, exact).unwrap(), bytes);
+        for restrictive in [
+            ArchiveLimits {
+                packed: bytes.len() - 1,
+                ..exact
+            },
+            ArchiveLimits {
+                unpacked: exact.unpacked - 1,
+                ..exact
+            },
+            ArchiveLimits {
+                entries: 1,
+                ..exact
+            },
+        ] {
+            assert!(encode_archive_with_limits(&entries, restrictive).is_err());
+            assert!(decode_archive(&bytes, restrictive).is_err());
+        }
+        let large = std::collections::BTreeMap::from([(
+            "large".to_owned(),
+            vec![0; super::MAX_UNPACKED_BYTES + 1],
+        )]);
+        assert!(encode_archive_with_limits(&large, super::CARTRIDGE_ARCHIVE_LIMITS).is_err());
+        let invalid = std::collections::BTreeMap::from([("../escape".to_owned(), vec![1])]);
+        assert!(encode_archive_with_limits(&invalid, limits).is_err());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(decode_archive(&trailing, limits).is_err());
+        let mut corrupt = bytes;
+        corrupt[25] ^= 1;
+        assert!(decode_archive(&corrupt, limits).is_err());
+    }
+
     use super::{
-        CARTRIDGE_CAPACITY_BYTES, LEGACY_CARTRIDGE_CAPACITY_BYTES, compile_project,
-        decode_cartridge, load_cartridge_program, pack_project, rle_decode, rle_encode, sha256_hex,
-        unpack_cartridge_project,
+        CARTRIDGE_CAPACITY_BYTES, compile_project, decode_cartridge, load_cartridge_program,
+        pack_project, rle_decode, rle_encode, sha256_hex, unpack_cartridge_project,
     };
     use crate::CompileMode;
     use std::collections::BTreeMap;
 
     fn manifest() -> &'static str {
-        r#"format = 1
+        r#"format = 2
 language = "MODL/1"
 id = "test.game"
 title = "Test Game"
@@ -1906,10 +1812,10 @@ path = "assets/hero.m01g"
                 "src/main.modl".to_owned(),
                 format!("on draw:{line_ending}  clear(0){line_ending}").into_bytes(),
             ),
-            ("assets/hero.m01g".to_owned(), vec![0, 1, 1, 1, 0]),
+            ("assets/hero.m01g".to_owned(), br#"{"revision":2,"kind":"sprite","width":1,"height":1,"frames":[[1]]}"#.to_vec()),
             (
                 "assets/display.m01p".to_owned(),
-                br#"{"revision":1,"kind":"display"}"#.to_vec(),
+                serde_json::to_vec(&serde_json::json!({"revision":2,"kind":"display","remap":(0..32).collect::<Vec<_>>(),"raster":[]})).unwrap(),
             ),
         ])
     }
@@ -1941,17 +1847,19 @@ path = "assets/hero.m01g"
         let decoded = decode_cartridge(&first.bytes).expect("decode");
         assert_eq!(decoded.manifest.title, "Test Game");
         assert_eq!(
-            decoded.entries.get("source/src/main.modl"),
-            Some(&b"on draw:\n  clear(0)\n".to_vec())
+            unpack_cartridge_project(&first.bytes).unwrap().files["src/main.modl"],
+            b"on draw:\n  clear(0)\n"
         );
         assert!(decoded.entries.contains_key("build/cartridge.js"));
-        assert!(decoded.entries.contains_key("assets/assets/hero.m01g"));
+        assert_eq!(decoded.entries.len(), 4);
+        assert!(decoded.entries.contains_key("source/workcart.m01w"));
+        assert_eq!(decoded.manifest.assets["hero"].path, "assets/hero.m01g");
         assert_eq!(
             decoded.manifest.display.as_deref(),
-            Some("presentation/display/assets/display.m01p")
+            Some("assets/display.m01p")
         );
         assert!(
-            decoded
+            !decoded
                 .entries
                 .contains_key("presentation/display/assets/display.m01p")
         );
@@ -2003,7 +1911,7 @@ path = "assets/hero.m01g"
     }
 
     #[test]
-    fn hardware_two_packs_a_detailed_layered_source_above_the_legacy_ceiling() {
+    fn detailed_layered_source_respects_the_current_capacity() {
         let source = manifest().replace(
             "update_rate = 60",
             "update_rate = 60\nhardware_revision = 2",
@@ -2026,7 +1934,7 @@ path = "assets/hero.m01g"
         project_files.insert("editor/sprites/hero.m01paint".to_owned(), sidecar);
         let packed =
             pack_project(&source, &project_files).expect("hardware two packs detailed source");
-        assert!(packed.bytes.len() > LEGACY_CARTRIDGE_CAPACITY_BYTES);
+        assert!(packed.bytes.len() > 256 * 1024);
         assert!(packed.bytes.len() < CARTRIDGE_CAPACITY_BYTES);
         assert_eq!(
             decode_cartridge(&packed.bytes)
@@ -2221,6 +2129,50 @@ path = "assets/hero.m01g"
             Some("assets/display.m01p")
         );
         assert_eq!(unpacked.files, files("\n"));
+    }
+
+    #[test]
+    fn rejects_obsolete_headers_profiles_and_builds_not_produced_by_the_source() {
+        let packed = pack_project(manifest(), &files("\n")).unwrap();
+        let mut old_header = packed.bytes.clone();
+        old_header[7] = 1;
+        assert!(decode_cartridge(&old_header).is_err());
+        let decoded = decode_cartridge(&packed.bytes).unwrap();
+        for old_profile in [false, true] {
+            let mut metadata = decoded.manifest.clone();
+            if old_profile {
+                metadata.hardware_revision = 1;
+            } else {
+                metadata.format_revision = 1;
+            }
+            let mut entries = decoded.entries.clone();
+            entries.insert(
+                "manifest.json".to_owned(),
+                serde_json::to_vec(&metadata).unwrap(),
+            );
+            let bytes = super::encode_archive(&entries).unwrap();
+            assert_eq!(decode_cartridge(&bytes).unwrap_err().code, "M014012");
+        }
+        let mut entries = decoded.entries;
+        let mut metadata = decoded.manifest;
+        let forged =
+            b"export default () => { throw new Error('untrusted archived build'); };".to_vec();
+        let identity = super::FileIntegrity {
+            bytes: u32::try_from(forged.len()).unwrap(),
+            sha256: sha256_hex(&forged),
+        };
+        entries.insert("build/cartridge.js".to_owned(), forged);
+        metadata
+            .files
+            .insert("build/cartridge.js".to_owned(), identity.clone());
+        metadata.compiled_program = Some(identity);
+        entries.insert(
+            "manifest.json".to_owned(),
+            serde_json::to_vec(&metadata).unwrap(),
+        );
+        let bytes = super::encode_archive(&entries).unwrap();
+        assert!(decode_cartridge(&bytes).is_ok());
+        assert_eq!(load_cartridge_program(&bytes).unwrap_err().code, "M014015");
     }
 
     #[test]

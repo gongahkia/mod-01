@@ -1,4 +1,5 @@
 import { HARDWARE } from './hardware';
+import { isMenuAction } from './menu';
 import {
   BUTTONS,
   emptyInputFrame,
@@ -22,6 +23,7 @@ export interface ReplayTraceFrame {
     readonly buttons: readonly Button[];
   }[];
   readonly pointer?: PointerState;
+  readonly menuAction?: number;
 }
 
 export interface ReplayTrace {
@@ -39,6 +41,7 @@ export function encodeReplayTrace(
     duration?: number;
     controllers: ReplayTraceFrame['controllers'];
     pointer?: PointerState;
+    menuAction?: number;
   }> = [];
   let previousSignature: string | undefined;
   for (const { frame, input } of frames) {
@@ -47,13 +50,18 @@ export function encodeReplayTrace(
       return buttons.length === 0 ? [] : [{ port: (port + 1) as 1 | 2 | 3 | 4, buttons }];
     });
     const pointer = input.pointer;
-    const signature = JSON.stringify([controllers, pointer]);
+    const signature = JSON.stringify([controllers, pointer, input.menuAction]);
     const previous = encodedFrames.at(-1);
     const previousEnd = previous === undefined ? -1 : previous.frame + (previous.duration ?? 1);
     if (previous !== undefined && previousEnd === frame && signature === previousSignature) {
       previous.duration = (previous.duration ?? 1) + 1;
     } else {
-      encodedFrames.push({ frame, controllers, pointer });
+      encodedFrames.push({
+        frame,
+        controllers,
+        pointer,
+        ...(input.menuAction === undefined ? {} : { menuAction: input.menuAction }),
+      });
       previousSignature = signature;
     }
   }
@@ -78,10 +86,6 @@ export function decodeReplayTrace(bytes: Uint8Array): ReplayTrace {
     throw new TypeError('replay JSON is invalid');
   }
   if (isReplayTrace(value, REPLAY_MAX_FRAMES)) return structuredClone(value);
-  if (isRecord(value) && hasExactKeys(value, ['frames'])) {
-    const migrated = { revision: 1 as const, frames: value.frames };
-    if (isReplayTrace(migrated, REPLAY_MAX_FRAMES)) return structuredClone(migrated);
-  }
   throw new TypeError('replay schema is invalid');
 }
 
@@ -111,7 +115,8 @@ export function isReplayTrace(
   for (const item of value.frames) {
     if (
       !isRecord(item) ||
-      !hasOnlyKeys(item, ['frame', 'duration', 'controllers', 'pointer']) ||
+      !hasOnlyKeys(item, ['frame', 'duration', 'controllers', 'pointer', 'menuAction']) ||
+      (Object.hasOwn(item, 'menuAction') && !isMenuAction(item.menuAction)) ||
       !('controllers' in item) ||
       typeof item.frame !== 'number' ||
       !Number.isSafeInteger(item.frame) ||
@@ -139,7 +144,11 @@ function replayFrameInput(frame: ReplayTraceFrame): InputFrame {
     for (const button of controller.buttons)
       (target.buttons as Record<Button, boolean>)[button] = true;
   }
-  return { ...input, ...(frame.pointer === undefined ? {} : { pointer: frame.pointer }) };
+  return {
+    ...input,
+    ...(frame.pointer === undefined ? {} : { pointer: frame.pointer }),
+    ...(frame.menuAction === undefined ? {} : { menuAction: frame.menuAction }),
+  };
 }
 
 function isReplayPointer(value: unknown): value is PointerState {

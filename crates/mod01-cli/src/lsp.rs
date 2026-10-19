@@ -5,8 +5,8 @@ use std::{
 };
 
 use modl_core::{
-    AssetCatalog, Diagnostic, FileId, SourceFile, Span, TokenKind, analyze_module, format_source,
-    lex, parse,
+    AssetCatalog, Diagnostic, FileId, SourceFile, Span, TokenKind, analyze_module,
+    builtin_definitions, format_source, lex, parse,
 };
 use serde_json::{Value, json};
 
@@ -17,103 +17,6 @@ const KEYWORDS: &[&str] = &[
     "private", "pub", "raster", "record", "return", "start", "state", "task", "true", "update",
     "var", "wait", "while",
 ];
-const BUILTINS: &[(&str, &str)] = &[
-    ("clear", "fn clear(color: Color)"),
-    ("pixel", "fn pixel(x: Int, y: Int, color: Color)"),
-    (
-        "line",
-        "fn line(x0: Int, y0: Int, x1: Int, y1: Int, color: Color)",
-    ),
-    (
-        "rect",
-        "fn rect(x: Int, y: Int, width: Int, height: Int, color: Color)",
-    ),
-    (
-        "rect_fill",
-        "fn rect_fill(x: Int, y: Int, width: Int, height: Int, color: Color)",
-    ),
-    (
-        "circle",
-        "fn circle(x: Int, y: Int, radius: Int, color: Color)",
-    ),
-    (
-        "circle_fill",
-        "fn circle_fill(x: Int, y: Int, radius: Int, color: Color)",
-    ),
-    (
-        "triangle",
-        "fn triangle(x0: Int, y0: Int, x1: Int, y1: Int, x2: Int, y2: Int, color: Color)",
-    ),
-    (
-        "print",
-        "fn print(text: Text, x: Int, y: Int, color: Color)",
-    ),
-    ("camera", "fn camera(x: Int, y: Int)"),
-    ("clip", "fn clip(x: Int, y: Int, width: Int, height: Int)"),
-    ("clip_reset", "fn clip_reset()"),
-    ("pal", "fn pal(from: Color, to: Color)"),
-    ("pal_reset", "fn pal_reset()"),
-    ("raster_scroll", "fn raster_scroll(x: Int, y: Int)"),
-    (
-        "dither",
-        "fn dither(x: Int, y: Int, first: Color, second: Color, level: Int) -> Color",
-    ),
-    ("sprite", "fn sprite(asset: Sprite, x: Int, y: Int)"),
-    (
-        "sprite_xform",
-        "fn sprite_xform(asset: Sprite, x: Int, y: Int, scale: Int, turns: Int, flip_x: Bool, flip_y: Bool)",
-    ),
-    (
-        "animation",
-        "fn animation(asset: Animation, frame: Int, x: Int, y: Int)",
-    ),
-    ("map", "fn map(asset: Map, x: Int, y: Int)"),
-    (
-        "map_cell",
-        "fn map_cell(asset: Map, layer: Int, x: Int, y: Int) -> Int",
-    ),
-    (
-        "map_flag",
-        "fn map_flag(asset: Map, layer: Int, x: Int, y: Int, flag: Int) -> Bool",
-    ),
-    ("btn", "fn btn(port: Controller, button: Button) -> Bool"),
-    ("btnp", "fn btnp(port: Controller, button: Button) -> Bool"),
-    ("rng_int", "fn rng_int(min: Int, max: Int) -> Int"),
-    ("rng_num", "fn rng_num() -> Num"),
-    (
-        "save_get_int",
-        "fn save_get_int(key: Text, fallback: Int) -> Int",
-    ),
-    ("save_set_int", "fn save_set_int(key: Text, value: Int)"),
-    ("save_commit", "fn save_commit()"),
-    ("sfx", "fn sfx(sound: Sound)"),
-    ("music", "fn music(track: Music)"),
-    ("music_stop", "fn music_stop()"),
-    ("Vec2", "fn Vec2(x: Num, y: Num) -> Vec2"),
-    (
-        "Rect",
-        "fn Rect(x: Num, y: Num, width: Num, height: Num) -> Rect",
-    ),
-];
-const VALUES: &[(&str, &str)] = &[
-    ("pad1", "Controller"),
-    ("pad2", "Controller"),
-    ("pad3", "Controller"),
-    ("pad4", "Controller"),
-    ("up", "Button"),
-    ("down", "Button"),
-    ("left", "Button"),
-    ("right", "Button"),
-    ("a", "Button"),
-    ("b", "Button"),
-    ("x", "Button"),
-    ("y", "Button"),
-    ("l", "Button"),
-    ("r", "Button"),
-    ("start_button", "Button"),
-    ("menu", "Button"),
-];
-
 #[derive(Debug)]
 struct Document {
     text: String,
@@ -535,10 +438,10 @@ impl Server {
             .bytes()
             .filter(|byte| *byte == b',')
             .count();
-        let label = BUILTINS
+        let label = builtin_definitions()
             .iter()
-            .find(|(name, _)| *name == callee)
-            .map(|(_, label)| (*label).to_owned())
+            .find(|definition| definition.name == callee)
+            .map(|definition| definition.signature.clone())
             .or_else(|| self.declaration_label(callee))?;
         Some(json!({
             "signatures": [{ "label": label }],
@@ -704,21 +607,21 @@ fn completion_items() -> Value {
     let keywords = KEYWORDS
         .iter()
         .map(|label| json!({ "label": label, "kind": 14 }));
-    let builtins = BUILTINS
-        .iter()
-        .map(|(label, detail)| json!({ "label": label, "kind": 3, "detail": detail }));
-    let values = VALUES
-        .iter()
-        .map(|(label, detail)| json!({ "label": label, "kind": 21, "detail": detail }));
-    Value::Array(keywords.chain(builtins).chain(values).collect())
+    let builtins = builtin_definitions().iter().map(|definition| {
+        json!({ "label": definition.name, "kind": if definition.callable { 3 } else { 21 },
+            "detail": definition.signature })
+    });
+    Value::Array(keywords.chain(builtins).collect())
 }
 
 fn hover_text(symbol: &str) -> Option<Value> {
-    if let Some((_, signature)) = BUILTINS.iter().find(|(name, _)| *name == symbol) {
-        return Some(json!({ "kind": "markdown", "value": format!("```modl\n{signature}\n```") }));
-    }
-    if let Some((_, r#type)) = VALUES.iter().find(|(name, _)| *name == symbol) {
-        return Some(json!({ "kind": "plaintext", "value": format!("{symbol}: {type}") }));
+    if let Some(definition) = builtin_definitions()
+        .iter()
+        .find(|definition| definition.name == symbol)
+    {
+        return Some(
+            json!({ "kind": "markdown", "value": format!("\x60\x60\x60modl\n{}\n\x60\x60\x60", definition.signature) }),
+        );
     }
     KEYWORDS
         .contains(&symbol)

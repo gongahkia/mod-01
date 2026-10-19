@@ -94,7 +94,7 @@ impl SourceOriginMap {
         Self { sources, ranges }
     }
 
-    fn map_span(&self, span: Span) -> Span {
+    pub(crate) fn map_span(&self, span: Span) -> Span {
         let Some(range) = self
             .ranges
             .iter()
@@ -272,7 +272,7 @@ impl<'input> Generator<'input> {
             None,
         );
         self.writer.line(
-            "const textIndex=(value,key,start,end)=>value.charCodeAt(boundedIndex(key,value.length,start,end));",
+            "const textIndex=(value,key,start,end)=>api.call(\"text_at\",[value,key],{start,end});",
             None,
         );
         self.writer.line(
@@ -808,6 +808,7 @@ impl<'input> Generator<'input> {
         let has_update = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Update));
         let has_draw = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Draw));
         let has_raster = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Raster));
+        let has_menu = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Menu));
         if self.mode == CompileMode::Debug {
             self.generate_debug_instance();
             return;
@@ -829,6 +830,9 @@ impl<'input> Generator<'input> {
             ),
             None,
         );
+        if has_menu {
+            self.writer.line("menu:action=>{cb_menu(action);},", None);
+        }
         self.writer.line(
             format!("draw:()=>{{{}}},", if has_draw { "cb_draw();" } else { "" }),
             None,
@@ -863,6 +867,7 @@ impl<'input> Generator<'input> {
         let has_update = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Update));
         let has_draw = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Draw));
         let has_raster = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Raster));
+        let has_menu = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Menu));
         self.writer
             .line("const debugExecutions=Object.create(null);", None);
         self.writer.line(
@@ -904,6 +909,10 @@ impl<'input> Generator<'input> {
         self.writer.line("}", None);
         self.writer.line("return Object.freeze({", None);
         self.writer.indent += 1;
+        if has_menu {
+            self.writer
+                .line("menu:action=>advance('menu',cb_menu,[action]),", None);
+        }
         self.writer
             .line("start:()=>advance('start',debug_start),", None);
         self.writer
@@ -1210,6 +1219,12 @@ impl<'input> Generator<'input> {
                     UnaryOperator::Negate => "-",
                     UnaryOperator::Positive => "+",
                     UnaryOperator::Not => "!",
+                    UnaryOperator::BitNot => {
+                        return format!(
+                            "consoleCall(\"bit_not\",[{operand}],{},{})",
+                            expression.span.start, expression.span.end
+                        );
+                    }
                 };
                 format!("({operator}{operand})")
             }
@@ -1222,6 +1237,12 @@ impl<'input> Generator<'input> {
                     && matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual);
                 let left = self.expression(left, context);
                 let right = self.expression(right, context);
+                if let Some(name) = operator.bitwise_call() {
+                    return format!(
+                        "consoleCall(\"{name}\",[{left},{right}],{},{})",
+                        expression.span.start, expression.span.end
+                    );
+                }
                 if enum_comparison {
                     let negate = if *operator == BinaryOperator::NotEqual {
                         "!"
@@ -1913,6 +1934,7 @@ fn callback_name(kind: RoutineKind) -> &'static str {
         RoutineKind::Callback(crate::ast::CallbackKind::Update) => "cb_update",
         RoutineKind::Callback(crate::ast::CallbackKind::Draw) => "cb_draw",
         RoutineKind::Callback(crate::ast::CallbackKind::Raster) => "cb_raster",
+        RoutineKind::Callback(crate::ast::CallbackKind::Menu) => "cb_menu",
         RoutineKind::Function | RoutineKind::Task => unreachable!("not a callback"),
     }
 }
@@ -1965,6 +1987,12 @@ const fn binary_operator(operator: BinaryOperator) -> &'static str {
         BinaryOperator::Multiply => "*",
         BinaryOperator::Divide => "/",
         BinaryOperator::Remainder => "%",
+        BinaryOperator::BitAnd => "&",
+        BinaryOperator::BitOr => "|",
+        BinaryOperator::BitXor => "^",
+        BinaryOperator::ShiftLeft => "<<",
+        BinaryOperator::ShiftRight => ">>",
+        BinaryOperator::ShiftRightUnsigned => ">>>",
     }
 }
 

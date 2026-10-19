@@ -2,7 +2,15 @@ import { HARDWARE } from './hardware';
 import type { SourceSpan } from './protocol';
 import type { WorkBudgetSnapshot } from './budget';
 
-export const EXECUTION_PHASES = ['idle', 'start', 'update', 'draw', 'raster', 'output'] as const;
+export const EXECUTION_PHASES = [
+  'idle',
+  'start',
+  'update',
+  'draw',
+  'raster',
+  'output',
+  'menu',
+] as const;
 export type ExecutionPhase = (typeof EXECUTION_PHASES)[number];
 
 export interface MachineFault {

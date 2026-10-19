@@ -1,0 +1,495 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "raster-rush"
+title = "RASTER RUSH 99"
+author = "@gongahkia"
+version = "1.0.0-alpha.1"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+label = "presentation/label.svg"
+thumbnail = "presentation/thumbnail.svg"
+display = "assets/display.m01p"
+
+[[module]]
+path = "src/main.modl"
+source = """
+// RASTER RUSH 99
+// Made by @gongahkia
+
+const FINISH_DISTANCE: Int = 60000
+const RACE_FRAMES: Int = 10800
+
+enum RaceState:
+  Title
+  Race
+  Results
+  Timeout
+
+state race_state: RaceState = RaceState.Title
+state racer_count: Int = 1
+state lane: [Int, 4] = [0, 0, 0, 0]
+state speed: [Int, 4] = [0, 0, 0, 0]
+state distance: [Int, 4] = [0, 0, 0, 0]
+state boost_frames: [Int, 4] = [0, 0, 0, 0]
+state last_obstacle: [Int, 4] = [-1, -1, -1, -1]
+state finished: [Bool, 4] = [false, false, false, false]
+state race_timer: Int = RACE_FRAMES
+state winner: Int = -1
+state clock: Int = 0
+
+fn begin_race(players: Int) -> Unit:
+  racer_count = players
+  race_timer = RACE_FRAMES
+  winner = -1
+  for racer in 0..4:
+    lane[racer] = 0
+    speed[racer] = 0
+    distance[racer] = 0
+    boost_frames[racer] = 0
+    last_obstacle[racer] = -1
+    finished[racer] = false
+  race_state = RaceState.Race
+  music(#race_theme)
+
+fn drive(controller: Controller, racer: Int) -> Unit:
+  if btn(controller, a):
+    speed[racer] += 1
+  else:
+    speed[racer] -= 1
+  if btn(controller, b):
+    speed[racer] -= 2
+  if btn(controller, left):
+    lane[racer] -= 2
+  if btn(controller, right):
+    lane[racer] += 2
+  if btnp(controller, x) and boost_frames[racer] == 0:
+    boost_frames[racer] = 50
+    sfx(#boost)
+  var maximum = 6
+  if boost_frames[racer] > 0:
+    maximum = 9
+    boost_frames[racer] -= 1
+  if speed[racer] < 0:
+    speed[racer] = 0
+  if speed[racer] > maximum:
+    speed[racer] = maximum
+  if lane[racer] < -44:
+    lane[racer] = -44
+  if lane[racer] > 44:
+    lane[racer] = 44
+  if lane[racer] < -35 or lane[racer] > 35:
+    if speed[racer] > 3:
+      speed[racer] = 3
+  distance[racer] += speed[racer]
+  let segment = distance[racer] / 600
+  let obstacle_lane = (segment % 3 - 1) * 25
+  if distance[racer] % 600 >= 560 and last_obstacle[racer] != segment:
+    last_obstacle[racer] = segment
+    if lane[racer] > obstacle_lane - 10 and lane[racer] < obstacle_lane + 10:
+      speed[racer] = 1
+      sfx(#crash)
+  if distance[racer] >= FINISH_DISTANCE:
+    finished[racer] = true
+    winner = racer
+    race_state = RaceState.Results
+    music_stop()
+    sfx(#fanfare)
+
+fn road_color(racer: Int, screen_y: Int) -> Color:
+  if (screen_y / 4 + distance[racer] / 45) % 2 == 0:
+    return 3
+  return 4
+
+fn draw_view(racer: Int, origin_x: Int, origin_y: Int, width: Int, height: Int) -> Unit:
+  clip(origin_x, origin_y, width, height)
+  rect_fill(origin_x, origin_y, width, height, 25)
+  let horizon = origin_y + height / 5
+  rect_fill(origin_x, horizon, width, height - height / 5, 16)
+  let center = origin_x + width / 2 + ((distance[racer] / 70 + racer * 9) % 17 - 8)
+  for screen_y in horizon..origin_y + height:
+    let depth = screen_y - horizon
+    let half_road = 5 + depth * depth / height
+    line(center - half_road, screen_y, center + half_road, screen_y, road_color(racer, screen_y))
+    if (screen_y + distance[racer] / 18) % 13 == 0:
+      pixel(center, screen_y, 15)
+  var scale = 1
+  var draw_lane = lane[racer] / 2
+  if width > 120:
+    scale = 2
+    draw_lane = lane[racer]
+  sprite_xform(#beacon, origin_x + 4, origin_y + height - 22, scale, 0, false, false)
+  sprite_xform(#beacon, origin_x + width - 4 - 8 * scale, origin_y + height - 22, scale, 0, true, false)
+  sprite_xform(#car, origin_x + width / 2 - 4 * scale + draw_lane, origin_y + height - 13 * scale, scale, 0, false, false)
+  rect_fill(origin_x + 2, origin_y + 2, (width - 4) * race_timer / RACE_FRAMES, 3, 15)
+  if racer == 0:
+    print("P1", origin_x + 3, origin_y + 6, 11)
+  elif racer == 1:
+    print("P2", origin_x + 3, origin_y + 6, 23)
+  elif racer == 2:
+    print("P3", origin_x + 3, origin_y + 6, 15)
+  else:
+    print("P4", origin_x + 3, origin_y + 6, 30)
+  clip_reset()
+
+on start:
+  race_state = RaceState.Title
+
+on update:
+  clock += 1
+  if race_state == RaceState.Title:
+    if btnp(pad1, a):
+      begin_race(1)
+    elif btnp(pad1, x):
+      begin_race(2)
+    elif btnp(pad1, y):
+      begin_race(3)
+    elif btnp(pad1, start_button):
+      begin_race(4)
+  elif race_state == RaceState.Race:
+    drive(pad1, 0)
+    if racer_count > 1:
+      drive(pad2, 1)
+    if racer_count > 2:
+      drive(pad3, 2)
+    if racer_count > 3:
+      drive(pad4, 3)
+    race_timer -= 1
+    if race_timer <= 0:
+      race_state = RaceState.Timeout
+      music_stop()
+  elif btnp(pad1, a) or btnp(pad1, start_button):
+    race_state = RaceState.Title
+
+on draw:
+  if race_state == RaceState.Title:
+    clear(25)
+    for ray in 0..12:
+      triangle(120, 48, ray * 24 - 22, 144, ray * 24 - 10, 144, dither(ray, clock / 5, 8, 11, 8))
+    rect_fill(20, 14, 200, 112, 1)
+    rect(20, 14, 200, 112, 27)
+    sprite_xform(#car, 104, 22, 4, 0, false, false)
+    print("RASTER RUSH 99", 76, 62, 27)
+    print("STEER ARROWS  Z GAS", 61, 78, 7)
+    print("A BOOST  X BRAKE", 70, 88, 15)
+    print("Z SOLO  A DUO", 78, 102, 11)
+    print("S TRIO  ENTER FOUR", 64, 112, 23)
+  elif race_state == RaceState.Race:
+    if racer_count == 1:
+      draw_view(0, 0, 0, 240, 144)
+    elif racer_count == 2:
+      draw_view(0, 0, 0, 240, 72)
+      draw_view(1, 0, 72, 240, 72)
+      line(0, 71, 239, 71, 7)
+    else:
+      draw_view(0, 0, 0, 120, 72)
+      draw_view(1, 120, 0, 120, 72)
+      draw_view(2, 0, 72, 120, 72)
+      if racer_count == 4:
+        draw_view(3, 120, 72, 120, 72)
+      else:
+        rect_fill(120, 72, 120, 72, 1)
+        print("P4 SERVICE BAY", 137, 103, 5)
+      line(0, 71, 239, 71, 7)
+      line(119, 0, 119, 143, 7)
+  elif race_state == RaceState.Results:
+    clear(1)
+    for flare in 0..16:
+      line(120, 66, flare * 16, 0, dither(flare, clock / 4, 11, 15, 8))
+    sprite_xform(#car, 104, 34, 4, 0, false, false)
+    if winner == 0:
+      print("PLAYER ONE WINS", 76, 86, 11)
+    elif winner == 1:
+      print("PLAYER TWO WINS", 76, 86, 23)
+    elif winner == 2:
+      print("PLAYER THREE WINS", 70, 86, 15)
+    else:
+      print("PLAYER FOUR WINS", 73, 86, 30)
+    print("Z TO GRID AGAIN", 76, 108, 7)
+  else:
+    clear(8)
+    rect_fill(32, 28, 176, 88, 1)
+    rect(32, 28, 176, 88, 11)
+    print("TRANSMISSION ENDED", 65, 54, 11)
+    print("NO FINISHER", 85, 75, 15)
+    print("Z TO RETURN", 88, 96, 7)
+
+on raster(line: Int):
+  if race_state == RaceState.Race:
+    if line % 8 == 0:
+      pal(25, 26)
+    elif line % 8 == 4:
+      pal(25, 25)
+    raster_scroll((line + clock / 3) % 2, 0)
+"""
+
+[[asset]]
+name = "beacon"
+kind = "sprite"
+path = "assets/beacon.m01g"
+payload = """
+{
+  "frames": [
+    [
+      0,
+      0,
+      15,
+      15,
+      15,
+      15,
+      0,
+      0,
+      0,
+      15,
+      7,
+      7,
+      7,
+      7,
+      15,
+      0,
+      0,
+      0,
+      0,
+      15,
+      15,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      15,
+      15,
+      0,
+      0,
+      0,
+      0,
+      0,
+      23,
+      23,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      23,
+      23,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      23,
+      23,
+      0,
+      0,
+      0,
+      0,
+      0,
+      22,
+      22,
+      22,
+      22,
+      22,
+      22,
+      0
+    ]
+  ],
+  "height": 8,
+  "kind": "sprite",
+  "revision": 2,
+  "width": 8
+}
+"""
+
+[[asset]]
+name = "boost"
+kind = "sound"
+path = "assets/boost.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"noise","note":64,"durationFrames":16,"volume":0.34,"pan":0,"envelope":{"attackFrames":1,"decayFrames":3,"sustainLevel":0.62,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0.5,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "car"
+kind = "sprite"
+path = "assets/car.m01g"
+payload = """
+{
+  "frames": [
+    [
+      0,
+      0,
+      0,
+      11,
+      11,
+      0,
+      0,
+      0,
+      0,
+      0,
+      11,
+      15,
+      15,
+      11,
+      0,
+      0,
+      0,
+      11,
+      15,
+      7,
+      7,
+      15,
+      11,
+      0,
+      11,
+      15,
+      15,
+      11,
+      11,
+      15,
+      15,
+      11,
+      11,
+      15,
+      7,
+      11,
+      11,
+      7,
+      15,
+      11,
+      11,
+      15,
+      15,
+      15,
+      15,
+      15,
+      15,
+      11,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0
+    ]
+  ],
+  "height": 8,
+  "kind": "sprite",
+  "revision": 2,
+  "width": 8
+}
+"""
+
+[[asset]]
+name = "crash"
+kind = "sound"
+path = "assets/crash.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"noise","note":24,"durationFrames":16,"volume":0.5,"pan":0,"envelope":{"attackFrames":1,"decayFrames":3,"sustainLevel":0.62,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "fanfare"
+kind = "sound"
+path = "assets/fanfare.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"triangle","note":84,"durationFrames":30,"volume":0.52,"pan":0,"envelope":{"attackFrames":1,"decayFrames":3,"sustainLevel":0.62,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0.18,"vibratoDepthSemitones":0.12,"vibratoPeriodFrames":6}}
+"""
+
+[[asset]]
+name = "motor"
+kind = "sound"
+path = "assets/motor.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"saw","note":38,"durationFrames":9,"volume":0.18,"pan":0,"envelope":{"attackFrames":1,"decayFrames":3,"sustainLevel":0.62,"releaseFrames":4},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "race_theme"
+kind = "music"
+path = "assets/race-theme.m01t"
+payload = """
+{"revision":1,"kind":"music","framesPerRow":7,"order":["A","B","A","C"],"patterns":{"A":{"rows":[[{"note":45,"sound":"motor"},{"note":57,"sound":"motor"},null,null,null,null,null,null],[{"note":45,"sound":"motor"},null,null,null,null,null,null,null],[{"note":50,"sound":"motor"},{"note":62,"sound":"motor"},null,null,null,null,null,null],[{"note":52,"sound":"motor"},null,null,null,null,null,null,null]]},"B":{"rows":[[{"note":43,"sound":"motor"},{"note":55,"sound":"motor"},null,null,null,null,null,null],[{"note":47,"sound":"motor"},null,null,null,null,null,null,null],[{"note":50,"sound":"motor"},{"note":59,"sound":"motor"},null,null,null,null,null,null],[{"note":55,"sound":"motor"},null,null,null,null,null,null,null]]},"C":{"rows":[[{"note":52,"sound":"motor"},{"note":64,"sound":"motor"},null,null,null,null,null,null],[{"note":50,"sound":"motor"},null,null,null,null,null,null,null],[{"note":47,"sound":"motor"},{"note":59,"sound":"motor"},null,null,null,null,null,null],[{"note":43,"sound":"motor"},null,null,null,null,null,null,null]]}},"loop":true}
+"""
+
+[[file]]
+path = "assets/display.m01p"
+payload = """
+{
+  "kind": "display",
+  "raster": [],
+  "remap": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "revision": 2
+}
+"""
+
+[[file]]
+path = "presentation/label.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 144">
+  <rect width="240" height="144" fill="#243451"/><path d="M120 24 232 138H8z" fill="#17141f"/><path d="M120 40 186 138H54z" fill="#403946"/>
+  <g shape-rendering="crispEdges"><rect x="26" y="26" width="38" height="22" fill="#ed7b69"/><rect x="20" y="35" width="50" height="10" fill="#e7bd50"/><rect x="27" y="48" width="10" height="7" fill="#292532"/><rect x="54" y="48" width="10" height="7" fill="#292532"/></g>
+  <text x="78" y="54" fill="#f4e5bd" font-family="monospace" font-weight="bold" font-size="20">RASTER RUSH 99</text>
+  <text x="78" y="75" fill="#75cbc0" font-family="monospace" font-size="11">AUTHOR: @gongahkia</text>
+</svg>
+"""
+
+[[file]]
+path = "presentation/thumbnail.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 72" shape-rendering="crispEdges">
+  <rect width="120" height="72" fill="#243451"/><path d="M60 18 112 72H8z" fill="#17141f"/><path d="M60 28 88 72H32z" fill="#403946"/>
+  <rect x="49" y="46" width="22" height="13" fill="#ed7b69"/><rect x="44" y="51" width="32" height="7" fill="#e7bd50"/><rect x="48" y="59" width="7" height="5" fill="#17141f"/><rect x="66" y="59" width="7" height="5" fill="#17141f"/>
+</svg>
+"""

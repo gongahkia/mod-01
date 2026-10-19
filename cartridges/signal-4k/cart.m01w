@@ -1,0 +1,64 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "signal-4k"
+title = "SIGNAL 4K"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = true
+label = "presentation/label.svg"
+
+[[module]]
+path = "src/main.modl"
+source = """
+// Procedural audiovisual size-code transmission
+// Made by @gongahkia
+
+state phase: Int = 0
+
+on start:
+  sfx(#ping)
+
+on update:
+  phase = (phase + 1) % 240
+  mem_write(0, phase)
+  if btnp(pad1, a):
+    sfx(#ping)
+
+on draw:
+  clear(1)
+  for band in 0..12:
+    let y = 12 + band * 10
+    line(0, y, 239, (y + phase + band * 7) % 144, 23)
+  circle(120, 72, 18 + phase % 36, 15)
+  print("SIGNAL 4K", 91, 66, 7)
+  print("A RESENDS", 94, 78, 19)
+
+on raster(line: Int):
+  if line == 48:
+    pal(23, 25)
+    raster_scroll(phase / 8, 0)
+  elif line == 96:
+    pal(23, 11)
+    raster_scroll(0 - phase / 8, 0)
+"""
+
+[[asset]]
+name = "ping"
+kind = "sound"
+path = "assets/ping.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"triangle","note":72,"durationFrames":5,"volume":0.45,"pan":0,"duty":0.5,"envelope":{"attackFrames":0,"decayFrames":1,"sustainLevel":0.6,"releaseFrames":2},"pitch":{"slideSemitonesPerFrame":-0.4,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[file]]
+path = "presentation/label.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="144"><rect width="240" height="144" fill="#17141f"/><path d="M0 20L240 124M0 124L240 20" stroke="#79d8cf" stroke-width="8"/><circle cx="120" cy="72" r="34" fill="#f07f6a"/><text x="120" y="79" text-anchor="middle" font-family="monospace" font-size="18">SIGNAL 4K</text></svg>
+"""

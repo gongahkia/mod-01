@@ -21,7 +21,7 @@ function request(overrides: Partial<HeadlessRequest> = {}): HeadlessRequest {
     javascript,
     manifest: { id: 'headless-test', updateRate: 60, display: null, assets: {} },
     entries: {},
-    rom: [77, 79, 68, 45, 48, 49, 26, 1, 0, 0, 0, 0],
+    rom: [77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0],
     seed: 7,
     frames: 3,
     trace: { revision: 1, frames: [] },

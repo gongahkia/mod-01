@@ -13,8 +13,12 @@ import {
   isInputFrame,
   type InputFrame,
 } from './input';
-import type { SandboxConfiguration, SourceSpan } from './protocol';
+import type { ConsoleConfiguration, SourceSpan } from './protocol';
 import { DeterministicRng } from './rng';
+import { isMathCall, mathCall } from './math';
+import { isTextCall, textCall } from './text';
+import { isBitCall, bitCall } from './bits';
+import { CartridgeMenu, isMenuSnapshot, type MenuItem } from './menu';
 import {
   isExecutionSnapshot,
   isFaultSpan,
@@ -57,6 +61,7 @@ export interface GeneratedCartridge {
   update(): CartridgeCallbackResult;
   draw(): CartridgeCallbackResult;
   raster(line: number): CartridgeCallbackResult;
+  menu?(action: number): CartridgeCallbackResult;
   snapshot(): CartridgeSnapshot;
   restore(snapshot: CartridgeSnapshot): void;
   inspect(): CartridgeInspection;
@@ -104,17 +109,14 @@ export interface MachineDebugStep {
   readonly booted?: true;
 }
 
-export interface LegacyMachineSnapshot {
-  readonly revision: 1;
+export interface MachineSnapshot {
+  readonly revision: 3;
   readonly frame: number;
   readonly rngState: number;
   readonly cartridge: CartridgeSnapshot;
   readonly input: InputFrame;
   readonly previousInput: InputFrame;
-}
-
-export interface MachineSnapshot extends Omit<LegacyMachineSnapshot, 'revision'> {
-  readonly revision: 2;
+  readonly menu: readonly (string | null)[];
   readonly updateRate: 30 | 60;
   readonly budget: WorkBudgetSnapshot;
   readonly execution: ExecutionSnapshot;
@@ -128,6 +130,7 @@ export class DeterministicMachine implements CartridgeApi {
   private readonly cartridge: GeneratedCartridge;
   private readonly hooks: RuntimeHooks;
   private readonly debugEnabled: boolean;
+  private readonly menu = new CartridgeMenu();
   private currentFrame = 0;
   private booted = false;
   private input: InputFrame = emptyInputFrame();
@@ -140,7 +143,7 @@ export class DeterministicMachine implements CartridgeApi {
 
   public constructor(
     factory: CartridgeFactory,
-    configuration: SandboxConfiguration,
+    configuration: ConsoleConfiguration,
     hooks: RuntimeHooks = {},
   ) {
     if (![30, 60].includes(configuration.updateRate))
@@ -196,6 +199,12 @@ export class DeterministicMachine implements CartridgeApi {
     this.input = structuredClone(input);
     this.budget.beginFrame();
     try {
+      const action = this.input.menuAction;
+      if (action !== undefined) {
+        this.phase = 'menu';
+        this.menu.requireAction(action);
+        this.completeDebugCallback(() => this.cartridge.menu?.(action));
+      }
       if (this.updateRate === 60 || this.currentFrame % 2 === 0) {
         this.phase = 'update';
         this.completeDebugCallback(() => this.cartridge.update());
@@ -266,13 +275,23 @@ export class DeterministicMachine implements CartridgeApi {
     const input = this.debugInput ?? emptyInputFrame();
     this.previousInput = this.input;
     this.input = structuredClone(input);
-    this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
+    if (this.input.menuAction !== undefined) {
+      this.phase = 'menu';
+      this.menu.requireAction(this.input.menuAction);
+    } else {
+      this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
+    }
   }
 
   private stepDebugPhase(): DebugStep {
     switch (this.phase) {
       case 'start':
         return this.cartridge.start() ?? { done: true };
+      case 'menu': {
+        const action = this.input.menuAction;
+        if (action === undefined) throw new TypeError('menu phase requires a selected action');
+        return this.cartridge.menu?.(action) ?? { done: true };
+      }
       case 'update':
         return this.cartridge.update() ?? { done: true };
       case 'draw':
@@ -292,6 +311,9 @@ export class DeterministicMachine implements CartridgeApi {
         this.phase = 'idle';
         this.debugInput = undefined;
         return 'booted';
+      case 'menu':
+        this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
+        return undefined;
       case 'update':
         this.completedUpdates += 1;
         this.phase = 'draw';
@@ -337,12 +359,13 @@ export class DeterministicMachine implements CartridgeApi {
     if (this.phase !== 'idle' && this.lastFault === null)
       throw new TypeError('machine snapshots require a completed frame or fault boundary');
     return structuredClone({
-      revision: 2,
+      revision: 3,
       frame: this.currentFrame,
       rngState: this.rng.state,
       cartridge: this.cartridge.snapshot(),
       input: this.input,
       previousInput: this.previousInput,
+      menu: this.menu.snapshot(),
       updateRate: this.updateRate,
       budget: this.budget.snapshot(),
       execution: {
@@ -360,10 +383,7 @@ export class DeterministicMachine implements CartridgeApi {
       throw new TypeError('invalid MOD-01 machine snapshot');
     }
     const snapshot = value;
-    if (
-      snapshot.revision === 2 &&
-      (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
-    )
+    if (snapshot.updateRate !== this.updateRate || snapshot.budget.limit !== this.budget.limit)
       throw new TypeError('machine snapshot does not match the execution configuration');
     const previous = structuredClone(this.cartridge.snapshot());
     try {
@@ -372,31 +392,26 @@ export class DeterministicMachine implements CartridgeApi {
       this.cartridge.restore(previous);
       throw error;
     }
-    if (snapshot.revision === 2) {
-      this.budget.restore(snapshot.budget);
-      this.booted = snapshot.execution.booted;
-      this.completedUpdates = snapshot.execution.updates;
-      this.phase = snapshot.execution.phase;
-      this.rasterLine = snapshot.execution.rasterLine ?? undefined;
-      this.lastFault = structuredClone(snapshot.execution.fault);
-    } else {
-      this.budget.beginFrame();
-      this.booted = this.booted || snapshot.frame > 0;
-      this.completedUpdates =
-        this.updateRate === 60 ? snapshot.frame : Math.ceil(snapshot.frame / 2);
-      this.phase = 'idle';
-      this.rasterLine = undefined;
-      this.lastFault = null;
-    }
+    this.budget.restore(snapshot.budget);
+    this.booted = snapshot.execution.booted;
+    this.completedUpdates = snapshot.execution.updates;
+    this.phase = snapshot.execution.phase;
+    this.rasterLine = snapshot.execution.rasterLine ?? undefined;
+    this.lastFault = structuredClone(snapshot.execution.fault);
     this.currentFrame = snapshot.frame;
     this.rng.restore(snapshot.rngState);
     this.input = structuredClone(snapshot.input);
     this.previousInput = structuredClone(snapshot.previousInput);
+    this.menu.restore(snapshot.menu);
     this.debugInput = undefined;
   }
 
   public inspect(): CartridgeInspection {
     return this.cartridge.inspect();
+  }
+
+  public inspectMenu(): readonly MenuItem[] {
+    return this.menu.items();
   }
 
   public readInputByte(offset: number): number {
@@ -445,7 +460,31 @@ export class DeterministicMachine implements CartridgeApi {
   }
 
   public call(name: string, arguments_: readonly unknown[], sourceSpan: SourceSpan): unknown {
+    if (isBitCall(name)) {
+      this.work(1, sourceSpan);
+      return bitCall(name, arguments_, sourceSpan);
+    }
+    if (isTextCall(name))
+      return textCall(name, arguments_, sourceSpan, (units, span) => {
+        this.work(units, span);
+      });
+    if (isMathCall(name))
+      return mathCall(name, arguments_, sourceSpan, (units, span) => {
+        this.work(units, span);
+      });
     switch (name) {
+      case 'menu_item':
+        expectArguments(name, arguments_, 2, sourceSpan);
+        if (this.phase === 'raster')
+          return this.fault(
+            'M019016',
+            'menu registrations are not allowed during raster',
+            sourceSpan,
+          );
+        this.menu.set(arguments_[0], arguments_[1], sourceSpan, (units, span) => {
+          this.work(units, span);
+        });
+        return undefined;
       case 'rng_num':
         expectArguments(name, arguments_, 0, sourceSpan);
         return this.rng.nextNum();
@@ -561,9 +600,7 @@ export class DeterministicMachine implements CartridgeApi {
   }
 }
 
-export function isMachineSnapshot(
-  value: unknown,
-): value is MachineSnapshot | LegacyMachineSnapshot {
+export function isMachineSnapshot(value: unknown): value is MachineSnapshot {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
   }
@@ -578,10 +615,10 @@ export function isMachineSnapshot(
     typeof candidate.cartridge === 'object' &&
     candidate.cartridge !== null;
   if (!base) return false;
-  if (candidate.revision === 1) return Object.keys(candidate).length === 6;
   return (
-    candidate.revision === 2 &&
-    Object.keys(candidate).length === 9 &&
+    candidate.revision === 3 &&
+    Object.keys(candidate).length === 10 &&
+    isMenuSnapshot(candidate.menu) &&
     typeof candidate.rngState === 'number' &&
     candidate.rngState > 0 &&
     candidate.rngState <= 0xffffffff &&

@@ -31,7 +31,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
           components: clippy, rustfmt
-          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
@@ -40,9 +39,6 @@ jobs:
 
       - name: Set up and build
         run: make setup
-
-      - name: Install browser libraries
-        run: pnpm exec playwright install-deps firefox chromium
 
       - name: Run the full quality gate
         run: make check
@@ -85,6 +81,9 @@ jobs:
 
       - name: Test native runtime process
         run: pnpm --dir packages/runtime exec vitest run src/native-host.test.ts
+
+      - name: Package and launch a native game with its bundled Node
+        run: node scripts/verify-native-game.mjs target/release/mod01-studio${{ runner.os == 'Windows' && '.exe' || '' }}
 
       - uses: actions/upload-artifact@v4
         with:

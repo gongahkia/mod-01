@@ -93,19 +93,6 @@ impl AudioOutput {
         self.push_samples(&left, &right)
     }
 
-    pub fn push_pcm16_stereo(&self, bytes: &[u8]) -> Result<(), String> {
-        if bytes.len() % 4 != 0 || bytes.len() > 48_000 * 4 {
-            return Err("invalid PCM16 stereo buffer".to_owned());
-        }
-        let mut left = Vec::with_capacity(bytes.len() / 4);
-        let mut right = Vec::with_capacity(bytes.len() / 4);
-        for frame in bytes.chunks_exact(4) {
-            left.push(f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32_768.0);
-            right.push(f32::from(i16::from_le_bytes([frame[2], frame[3]])) / 32_768.0);
-        }
-        self.push_samples(&left, &right)
-    }
-
     fn push_samples(&self, left: &[f32], right: &[f32]) -> Result<(), String> {
         if left.len() != right.len() {
             return Err("audio channels have different lengths".to_owned());

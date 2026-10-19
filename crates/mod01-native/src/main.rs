@@ -2660,6 +2660,7 @@ impl eframe::App for StudioApp {
         self.playground.poll(&context);
         if self.player_mode {
             self.player_ui(root);
+            self.cursors.paint(&context);
             return;
         }
         egui::Panel::top("toolbar")

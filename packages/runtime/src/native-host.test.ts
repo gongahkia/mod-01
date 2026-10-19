@@ -17,11 +17,11 @@ const javascript = `export default function createCartridge(api) {
     inspect() { return { state: { frame }, tasks: [], callStack: [] }; }
   };
 }`;
-const debugJavascript = `export default function createCartridge() {
+const debugJavascript = `export default function createCartridge(api) {
   let stepped = false;
   return {
     start() {
-      if (!stepped) { stepped = true; return { done: false, event: { id: 1, sourceSpan: { start: 0, end: 1, source: 'src/main.modl' }, locals: { s1: 3 } } }; }
+      if (!stepped) { stepped = true; api.work(12, {start: 0, end: 1}); api.call('pixel', [1, 2, 255], {start: 0, end: 1}); return { done: false, event: { id: 1, sourceSpan: { start: 0, end: 1, source: 'src/main.modl' }, locals: { s1: 3 } } }; }
       return { done: true };
     },
     update() { return { done: true }; },
@@ -100,7 +100,7 @@ describe('native process host', () => {
       const replayed = await request({ type: 'frame', input: emptyInputFrame() });
       expect(replayed.pixels).toBe(second.pixels);
       expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
-      const debugLoad = await request({
+      const debugCommand = {
         type: 'load',
         javascript: debugJavascript,
         debug: true,
@@ -115,7 +115,8 @@ describe('native process host', () => {
         rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
         save: '',
         symbolNames: { s0: 'score', s1: 'health' },
-      });
+      };
+      const debugLoad = await request(debugCommand);
       if (debugLoad.type === 'error') throw new Error(String(debugLoad.message));
       expect(debugLoad).toMatchObject({ type: 'loaded', cartridgeId: 'native-debug' });
       const paused = await request({
@@ -129,6 +130,22 @@ describe('native process host', () => {
         watches: [{ value: 5 }],
         conditions: [{ value: true }, { value: false }],
       });
+      expect(await request(debugCommand)).toMatchObject({ type: 'loaded' });
+      const scratch = await request({ type: 'scratch', input: emptyInputFrame() });
+      expect(scratch).toMatchObject({
+        type: 'scratch',
+        locals: { health: 3 },
+        state: { score: 2 },
+        bootWorkUnits: 13,
+      });
+      expect(Buffer.from(scratch.pixels as string, 'base64')[2 * 240 + 1]).toBe(255);
+      expect(Buffer.from(scratch.left as string, 'base64').length).toBe(800 * 4);
+      expect(await request({ type: 'scratch', input: emptyInputFrame() })).toMatchObject({
+        type: 'error',
+        code: 'M019100',
+        message: 'scratchpad requires a freshly loaded debug program',
+      });
+      expect(await request({ type: 'stop' })).toMatchObject({ type: 'stopped' });
     } finally {
       output.close();
       child.kill();

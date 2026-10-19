@@ -5171,6 +5171,7 @@ function truthy(value) {
 //#endregion
 //#region src/native-host.ts
 var runtime;
+var scratchFresh = false;
 var cartridgeId;
 var symbolNames = {};
 var input = createInterface({
@@ -5233,6 +5234,7 @@ async function handle(command) {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2097152)
         throw new TypeError('invalid compiled cartridge');
       runtime = void 0;
+      scratchFresh = false;
       const module = await import(
         `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
       );
@@ -5261,6 +5263,7 @@ async function handle(command) {
       });
       cartridgeId = command.manifest.id;
       symbolNames = command.symbolNames ?? {};
+      scratchFresh = command.debug === true;
       return {
         type: 'loaded',
         cartridgeId,
@@ -5268,6 +5271,7 @@ async function handle(command) {
     }
     case 'frame': {
       if (runtime === void 0) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.runFrame(command.input);
       return {
         type: 'frame',
@@ -5280,8 +5284,47 @@ async function handle(command) {
         debug: result.debug ?? null,
       };
     }
+    case 'scratch': {
+      if (runtime === void 0) throw new Error('no scratchpad program is loaded');
+      if (!scratchFresh) throw new TypeError('scratchpad requires a freshly loaded debug program');
+      scratchFresh = false;
+      let locals = {};
+      let state = {};
+      let booted = false;
+      for (let step = 0; step < 65536; step++) {
+        const result = runtime.stepDebug(command.input);
+        if ('event' in result) {
+          locals = namedValues(result.event.locals);
+          state = namedValues(result.inspection.state);
+        } else if ('booted' in result) {
+          booted = true;
+          break;
+        } else throw new TypeError('scratchpad must start from a fresh debug program');
+      }
+      if (!booted)
+        throw new RuntimeFault('M019105', 'scratchpad exceeds 65,536 statement boundaries', {
+          start: 0,
+          end: 0,
+        });
+      const work = runtime.inspectMemory(MEMORY.system + 32, 8).bytes;
+      const bootWorkUnits = Number(
+        new DataView(work.buffer, work.byteOffset, 8).getBigUint64(0, true),
+      );
+      const frame = runtime.runFrame(command.input);
+      return {
+        type: 'scratch',
+        locals,
+        state,
+        bootWorkUnits,
+        workUnits: frame.workUnits,
+        pixels: encoded(frame.output.indexedPixels),
+        left: encoded(frame.output.audio.left),
+        right: encoded(frame.output.audio.right),
+      };
+    }
     case 'step': {
       if (runtime === void 0) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.stepDebug(command.input);
       if ('frame' in result)
         return {
@@ -5321,6 +5364,7 @@ async function handle(command) {
       };
     case 'restore':
       if (runtime === void 0) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
       return { type: 'restored' };
     case 'memory': {
@@ -5339,6 +5383,7 @@ async function handle(command) {
       return { type: 'memory-edited' };
     case 'stop':
       runtime = void 0;
+      scratchFresh = false;
       cartridgeId = void 0;
       return { type: 'stopped' };
   }

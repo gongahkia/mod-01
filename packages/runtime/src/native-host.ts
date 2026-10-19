@@ -9,6 +9,7 @@ import { RuntimeFault } from './errors';
 import { renderMusicWav, renderSoundWav } from './wav';
 import type { MusicAsset, SoundAsset } from './audio';
 import { evaluateWatch } from './debugger';
+import { MEMORY } from './bus';
 
 type Command =
   | {
@@ -28,6 +29,7 @@ type Command =
       symbolNames?: Record<string, string>;
     }
   | { type: 'frame'; input: InputFrame }
+  | { type: 'scratch'; input: InputFrame }
   | { type: 'step'; input: InputFrame; watches?: string[]; conditions?: string[] }
   | { type: 'snapshot' }
   | { type: 'restore'; snapshot: string }
@@ -42,6 +44,7 @@ type Command =
   | { type: 'stop' };
 
 let runtime: ConsoleRuntime | undefined;
+let scratchFresh = false;
 let cartridgeId: string | undefined;
 let symbolNames: Readonly<Record<string, string>> = {};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -108,6 +111,7 @@ async function handle(command: Command): Promise<unknown> {
       if (typeof command.javascript !== 'string' || command.javascript.length > 2 * 1024 * 1024)
         throw new TypeError('invalid compiled cartridge');
       runtime = undefined;
+      scratchFresh = false;
       const module: unknown = await import(
         `data:text/javascript;base64,${Buffer.from(command.javascript).toString('base64')}`
       );
@@ -138,10 +142,12 @@ async function handle(command: Command): Promise<unknown> {
       });
       cartridgeId = command.manifest.id;
       symbolNames = command.symbolNames ?? {};
+      scratchFresh = command.debug === true;
       return { type: 'loaded', cartridgeId };
     }
     case 'frame': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.runFrame(command.input);
       return {
         type: 'frame',
@@ -154,8 +160,47 @@ async function handle(command: Command): Promise<unknown> {
         debug: result.debug ?? null,
       };
     }
+    case 'scratch': {
+      if (runtime === undefined) throw new Error('no scratchpad program is loaded');
+      if (!scratchFresh) throw new TypeError('scratchpad requires a freshly loaded debug program');
+      scratchFresh = false;
+      let locals: Record<string, unknown> = {};
+      let state: Record<string, unknown> = {};
+      let booted = false;
+      for (let step = 0; step < 65_536; step++) {
+        const result = runtime.stepDebug(command.input);
+        if ('event' in result) {
+          locals = namedValues(result.event.locals);
+          state = namedValues(result.inspection.state);
+        } else if ('booted' in result) {
+          booted = true;
+          break;
+        } else throw new TypeError('scratchpad must start from a fresh debug program');
+      }
+      if (!booted)
+        throw new RuntimeFault('M019105', 'scratchpad exceeds 65,536 statement boundaries', {
+          start: 0,
+          end: 0,
+        });
+      const work = runtime.inspectMemory(MEMORY.system + 0x20, 8).bytes;
+      const bootWorkUnits = Number(
+        new DataView(work.buffer, work.byteOffset, 8).getBigUint64(0, true),
+      );
+      const frame = runtime.runFrame(command.input);
+      return {
+        type: 'scratch',
+        locals,
+        state,
+        bootWorkUnits,
+        workUnits: frame.workUnits,
+        pixels: encoded(frame.output.indexedPixels),
+        left: encoded(frame.output.audio.left),
+        right: encoded(frame.output.audio.right),
+      };
+    }
     case 'step': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       const result = runtime.stepDebug(command.input);
       if ('frame' in result) {
         return {
@@ -189,6 +234,7 @@ async function handle(command: Command): Promise<unknown> {
       return { type: 'snapshot', snapshot: serialize(runtime.snapshot()).toString('base64') };
     case 'restore':
       if (runtime === undefined) throw new Error('no cartridge is loaded');
+      scratchFresh = false;
       runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
       return { type: 'restored' };
     case 'memory': {
@@ -207,6 +253,7 @@ async function handle(command: Command): Promise<unknown> {
       return { type: 'memory-edited' };
     case 'stop':
       runtime = undefined;
+      scratchFresh = false;
       cartridgeId = undefined;
       return { type: 'stopped' };
   }

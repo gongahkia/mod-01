@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 144">
-  <rect width="240" height="144" fill="#3e3154"/><rect x="20" y="18" width="200" height="108" fill="#17141f" stroke="#936397" stroke-width="4"/>
-  <g shape-rendering="crispEdges"><rect x="34" y="36" width="30" height="54" fill="#654777"/><rect x="42" y="44" width="14" height="46" fill="#75cbc0"/><rect x="39" y="57" width="20" height="8" fill="#f4e5bd"/></g>
-  <text x="80" y="62" fill="#c38aae" font-family="monospace" font-weight="bold" font-size="24">ASHVAULT</text>
-  <text x="80" y="84" fill="#e7bd50" font-family="monospace" font-size="11">AUTHOR: @gongahkia</text>
-</svg>

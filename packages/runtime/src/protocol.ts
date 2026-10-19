@@ -36,7 +36,7 @@ export interface ConsoleConfiguration {
   readonly seed: number;
   readonly workUnitsPerFrame: number;
   readonly updateRate: 30 | 60;
-  readonly hardwareRevision?: 1 | 2;
+  readonly hardwareRevision?: 2;
   readonly maps?: readonly MapQueryAsset[];
   readonly save?: SaveImage;
   readonly debug?: boolean;
@@ -89,9 +89,7 @@ export function isConsoleConfiguration(value: unknown): value is ConsoleConfigur
     value.workUnitsPerFrame > 0 &&
     value.workUnitsPerFrame <= HARDWARE.workUnitsPerFrame &&
     (value.updateRate === 30 || value.updateRate === 60) &&
-    (value.hardwareRevision === undefined ||
-      value.hardwareRevision === 1 ||
-      value.hardwareRevision === 2) &&
+    (value.hardwareRevision === undefined || value.hardwareRevision === 2) &&
     (value.maps === undefined || isMapQueryCatalog(value.maps)) &&
     (value.save === undefined || isSaveImage(value.save)) &&
     (value.debug === undefined || typeof value.debug === 'boolean') &&

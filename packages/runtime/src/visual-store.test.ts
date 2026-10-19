@@ -186,11 +186,11 @@ describe('packed visual hardware storage', () => {
       () => new VisualAssetStore(Array.from({ length: 4097 }, () => assets[2] as VisualAsset)),
     ).toThrow(/too many/);
     expect(MEMORY.allocations + 4096 * MEMORY.allocationStride).toBeLessThanOrEqual(
-      MEMORY.cartridgeRomExtension,
+      MEMORY.cartridgeRom,
     );
   });
 
-  it('maps larger revision-2 visual banks without moving legacy addresses', () => {
+  it('maps small and large assets in the same unaliased current visual bank', () => {
     const sprites = Array.from({ length: 9 }, (_, index): VisualAsset => ({
       kind: 'sprite',
       name: `large${String(index)}`,
@@ -202,14 +202,58 @@ describe('packed visual hardware storage', () => {
     const bus = new MemoryBus(store.memoryRegions(), () => {});
     expect(store.usedBytes).toBe(9 * 128 * 128);
     expect(word32(bus, MEMORY.allocations + 8 * MEMORY.allocationStride + 4)).toBe(
-      MEMORY.visualExtended + 8 * 128 * 128,
+      MEMORY.visual + 8 * 128 * 128,
     );
     expect(bus.read(MEMORY.visual, 1, span)).toBe(32);
-    expect(bus.read(MEMORY.visualExtended + 8 * 128 * 128, 1, span)).toBe(40);
-    bus.write(MEMORY.visualExtended + 8 * 128 * 128, 255, 1, span);
+    expect(bus.read(MEMORY.visual + 8 * 128 * 128, 1, span)).toBe(40);
+    expect(bus.read(0x30000, 1, span)).toBe(0);
+    expect(
+      store.memoryRegions().filter((region) => region.name.startsWith('visual store')),
+    ).toHaveLength(1);
+    bus.write(MEMORY.visual + 8 * 128 * 128, 255, 1, span);
     const last = store.get('large8');
     if (last?.kind !== 'sprite') throw new Error('missing large sprite');
     expect(last.pixels[0]).toBe(255);
+  });
+
+  it('bounds allocation metadata before it can reach the cartridge ROM bank', () => {
+    const frame = {
+      kind: 'sprite' as const,
+      name: 'pixel',
+      width: 1,
+      height: 1,
+      pixels: Uint8Array.of(7),
+    };
+    const animations: VisualAsset[] = Array.from({ length: 32 }, (_, index) => ({
+      kind: 'animation',
+      name: `a${String(index)}`,
+      frames: Array.from({ length: 256 }, () => frame),
+    }));
+    const store = new VisualAssetStore(animations);
+    expect(store.usedBytes).toBe(8192);
+    const bus = new MemoryBus(
+      [
+        ...store.memoryRegions(),
+        {
+          name: 'ROM',
+          address: MEMORY.cartridgeRom,
+          bytes: new Uint8Array(HARDWARE.cartridgeCapacityBytes),
+          writable: false,
+        },
+      ],
+      () => {},
+    );
+    expect(word32(bus, MEMORY.visualInfo + 12)).toBe(HARDWARE.visualAllocations);
+    expect(MEMORY.allocations + HARDWARE.visualAllocations * MEMORY.allocationStride).toBeLessThan(
+      MEMORY.cartridgeRom,
+    );
+    expect(
+      () =>
+        new VisualAssetStore([
+          ...animations,
+          { kind: 'animation', name: 'overflow', frames: [frame] },
+        ]),
+    ).toThrow(/8192/);
   });
 
   it('packs font metadata immutably while glyph bitmap bytes alias the visual bus', () => {

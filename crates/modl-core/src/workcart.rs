@@ -57,7 +57,7 @@ struct WorkcartCartridge {
     version: String,
     entry: String,
     update_rate: u8,
-    #[serde(default = "default_hardware_revision", skip_serializing_if = "is_one")]
+    #[serde(default = "default_hardware_revision")]
     hardware_revision: u8,
     #[serde(default)]
     compile_on_load: bool,
@@ -292,11 +292,8 @@ pub fn encode_workcart(
     Ok(encoded)
 }
 
-/// Returns the legacy compiler project view materialized from an authored `M01W/2` work-cart.
-///
-/// This is a migration boundary for tools that still operate on manifest and file views. New
-/// authoring should retain the original work-cart source and rewrite it with
-/// [`rewrite_workcart`] after an edit.
+/// Returns the disposable compiler/editor view of the sole current workcart format.
+/// Retain the original source and apply edits with [`rewrite_workcart`].
 ///
 /// # Errors
 ///
@@ -532,11 +529,7 @@ fn manifest_from_cartridge(
 }
 
 const fn default_hardware_revision() -> u8 {
-    1
-}
-#[allow(clippy::trivially_copy_pass_by_ref)]
-const fn is_one(value: &u8) -> bool {
-    *value == 1
+    2
 }
 
 fn validate_presentation_files(
@@ -863,7 +856,7 @@ payload = "on start:\n  assert true\n"
             CART
         );
         let project = unpack_cartridge_project(&packed.bytes).expect("project view unpacks");
-        assert!(project.manifest.contains("format = 1"));
+        assert!(project.manifest.contains("format = 2"));
         assert_eq!(project.files["src/main.modl"], b"on draw:\n  clear(25)\n");
     }
 

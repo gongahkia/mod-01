@@ -29,7 +29,7 @@ const factory: CartridgeFactory = (api) => ({
 describe('production console dispatcher', () => {
   it('exposes cloned ROM/status bytes and permits debugger-only transactional RAM edits', () => {
     let observed = -1;
-    const rom = Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 1, 3, 0, 0, 0, 77);
+    const rom = Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 2, 3, 0, 0, 0, 77);
     const runtime = createConsoleRuntime(
       (api) => ({
         ...factory(api),
@@ -41,8 +41,8 @@ describe('production console dispatcher', () => {
     );
     rom[12] = 0;
     const status = runtime.inspectMemory(MEMORY.cartridgeInfo, 64);
-    expect(new DataView(status.bytes.buffer).getUint16(0, true)).toBe(1);
-    expect(new DataView(status.bytes.buffer).getUint16(2, true)).toBe(1);
+    expect(new DataView(status.bytes.buffer).getUint16(0, true)).toBe(2);
+    expect(new DataView(status.bytes.buffer).getUint16(2, true)).toBe(2);
     expect(new DataView(status.bytes.buffer).getUint32(4, true)).toBe(13);
     expect(new DataView(status.bytes.buffer).getUint32(20, true)).toBe(3);
     expect(status.regions).toContainEqual({
@@ -265,7 +265,7 @@ describe('production console dispatcher', () => {
           declarations: { dot: { kind: 'sprite', path: 'dot.m01g' } },
           files: {
             'dot.m01g': new TextEncoder().encode(
-              JSON.stringify({ revision: 1, kind: 'sprite', width: 1, height: 1, frames: [[7]] }),
+              JSON.stringify({ revision: 2, kind: 'sprite', width: 1, height: 1, frames: [[7]] }),
             ),
           },
         },

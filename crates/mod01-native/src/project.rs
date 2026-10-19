@@ -1,26 +1,24 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use modl_core::{
+    CompileMode, ProjectManifest, compile_project, decode_cartridge_png, pack_workcart,
+    parse_project_manifest, rewrite_workcart, unpack_workcart, workcart_project_view,
+};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write as _,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+const MAX_PROJECT_TOTAL: u64 = 16 * 1024 * 1024;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use modl_core::{
-    CompileMode, ProjectManifest, compile_project, decode_cartridge, decode_cartridge_png,
-    pack_project, pack_workcart, parse_project_manifest, rewrite_workcart,
-    unpack_cartridge_project, unpack_workcart, workcart_project_view,
-};
-use serde_json::{Value, json};
-
-const MAX_PROJECT_FILE: u64 = 16 * 1024 * 1024;
-const MAX_PROJECT_TOTAL: usize = 16 * 1024 * 1024;
-
+/// A disposable module/asset view backed by one authoritative current workcart.
 #[derive(Clone)]
 pub struct NativeProject {
     pub root: Option<PathBuf>,
     pub workcart_path: Option<PathBuf>,
-    workcart_source: Option<String>,
+    workcart_source: String,
     pub manifest_source: String,
     pub manifest: ProjectManifest,
     pub files: BTreeMap<String, Vec<u8>>,
@@ -31,88 +29,94 @@ pub struct NativeProject {
 
 impl NativeProject {
     pub fn open(path: &Path) -> Result<Self, String> {
-        if path.is_file() {
-            if path
-                .extension()
-                .is_some_and(|extension| extension == "m01w")
-            {
-                let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
-                if source.len() > MAX_PROJECT_TOTAL {
-                    return Err("workcart exceeds 16 MiB".to_owned());
-                }
-                let view = workcart_project_view(&source).map_err(|error| error.to_string())?;
-                let mut project = Self::from_parts(None, view.manifest, view.files)?;
-                project.workcart_path = Some(path.to_path_buf());
-                project.workcart_source = Some(source);
-                return Ok(project);
-            }
-            let source = fs::read(path).map_err(|error| error.to_string())?;
-            let bytes = if path.extension().is_some_and(|extension| extension == "png") {
-                decode_cartridge_png(&source)?.cartridge
-            } else {
-                source
-            };
-            let decoded = decode_cartridge(&bytes).map_err(|error| error.to_string())?;
-            let unpacked = unpack_cartridge_project(&bytes).map_err(|error| error.to_string())?;
-            let mut project = Self::from_parts(None, unpacked.manifest, unpacked.files)?;
-            if decoded.entries.contains_key("source/workcart.m01w") {
-                project.workcart_source =
-                    Some(unpack_workcart(&bytes).map_err(|error| error.to_string())?);
-            }
-            return Ok(project);
+        let path = if path.is_dir() {
+            path.join("cart.m01w")
+        } else {
+            path.to_path_buf()
+        };
+        if fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len()
+            > MAX_PROJECT_TOTAL
+        {
+            return Err("cartridge source exceeds 16 MiB".to_owned());
         }
-        let manifest_source = fs::read_to_string(path.join("cart.toml"))
-            .map_err(|error| format!("cannot read cart.toml: {error}"))?;
-        let mut files = BTreeMap::new();
-        read_tree(path, path, &mut files)?;
-        Self::from_parts(Some(path.to_path_buf()), manifest_source, files)
+        let source = fs::read(&path).map_err(|error| error.to_string())?;
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "m01w")
+        {
+            return Self::from_source(
+                String::from_utf8(source).map_err(|error| error.to_string())?,
+                Some(path),
+            );
+        }
+        let bytes = if path.extension().is_some_and(|extension| extension == "png") {
+            decode_cartridge_png(&source)?.cartridge
+        } else {
+            source
+        };
+        Self::from_source(
+            unpack_workcart(&bytes).map_err(|error| error.to_string())?,
+            None,
+        )
     }
 
     pub fn create(path: &Path, id: &str) -> Result<Self, String> {
-        if path.exists()
-            && path
-                .read_dir()
-                .map_err(|error| error.to_string())?
-                .next()
-                .is_some()
+        if path.is_file()
+            || (path.is_dir()
+                && fs::read_dir(path)
+                    .map_err(|error| error.to_string())?
+                    .next()
+                    .is_some())
         {
-            return Err("new project directory must be empty".to_owned());
+            return Err("new workcart path/directory must be empty".to_owned());
         }
-        let source = format!(
-            "format = 1\nlanguage = \"MODL/1\"\nid = \"{id}\"\ntitle = \"NEW CARTRIDGE\"\nauthor = \"@author\"\nversion = \"0.1.0\"\nentry = \"src/main.modl\"\nupdate_rate = 60\nhardware_revision = 2\n[assets]\n"
+        let metadata = format!(
+            "format = 2\nlanguage = \"MODL/1\"\nid = {}\ntitle = \"NEW CARTRIDGE\"\nauthor = \"@author\"\nversion = \"0.1.0\"\nentry = \"src/main.modl\"\nupdate_rate = 60\nhardware_revision = 2\n",
+            serde_json::to_string(id).map_err(|error| error.to_string())?
         );
-        let mut files = BTreeMap::new();
-        files.insert(
+        let manifest = parse_project_manifest(&metadata).map_err(|error| error.to_string())?;
+        let files = BTreeMap::from([(
             "src/main.modl".to_owned(),
             b"on draw:\n  clear(1)\n".to_vec(),
-        );
-        let project = Self::from_parts(Some(path.to_path_buf()), source, files)?;
+        )]);
+        let source = modl_core::encode_workcart(&manifest, &files, &[], &[])
+            .map_err(|error| error.to_string())?;
+        let output = if path
+            .extension()
+            .is_some_and(|extension| extension == "m01w")
+        {
+            path.to_path_buf()
+        } else {
+            path.join("cart.m01w")
+        };
+        let project = Self::from_source(source, Some(output))?;
         project.save()?;
         Ok(project)
     }
 
-    fn from_parts(
-        root: Option<PathBuf>,
-        manifest_source: String,
-        files: BTreeMap<String, Vec<u8>>,
-    ) -> Result<Self, String> {
-        let manifest =
-            parse_project_manifest(&manifest_source).map_err(|error| error.to_string())?;
+    fn from_source(source: String, workcart_path: Option<PathBuf>) -> Result<Self, String> {
+        let view = workcart_project_view(&source).map_err(|error| error.to_string())?;
+        let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
         let selected_file = manifest.entry.clone();
         let editor_text = String::from_utf8(
-            files
+            view.files
                 .get(&selected_file)
                 .cloned()
                 .ok_or("entry source is missing")?,
         )
         .map_err(|error| error.to_string())?;
+        let root = workcart_path
+            .as_ref()
+            .and_then(|path| path.parent().map(Path::to_path_buf));
         Ok(Self {
             root,
-            workcart_path: None,
-            workcart_source: None,
-            manifest_source,
+            workcart_path,
+            workcart_source: source,
+            manifest_source: view.manifest,
             manifest,
-            files,
+            files: view.files,
             selected_file,
             editor_text,
             dirty: false,
@@ -121,19 +125,22 @@ impl NativeProject {
 
     pub fn select_source(&mut self, path: &str) -> Result<(), String> {
         self.sync_editor();
-        let bytes = self.files.get(path).ok_or("source file is missing")?;
-        self.editor_text = String::from_utf8(bytes.clone()).map_err(|error| error.to_string())?;
+        self.editor_text = String::from_utf8(
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or("source file is missing")?,
+        )
+        .map_err(|error| error.to_string())?;
         self.selected_file = path.to_owned();
         Ok(())
     }
-
     pub fn sync_editor(&mut self) {
         self.files.insert(
             self.selected_file.clone(),
             self.editor_text.as_bytes().to_vec(),
         );
     }
-
     pub fn source_paths(&self) -> Vec<String> {
         self.files
             .keys()
@@ -142,103 +149,53 @@ impl NativeProject {
             .collect()
     }
 
-    pub fn detach_workcart(&mut self) {
-        self.workcart_path = None;
-        self.workcart_source = None;
-    }
-
     pub fn save(&self) -> Result<(), String> {
-        if let (Some(path), Some(source)) = (&self.workcart_path, &self.workcart_source) {
-            let rewritten = rewrite_workcart(source, &self.manifest_source, &self.files)
-                .map_err(|error| error.to_string())?;
-            let previous = fs::read_to_string(path).map_err(|error| error.to_string())?;
-            if previous != rewritten {
-                let revisions = workcart_recovery_directory(path);
-                fs::create_dir_all(&revisions).map_err(|error| error.to_string())?;
-                let stamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|error| error.to_string())?
-                    .as_nanos();
-                fs::write(revisions.join(format!("{stamp:020}.m01w")), previous)
-                    .map_err(|error| error.to_string())?;
-                write_atomic(path, rewritten.as_bytes())?;
-                retain_workcart_revisions(path)?;
-            }
-            return Ok(());
-        }
-        let root = self
-            .root
+        let path = self
+            .workcart_path
             .as_ref()
-            .ok_or("choose a project directory before saving")?;
-        fs::create_dir_all(root).map_err(|error| error.to_string())?;
-        self.retain_previous_revision(root)?;
-        write_atomic(&root.join("cart.toml"), self.manifest_source.as_bytes())?;
-        for (path, bytes) in &self.files {
-            write_atomic(&root.join(path), bytes)?;
-        }
-        Ok(())
-    }
-
-    fn retain_previous_revision(&self, root: &Path) -> Result<(), String> {
-        let manifest_path = root.join("cart.toml");
-        if !manifest_path.is_file() {
+            .ok_or("choose a workcart path before saving")?;
+        let rewritten = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
+            .map_err(|error| error.to_string())?;
+        let previous = match fs::read_to_string(path) {
+            Ok(source) => Some(source),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.to_string()),
+        };
+        if previous.as_ref() == Some(&rewritten) {
             return Ok(());
         }
-        let previous_manifest = fs::read(&manifest_path).map_err(|error| error.to_string())?;
-        let mut previous_files = BTreeMap::new();
-        read_tree(root, root, &mut previous_files)?;
-        if previous_manifest == self.manifest_source.as_bytes() && previous_files == self.files {
-            return Ok(());
+        if let Some(previous) = previous {
+            let directory = workcart_recovery_directory(path);
+            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| error.to_string())?
+                .as_nanos();
+            write_atomic(
+                &directory.join(format!("{stamp:020}.m01w")),
+                previous.as_bytes(),
+            )?;
         }
-        let directory = root.join(".mod01/recovery");
-        fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| error.to_string())?
-            .as_nanos();
-        let revision = directory.join(format!("{stamp:020}-{}", std::process::id()));
-        fs::create_dir_all(&revision).map_err(|error| error.to_string())?;
-        write_atomic(&revision.join("cart.toml"), &previous_manifest)?;
-        for (path, bytes) in previous_files {
-            write_atomic(&revision.join(path), &bytes)?;
-        }
-        let revisions = Self::revisions_at(root)?;
-        for path in revisions.iter().skip(10) {
-            fs::remove_dir_all(path).map_err(|error| error.to_string())?;
-        }
-        Ok(())
+        write_atomic(path, rewritten.as_bytes())?;
+        retain_workcart_revisions(path)
     }
 
     pub fn revisions(&self) -> Result<Vec<PathBuf>, String> {
-        if let Some(path) = &self.workcart_path {
-            return list_workcart_revisions(path);
-        }
-        let root = self.root.as_ref().ok_or("project has no directory")?;
-        Self::revisions_at(root)
-    }
-
-    fn revisions_at(root: &Path) -> Result<Vec<PathBuf>, String> {
-        let directory = root.join(".mod01/recovery");
-        if !directory.is_dir() {
-            return Ok(Vec::new());
-        }
-        let mut revisions = fs::read_dir(directory)
-            .map_err(|error| error.to_string())?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir() && path.join("cart.toml").is_file())
-            .collect::<Vec<_>>();
-        revisions.sort_by(|left, right| right.cmp(left));
-        Ok(revisions)
+        list_workcart_revisions(
+            self.workcart_path
+                .as_ref()
+                .ok_or("project has no workcart path")?,
+        )
     }
 
     pub fn check(&self) -> Result<String, String> {
-        let result = compile_project(&self.manifest_source, &self.files, CompileMode::Release)
+        let compilation = compile_project(&self.manifest_source, &self.files, CompileMode::Release)
             .map_err(|error| error.to_string())?;
-        if result.analysis.diagnostics.is_empty() {
+        if compilation.analysis.diagnostics.is_empty() {
+            self.pack()?;
             Ok("CHECK OK".to_owned())
         } else {
-            Ok(result
+            Ok(compilation
                 .analysis
                 .diagnostics
                 .iter()
@@ -249,20 +206,15 @@ impl NativeProject {
     }
 
     pub fn pack(&self) -> Result<Vec<u8>, String> {
-        if let Some(source) = &self.workcart_source {
-            let rewritten = rewrite_workcart(source, &self.manifest_source, &self.files)
-                .map_err(|error| error.to_string())?;
-            return pack_workcart(&rewritten)
-                .map(|packed| packed.bytes)
-                .map_err(|error| error.to_string());
-        }
-        pack_project(&self.manifest_source, &self.files)
+        let source = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
+            .map_err(|error| error.to_string())?;
+        pack_workcart(&source)
             .map(|packed| packed.bytes)
             .map_err(|error| error.to_string())
     }
 
     pub fn javascript(&self, debug: bool) -> Result<String, String> {
-        let result = compile_project(
+        let compilation = compile_project(
             &self.manifest_source,
             &self.files,
             if debug {
@@ -272,21 +224,20 @@ impl NativeProject {
             },
         )
         .map_err(|error| error.to_string())?;
-        result
+        compilation
             .generated
             .map(|program| program.javascript)
             .ok_or_else(|| {
-                result
+                compilation
                     .analysis
                     .diagnostics
                     .iter()
-                    .map(|item| format!("{}: {}", item.code, item.message))
+                    .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
                     .collect::<Vec<_>>()
                     .join("\n")
             })
     }
 
-    /// One compiler/load contract for Studio, packaged games and native smoke verification.
     pub fn load_command(&self, debug: bool, save: &[u8]) -> Result<Value, String> {
         let rom = self.pack()?;
         let javascript = self.javascript(debug)?;
@@ -352,60 +303,28 @@ fn retain_workcart_revisions(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn read_tree(
-    root: &Path,
-    directory: &Path,
-    output: &mut BTreeMap<String, Vec<u8>>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if entry
-            .file_type()
-            .map_err(|error| error.to_string())?
-            .is_symlink()
-        {
-            continue;
-        }
-        if name.starts_with('.')
-            || name.ends_with(".mod01-tmp")
-            || matches!(name.as_ref(), "dist" | "target" | "node_modules")
-        {
-            continue;
-        }
-        let metadata = entry.metadata().map_err(|error| error.to_string())?;
-        if metadata.is_dir() {
-            read_tree(root, &path, output)?;
-        } else if metadata.is_file() {
-            if name == "cart.toml" {
-                continue;
-            }
-            if metadata.len() > MAX_PROJECT_FILE {
-                return Err("project file exceeds 16 MiB".to_owned());
-            }
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|error| error.to_string())?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let bytes = fs::read(&path).map_err(|error| error.to_string())?;
-            output.insert(relative, bytes);
-            if output.values().map(Vec::len).sum::<usize>() > MAX_PROJECT_TOTAL {
-                return Err("project exceeds 16 MiB".to_owned());
-            }
-        }
-    }
-    Ok(())
-}
-
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().ok_or("invalid project path")?;
+    let parent = path.parent().ok_or("invalid workcart path")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("mod01-tmp");
-    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let name = path
+        .file_name()
+        .ok_or("workcart has no filename")?
+        .to_string_lossy();
+    let temporary = parent.join(format!(".{name}.{}.{stamp}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| error.to_string())?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| error.to_string())?;
+    drop(file);
+    fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

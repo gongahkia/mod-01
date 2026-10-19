@@ -312,6 +312,7 @@ impl StudioApp {
         match NativeProject::open(&path) {
             Ok(mut project) => {
                 project.root = None;
+                project.workcart_path = None;
                 self.stop();
                 self.manifest_text = project.manifest_source.clone();
                 self.status = format!("OPENED SAMPLE {}", project.manifest.title);
@@ -463,8 +464,8 @@ impl StudioApp {
         };
         project.sync_editor();
         let mut folder_project = project.clone();
+        folder_project.workcart_path = Some(path.join("cart.m01w"));
         folder_project.root = Some(path);
-        folder_project.detach_workcart();
         match folder_project.save() {
             Ok(()) => {
                 folder_project.dirty = false;
@@ -2067,7 +2068,7 @@ impl StudioApp {
         }
         let source = project.files.entry(path.clone()).or_insert_with(|| {
             serde_json::to_vec(&json!({
-                "revision":1,"kind":"display",
+                "revision":2,"kind":"display",
                 "remap":(0..32).collect::<Vec<_>>(),"raster":[]
             }))
             .unwrap_or_default()
@@ -3060,7 +3061,7 @@ impl eframe::App for StudioApp {
                     }
                 }
                 View::Manifest => {
-                    ui.heading("cart.toml");
+                    ui.heading("CARTRIDGE METADATA");
                     if ui.button("APPLY MANIFEST").clicked() {
                         self.apply_manifest();
                     }
@@ -3118,7 +3119,7 @@ fn bundled_samples() -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.join("cart.toml").is_file())
+        .filter(|path| path.join("cart.m01w").is_file())
         .collect();
     paths.sort();
     paths

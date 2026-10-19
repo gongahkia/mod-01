@@ -1,7 +1,7 @@
 import { RuntimeFault } from './errors';
 import type { SourceSpan } from './protocol';
 
-// candidate Revision 1 addresses; device regions are filled in alongside their conformance tests.
+// The sole current machine map. Each bank has one address and cannot overlap descriptor tables.
 export const MEMORY = Object.freeze({
   size: 0x400000,
   ram: 0x00000,
@@ -9,11 +9,10 @@ export const MEMORY = Object.freeze({
   front: 0x10000,
   back: 0x19000,
   display: 0x22000,
-  visual: 0x30000,
-  visualExtended: 0x210000,
+  visual: 0x210000,
   draw: 0x50000,
   transparency: 0x50050,
-  palette: 0x50080,
+  palette: 0x200000,
   input: 0x50100,
   inputBytes: 48,
   system: 0x50200,
@@ -24,9 +23,7 @@ export const MEMORY = Object.freeze({
   cartridgeInfo: 0x50600,
   save: 0x58000,
   saveCommitted: 0x5a000,
-  cartridgeRom: 0x60000,
-  cartridgeRomExtension: 0x100000,
-  paletteExtended: 0x200000,
+  cartridgeRom: 0x100000,
   audio: 0x51000,
   audioTracker: 0x51020,
   audioVoices: 0x51100,

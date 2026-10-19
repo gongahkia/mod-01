@@ -117,7 +117,7 @@ export function createConsoleRuntime(
   const mapQueries = new MapQueryStore(source === undefined ? (configuration.maps ?? []) : []);
   const saveMemory = new SaveMemory(configuration.save ?? {});
   const cartridgeRom = configuration.rom?.slice() ?? new Uint8Array();
-  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 1);
+  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 2);
   const debugEnabled = configuration.debug ?? false;
   let debugTrace: DebugTraceEvent[] = [];
   const debugCallStack: DebugStackFrame[] = [];
@@ -144,19 +144,9 @@ export function createConsoleRuntime(
             {
               name: 'canonical cartridge ROM',
               address: MEMORY.cartridgeRom,
-              bytes: cartridgeRom.subarray(0, 256 * 1024),
+              bytes: cartridgeRom,
               writable: false,
             } as const,
-            ...(cartridgeRom.length > 256 * 1024
-              ? [
-                  {
-                    name: 'canonical cartridge ROM extension',
-                    address: MEMORY.cartridgeRomExtension,
-                    bytes: cartridgeRom.subarray(256 * 1024),
-                    writable: false,
-                  } as const,
-                ]
-              : []),
           ]),
       {
         name: 'controllers and pointer',
@@ -175,13 +165,7 @@ export function createConsoleRuntime(
       {
         name: 'master palette RGBA',
         address: MEMORY.palette,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(0, 32 * 4)),
-        writable: false,
-      },
-      {
-        name: 'extended master palette RGBA',
-        address: MEMORY.paletteExtended,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(32 * 4)),
+        bytes: Uint8Array.from(MASTER_PALETTE_RGBA),
         writable: false,
       },
     ],
@@ -576,17 +560,17 @@ export function createConsoleRuntime(
   }
 }
 
-function createCartridgeInfo(rom: Uint8Array, hardwareRevision: 1 | 2): Uint8Array {
+function createCartridgeInfo(rom: Uint8Array, hardwareRevision: 2): Uint8Array {
   const bytes = new Uint8Array(64);
   const view = new DataView(bytes.buffer);
   const validHeader =
     rom.length >= 12 &&
     [77, 79, 68, 45, 48, 49, 26].every((byte, index) => rom[index] === byte) &&
-    rom[7] === 1;
+    rom[7] === 2;
   view.setUint16(0, hardwareRevision, true);
   view.setUint16(2, validHeader ? (rom[7] ?? 0) : 0, true);
   view.setUint32(4, rom.length, true);
-  view.setUint32(8, hardwareRevision === 1 ? 256 * 1024 : HARDWARE.cartridgeCapacityBytes, true);
+  view.setUint32(8, HARDWARE.cartridgeCapacityBytes, true);
   view.setUint32(12, MEMORY.cartridgeRom, true);
   view.setUint32(16, Number(rom.length > 0) | (Number(validHeader) << 1), true);
   view.setUint32(

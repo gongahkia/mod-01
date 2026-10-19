@@ -46,7 +46,7 @@ pub use workcart::{
 pub const LANGUAGE_REVISION: &str = "MODL/1";
 
 /// The deterministic packed-cartridge format revision.
-pub const CARTRIDGE_FORMAT_REVISION: u16 = 1;
+pub const CARTRIDGE_FORMAT_REVISION: u16 = 2;
 
 /// Identifies the compiler in generated artifacts and diagnostics.
 #[must_use]
@@ -61,7 +61,7 @@ mod tests {
     #[test]
     fn revisions_are_explicit() {
         assert_eq!(LANGUAGE_REVISION, "MODL/1");
-        assert_eq!(CARTRIDGE_FORMAT_REVISION, 1);
+        assert_eq!(CARTRIDGE_FORMAT_REVISION, 2);
         assert!(!compiler_version().is_empty());
     }
 }

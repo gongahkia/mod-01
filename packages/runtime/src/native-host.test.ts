@@ -83,7 +83,7 @@ describe('native process host', () => {
             assets: {},
           },
           files: {},
-          rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 1, 0, 0, 0, 0]).toString('base64'),
+          rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
           save: '',
         }),
       ).toMatchObject({ type: 'loaded', cartridgeId: 'native-test' });
@@ -112,7 +112,7 @@ describe('native process host', () => {
           assets: {},
         },
         files: {},
-        rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 1, 0, 0, 0, 0]).toString('base64'),
+        rom: Buffer.from([77, 79, 68, 45, 48, 49, 26, 2, 0, 0, 0, 0]).toString('base64'),
         save: '',
         symbolNames: { s0: 'score', s1: 'health' },
       });

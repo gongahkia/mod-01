@@ -1,4 +1,0 @@
-pub fn wrap(value: Int, limit: Int) -> Int:
-  if value < 0:
-    return limit - 1
-  return value % limit

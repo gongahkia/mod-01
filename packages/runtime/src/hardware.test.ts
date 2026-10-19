@@ -12,6 +12,7 @@ describe('revision 2 hardware profile', () => {
       rasterPaletteSize: 32,
       transparentColor: 0,
       visualCapacityBytes: 1024 * 1024,
+      visualAllocations: 8192,
       saveCapacityBytes: 8 * 1024,
       cartridgeCapacityBytes: 1024 * 1024,
       drawCommandsPerFrame: 4096,

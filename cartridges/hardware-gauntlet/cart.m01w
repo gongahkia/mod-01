@@ -1,0 +1,117 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "hardware-gauntlet"
+title = "HARDWARE GAUNTLET"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = true
+label = "presentation/label.svg"
+
+[[module]]
+path = "src/main.modl"
+source = """
+// Hardware Revision 1 public stress showcase
+// Made by @gongahkia
+
+const SYSTEM: Int = 328192
+const INPUT: Int = 327936
+const RASTER: Int = 348160
+const ROM: Int = 1048576
+
+state frame: Int = 0
+state task_ticks: Int = 0
+state page: Int = 0
+
+task probe_task():
+  while true:
+    task_ticks += 1
+    wait 15f
+
+fn word(address: Int) -> Int:
+  return mem_read16(address) + mem_read16(address + 2) * 65536
+
+on start:
+  assert mem_read(ROM) == 77 and mem_read(ROM + 1) == 79, "M01 ROM"
+  assert mem_read16(SYSTEM + 40) == 50000, "WORK"
+  mem_write16(32, 4660)
+  assert mem_read16(32) == 4660, "ENDIAN"
+  mem_fill(32, 0, 2)
+  start probe_task()
+  sfx(#probe)
+
+on update:
+  if btnp(pad1, a) or btnp(pad2, a) or btnp(pad3, a) or btnp(pad4, a):
+    page = (page + 1) % 4
+    sfx(#probe)
+
+on draw:
+  clear(1)
+  for y in 0..9:
+    for x in 0..15:
+      if (x + y + frame / 4) % 2 == 0:
+        rect_fill(x * 16, y * 16, 8, 8, 25)
+      else:
+        rect_fill(x * 16 + 8, y * 16 + 8, 8, 8, 11)
+  rect_fill(8, 8, 224, 42, 2)
+  print("HARDWARE GAUNTLET", 68, 14, 7)
+  font_print(#typeface, "R1", 108, 28, 23)
+  if page == 0:
+    print("BUS + ROM + ENDIAN", 67, 62, 15)
+  elif page == 1:
+    print("4 PORT INPUT", 82, 62, 15)
+  elif page == 2:
+    print("RASTER + AUDIO", 73, 62, 15)
+  else:
+    print("TASK + WORK", 85, 62, 15)
+  print("A ON ANY PORT / NEXT", 61, 78, 19)
+  print("FRAME", 84, 94, 6)
+  print("TASK", 84, 106, 6)
+  print("INPUT", 84, 118, 6)
+  pixel(0, 0, 7)
+  assert mem_read(102400) == 7, "FRAMEBUFFER"
+  assert word(SYSTEM) == frame, "COUNTER"
+  let pads = mem_read16(INPUT) + mem_read16(INPUT + 8) + mem_read16(INPUT + 16) + mem_read16(INPUT + 24)
+  mem_write16(48, pads)
+
+on raster(line: Int):
+  if line == 0:
+    pal(7, 7)
+  elif line == 48:
+    pal(25, 19)
+    raster_scroll(frame / 8, 0)
+  elif line == 96:
+    pal(11, 23)
+    raster_scroll(0 - frame / 8, 0)
+  if line == 143:
+    assert mem_read(RASTER) == 1, "RASTER"
+    frame += 1
+"""
+
+[[asset]]
+name = "probe"
+kind = "sound"
+path = "assets/probe.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"wavetable","note":48,"durationFrames":12,"volume":0.4,"pan":0,"duty":0.5,"wavetable":[-1,-0.5,0,0.8,1,0.5,0,-0.8],"envelope":{"attackFrames":1,"decayFrames":2,"sustainLevel":0.7,"releaseFrames":3},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0.4,"vibratoPeriodFrames":6}}
+"""
+
+[[asset]]
+name = "typeface"
+kind = "font"
+path = "assets/typeface.m01f"
+payload = """
+{"revision":1,"kind":"font","glyphWidth":5,"glyphHeight":7,"baseline":6,"advanceX":6,"advanceY":8,"missingGlyph":63,"glyphs":[{"code":49,"pixels":[0,0,1,0,0,0,1,1,0,0,1,0,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0,0,1,1,1,1,1]},{"code":63,"pixels":[0,1,1,1,0,1,0,0,0,1,0,0,0,0,1,0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0]},{"code":82,"pixels":[1,1,1,1,0,1,0,0,0,1,1,0,0,0,1,1,1,1,1,0,1,0,1,0,0,1,0,0,1,0,1,0,0,0,1]}]}
+"""
+
+[[file]]
+path = "presentation/label.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="144"><rect width="240" height="144" fill="#17141f"/><g fill="#e7bd50"><rect x="18" y="18" width="26" height="26"/><rect x="196" y="18" width="26" height="26"/><rect x="18" y="100" width="26" height="26"/><rect x="196" y="100" width="26" height="26"/></g><text x="120" y="65" fill="#79d8cf" text-anchor="middle" font-family="monospace" font-size="17">HARDWARE</text><text x="120" y="86" fill="#f4e9ce" text-anchor="middle" font-family="monospace" font-size="17">GAUNTLET</text></svg>
+"""

@@ -360,7 +360,7 @@ mod tests {
             "src/main.modl".to_owned(),
             b"on draw:\n  clear(1)\n".to_vec(),
         )]);
-        let cart = crate::pack_project("format=1\nlanguage=\"MODL/1\"\nid=\"export-test\"\ntitle=\"Export test\"\nauthor=\"Tester\"\nversion=\"0.1.0\"\nentry=\"src/main.modl\"\nupdate_rate=60\n", &files).unwrap();
+        let cart = crate::pack_project("format=2\nlanguage=\"MODL/1\"\nid=\"export-test\"\ntitle=\"Export test\"\nauthor=\"Tester\"\nversion=\"0.1.0\"\nentry=\"src/main.modl\"\nupdate_rate=60\n", &files).unwrap();
         let output = root.join("game");
         assert!(export_native_game(&output, b"invalid", &tools).is_err());
         assert!(!output.exists());

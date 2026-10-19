@@ -145,9 +145,13 @@ describe('public MODL hardware conformance', () => {
         output,
         ...(mode === 'debug' ? ['--debug'] : []),
       ]);
-      const manifest = JSON.parse(execFileSync(cli, ['info', project], { encoding: 'utf8' })) as {
-        assets: Record<string, ProjectAssetDeclaration>;
+      const source = JSON.parse(
+        execFileSync(cli, ['info', project, '--source'], { encoding: 'utf8' }),
+      ) as {
+        manifest: { assets: Record<string, ProjectAssetDeclaration> };
+        files: Record<string, number[]>;
       };
+      const manifest = source.manifest;
       const generated = (await import(/* @vite-ignore */ pathToFileURL(output).href)) as {
         default: CartridgeFactory;
       };
@@ -159,10 +163,7 @@ describe('public MODL hardware conformance', () => {
         assets: {
           declarations: manifest.assets,
           files: Object.fromEntries(
-            Object.values(manifest.assets).map((asset) => [
-              asset.path,
-              new Uint8Array(readFileSync(join(project, asset.path))),
-            ]),
+            Object.entries(source.files).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
           ),
         },
       });
@@ -344,9 +345,13 @@ describe('public MODL hardware conformance', () => {
         output,
         ...(mode === 'debug' ? ['--debug'] : []),
       ]);
-      const manifest = JSON.parse(execFileSync(cli, ['info', project], { encoding: 'utf8' })) as {
-        assets: Record<string, ProjectAssetDeclaration>;
+      const source = JSON.parse(
+        execFileSync(cli, ['info', project, '--source'], { encoding: 'utf8' }),
+      ) as {
+        manifest: { assets: Record<string, ProjectAssetDeclaration> };
+        files: Record<string, number[]>;
       };
+      const manifest = source.manifest;
       const generated = (await import(/* @vite-ignore */ pathToFileURL(output).href)) as {
         default: CartridgeFactory;
       };
@@ -358,10 +363,7 @@ describe('public MODL hardware conformance', () => {
         assets: {
           declarations: manifest.assets,
           files: Object.fromEntries(
-            Object.values(manifest.assets).map((asset) => [
-              asset.path,
-              new Uint8Array(readFileSync(join(project, asset.path))),
-            ]),
+            Object.entries(source.files).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
           ),
         },
       });
@@ -392,7 +394,7 @@ describe('public MODL hardware conformance', () => {
         updateRate: 60,
         workUnitsPerFrame: 50_000,
         debug: mode === 'debug',
-        rom: Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 1, 3, 0, 0, 0),
+        rom: Uint8Array.of(77, 79, 68, 45, 48, 49, 26, 2, 3, 0, 0, 0),
       });
       completeDebugBoot(runtime, mode === 'debug');
       const boot = runtime.snapshot();

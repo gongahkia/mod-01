@@ -1,0 +1,221 @@
+format = 2
+file = []
+recipe = []
+
+[cartridge]
+language = "MODL/1"
+id = "api-tour"
+title = "MODL API TOUR"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = false
+
+[[module]]
+path = "src/main.modl"
+source = """
+import src.motion as motion
+
+state cursor_x: Int = 16
+state ticks: Int = 0
+
+task clock():
+  while true:
+    ticks += 1
+    wait 30f
+
+on start:
+  cursor_x = save_get_int("x", 16)
+  mem_write16(0, 923)
+  assert mem_read16(0) == 923, "little endian bus"
+  music(#loop)
+  start clock()
+
+on update:
+  if btn(pad1, left) or btn(pad2, left) or btn(pad3, left) or btn(pad4, left):
+    cursor_x = motion.wrap(cursor_x - 1, 240)
+  if btnp(pad1, a):
+    sfx(#beep)
+    save_set_int("x", cursor_x)
+    save_commit()
+
+on draw:
+  clear(1)
+  map(#room, 8, 8)
+  sprite(#dot, cursor_x, 72)
+  font_print(#typeface, "?", 116, 40, 23)
+  print("4P LEFT / P1 A SAVE", 55, 104, 7)
+  print("WORK", 84, 116, 6)
+  print("BUS R1", 132, 116, 6)
+
+on raster(line: Int):
+  if line == 72:
+    pal(7, 23)
+    raster_scroll(ticks, 0)
+"""
+
+[[module]]
+path = "src/motion.modl"
+source = """
+pub fn wrap(value: Int, limit: Int) -> Int:
+  if value < 0:
+    return limit - 1
+  return value % limit
+"""
+
+[[asset]]
+name = "beep"
+kind = "sound"
+path = "assets/beep.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"triangle","note":69,"durationFrames":4,"volume":0.4,"pan":0,"envelope":{"attackFrames":0,"decayFrames":0,"sustainLevel":1,"releaseFrames":1},"pitch":{"slideSemitonesPerFrame":0,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "dot"
+kind = "sprite"
+path = "assets/dot.m01g"
+payload = """
+{
+  "frames": [
+    [
+      15
+    ]
+  ],
+  "height": 1,
+  "kind": "sprite",
+  "revision": 2,
+  "width": 1
+}
+"""
+
+[[asset]]
+name = "loop"
+kind = "music"
+path = "assets/loop.m01t"
+payload = """
+{"revision":1,"kind":"music","framesPerRow":12,"order":["A"],"patterns":{"A":{"rows":[[{"note":60,"sound":"beep"},null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null]]}},"loop":true}
+"""
+
+[[asset]]
+name = "room"
+kind = "map"
+path = "assets/room.m01m"
+payload = """
+{"revision":1,"kind":"map","layers":[{"width":4,"height":2,"cells":[0,0,0,0,0,0,0,0],"tileSet":"tiles"}]}
+"""
+
+[[asset]]
+name = "tiles"
+kind = "tile_set"
+path = "assets/tiles.m01g"
+payload = """
+{
+  "flags": [
+    1
+  ],
+  "kind": "tile_set",
+  "revision": 2,
+  "tiles": [
+    [
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      11,
+      11,
+      1,
+      23,
+      23,
+      23,
+      23,
+      1,
+      11,
+      11,
+      1,
+      23,
+      7,
+      7,
+      23,
+      1,
+      11,
+      11,
+      1,
+      23,
+      7,
+      7,
+      23,
+      1,
+      11,
+      11,
+      1,
+      23,
+      23,
+      23,
+      23,
+      1,
+      11,
+      11,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11,
+      11
+    ]
+  ]
+}
+"""
+
+[[asset]]
+name = "typeface"
+kind = "font"
+path = "assets/typeface.m01f"
+payload = """
+{"revision":1,"kind":"font","glyphWidth":3,"glyphHeight":5,"baseline":4,"advanceX":4,"advanceY":6,"missingGlyph":63,"glyphs":[{"code":63,"pixels":[1,1,1,0,0,1,0,1,1,0,0,0,0,1,0]}]}
+"""
+
+[[test]]
+name = "tests/smoke.m01run.json"
+path = "tests/smoke.m01run.json"
+kind = "replay"
+payload = """
+{
+  "revision": 1,
+  "frames": 2,
+  "seed": 604772761,
+  "input": { "revision": 1, "frames": [] },
+  "expect": { "completedFrames": 2 }
+}
+"""
+
+[[test]]
+name = "tests/smoke.modl"
+path = "tests/smoke.modl"
+kind = "modl"
+payload = """
+on start:
+  assert 2 + 2 == 4, "pure assertion"
+"""

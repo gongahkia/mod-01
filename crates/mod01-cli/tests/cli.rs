@@ -13,6 +13,41 @@ fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_mod01"))
 }
 
+fn write_project_file(root: &Path, relative: &str, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let path = root.join("cart.m01w");
+    let source = fs::read_to_string(&path)?;
+    let mut project = modl_core::parse_workcart(&source).map_err(std::io::Error::other)?;
+    if relative.starts_with("tests/") {
+        project.tests.retain(|test| test.path != relative);
+        let payload = String::from_utf8(bytes.as_ref().to_vec()).map_err(std::io::Error::other)?;
+        project.tests.push(modl_core::WorkcartTest {
+            name: relative.to_owned(),
+            path: relative.to_owned(),
+            kind: if Path::new(relative)
+                .extension()
+                .is_some_and(|extension| extension == "modl")
+            {
+                modl_core::WorkcartTestKind::Modl
+            } else {
+                modl_core::WorkcartTestKind::Replay
+            },
+            payload,
+        });
+    } else {
+        project
+            .files
+            .insert(relative.to_owned(), bytes.as_ref().to_vec());
+    }
+    let source = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .map_err(std::io::Error::other)?;
+    fs::write(path, source)
+}
+
 #[test]
 fn check_accepts_the_positive_language_fixture() {
     let fixture = format!(
@@ -276,7 +311,7 @@ fn check_reports_packed_capacity_failures_for_workcarts() {
         std::process::id(),
         line!()
     ));
-    let padding = "0123456789abcdef".repeat(17_000);
+    let padding = "0123456789abcdef".repeat(70_000);
     fs::write(
         &cart,
         format!(
@@ -314,86 +349,94 @@ payload = '''{{"padding":"{padding}"}}'''
 }
 
 #[test]
-fn migrate_explicitly_rejects_tiled_files() {
-    let tiled = std::env::temp_dir().join(format!(
-        "mod01-tiled-{}-{}.tmx",
-        std::process::id(),
-        line!()
-    ));
-    fs::write(&tiled, "<map version=\"1.10\"/>").expect("Tiled fixture writes");
-    let output = binary()
-        .args(["migrate", tiled.to_str().expect("UTF-8 tiled path")])
-        .output()
-        .expect("CLI starts");
-    assert_eq!(output.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("migrate expects a V1 cartridge project directory")
+fn old_directory_authoring_and_migration_are_rejected() {
+    assert_eq!(
+        binary()
+            .args(["migrate", "anything"])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(2)
     );
-    fs::remove_file(tiled).expect("temporary Tiled fixture removes");
+    let root = std::env::temp_dir().join(format!("mod01-obsolete-project-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("cart.toml"), "format = 1").unwrap();
+    assert_eq!(
+        binary()
+            .args(["check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn migrate_turns_a_v1_project_and_its_tests_into_one_workcart() {
-    let project =
-        std::env::temp_dir().join(format!("mod01-migrate-{}-{}", std::process::id(), line!()));
-    let created = binary()
-        .args(["new", project.to_str().expect("UTF-8 project path")])
-        .output()
-        .expect("CLI starts");
-    assert!(created.status.success());
-    fs::create_dir(project.join("tests")).expect("test directory creates");
-    fs::write(
-        project.join("tests/smoke.modl"),
-        "on start:\n  assert 1 == 1, \"migrated test\"\n",
-    )
-    .expect("MODL test writes");
-    fs::write(
-        project.join("tests/boot.m01run.json"),
-        r#"{"revision":1,"frames":1,"expect":{"completedFrames":1}}"#,
-    )
-    .expect("replay test writes");
-    let workcart = project.with_extension("m01w");
-    let migrate = binary()
-        .args([
-            "migrate",
-            project.to_str().expect("UTF-8 project path"),
-            "--output",
-            workcart.to_str().expect("UTF-8 work-cart path"),
-        ])
-        .output()
-        .expect("CLI starts");
+fn new_creates_the_same_single_workcart_as_a_file_or_directory() {
+    let root = std::env::temp_dir().join(format!("mod01-new-workcart-{}", std::process::id()));
+    let file = root.with_extension("m01w");
     assert!(
-        migrate.status.success(),
-        "{}",
-        String::from_utf8_lossy(&migrate.stderr)
+        binary()
+            .args(["new", root.to_str().unwrap(), "--title", "WORKCART"])
+            .output()
+            .unwrap()
+            .status
+            .success()
     );
-    let source = fs::read_to_string(&workcart).expect("work-cart reads");
-    let parsed = modl_core::parse_workcart(&source).expect("work-cart parses");
-    assert_eq!(parsed.tests.len(), 2);
-    assert!(parsed.files.contains_key("src/main.modl"));
-    fs::remove_dir_all(&project).expect("V1 project removes");
-    let packed = workcart.with_extension("m01c");
-    for arguments in [
-        vec!["check".to_owned(), workcart.display().to_string()],
-        vec!["test".to_owned(), workcart.display().to_string()],
-        vec![
-            "pack".to_owned(),
-            workcart.display().to_string(),
-            "--output".to_owned(),
-            packed.display().to_string(),
-        ],
-    ] {
-        let output = binary().args(arguments).output().expect("CLI starts");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    for path in [workcart, packed] {
-        fs::remove_file(path).expect("temporary migration artifact removes");
-    }
+    assert!(
+        binary()
+            .args(["new", file.to_str().unwrap(), "--title", "WORKCART"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let directory_source = fs::read_to_string(root.join("cart.m01w")).unwrap();
+    assert_eq!(directory_source, fs::read_to_string(&file).unwrap());
+    assert!(!root.join("cart.toml").exists());
+    let source = binary()
+        .args(["info", file.to_str().unwrap(), "--source"])
+        .output()
+        .unwrap();
+    assert!(
+        source.status.success(),
+        "{}",
+        String::from_utf8_lossy(&source.stderr)
+    );
+    let view: Value = serde_json::from_slice(&source.stdout).unwrap();
+    assert!(view["files"]["src/main.modl"].is_array());
+    assert_eq!(view["manifest"]["hardware_revision"], 2);
+    write_project_file(&root, "src/main.modl", "on draw:\n clear(0)\n").unwrap();
+    assert_eq!(
+        binary()
+            .args(["fmt", "--check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(1)
+    );
+    assert!(
+        binary()
+            .args(["fmt", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert!(
+        binary()
+            .args(["fmt", "--check", root.to_str().unwrap()])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(file).unwrap();
 }
 
 #[test]
@@ -488,14 +531,13 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
         .output()
         .expect("CLI starts");
     assert!(create.status.success());
-    fs::create_dir(project.join("tests")).expect("test directory creates");
-    fs::write(
-        project.join("tests/pure.modl"),
+    write_project_file(&project, "tests/pure.modl",
         "fn twice(value: Int) -> Int:\n  return value * 2\non start:\n  assert twice(3) == 6, \"pure assertion\"\n",
     )
     .expect("pure test writes");
-    fs::write(
-        project.join("tests/name.fail.modl"),
+    write_project_file(
+        &project,
+        "tests/name.fail.modl",
         "// expect M013002\non start:\n  missing_name()\n",
     )
     .expect("compile-fail test writes");
@@ -530,8 +572,9 @@ fn project_test_command_runs_modl_compile_fail_and_scripted_snapshot_tests() {
             "finalStateSha256": baseline["summary"]["finalStateSha256"]
         }
     });
-    fs::write(
-        project.join("tests/boot.m01run.json"),
+    write_project_file(
+        &project,
+        "tests/boot.m01run.json",
         serde_json::to_vec_pretty(&snapshot).expect("snapshot serializes"),
     )
     .expect("scripted test writes");
@@ -582,7 +625,7 @@ fn watch_repacks_native_cartridges_without_a_server() {
     output.read_line(&mut line).unwrap();
     assert!(line.starts_with("packed "), "{line}");
     let before = fs::read(&packed).unwrap();
-    fs::write(project.join("src/main.modl"), "on draw:\n  clear(1)\n").unwrap();
+    write_project_file(&project, "src/main.modl", "on draw:\n  clear(1)\n").unwrap();
     let mut refreshed = false;
     for _ in 0..40 {
         thread::sleep(Duration::from_millis(50));
@@ -806,13 +849,15 @@ fn new_pack_and_info_form_a_deterministic_project_workflow() {
         "{}",
         String::from_utf8_lossy(&create.stderr)
     );
-    fs::write(
-        project.join("src/math.modl"),
+    write_project_file(
+        &project,
+        "src/math.modl",
         "fn twice(value: Int) -> Int:\n  return value * 2\n",
     )
     .expect("module writes");
-    fs::write(
-        project.join("src/main.modl"),
+    write_project_file(
+        &project,
+        "src/main.modl",
         "import src.math as math\nstate score: Int = 1\non update:\n  score = math.twice(score)\n",
     )
     .expect("entry writes");

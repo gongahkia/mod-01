@@ -16,7 +16,7 @@ type Command =
       javascript: string;
       manifest: {
         id: string;
-        hardwareRevision?: 1 | 2;
+        hardwareRevision?: 2;
         updateRate: 30 | 60;
         display: string | null;
         assets: Record<string, { kind: string; path: string }>;
@@ -47,9 +47,12 @@ let symbolNames: Readonly<Record<string, string>> = {};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 
 function bytes(encoded: string): Uint8Array {
-  if (typeof encoded !== 'string' || encoded.length > 4 * 1024 * 1024)
+  if (typeof encoded !== 'string' || encoded.length > 24 * 1024 * 1024)
     throw new TypeError('invalid native host byte payload');
-  return Uint8Array.from(Buffer.from(encoded, 'base64'));
+  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
+  if (decoded.length > 16 * 1024 * 1024)
+    throw new RangeError('native host byte payload exceeds 16 MiB');
+  return decoded;
 }
 
 function encoded(value: Uint8Array | Float32Array): string {
@@ -127,7 +130,7 @@ async function handle(command: Command): Promise<unknown> {
         seed: 0,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: command.manifest.updateRate,
-        hardwareRevision: command.manifest.hardwareRevision ?? 1,
+        hardwareRevision: command.manifest.hardwareRevision ?? 2,
         debug: command.debug === true,
         assets: { declarations: manifestAssets, files, displayPath: command.manifest.display },
         rom: bytes(command.rom),

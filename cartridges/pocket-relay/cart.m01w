@@ -1,0 +1,111 @@
+format = 2
+recipe = []
+test = []
+
+[cartridge]
+language = "MODL/1"
+id = "pocket-relay"
+title = "POCKET RELAY"
+author = "@gongahkia"
+version = "1.0.0"
+entry = "src/main.modl"
+update_rate = 60
+hardware_revision = 2
+compile_on_load = true
+label = "presentation/label.svg"
+
+[[module]]
+path = "src/main.modl"
+source = """
+// One-minute signal catching game
+// Made by @gongahkia
+
+state player_x: Int = 120
+state signal_x: Int = 40
+state signal_y: Int = 20
+state score: Int = 0
+state best: Int = 0
+state clock: Int = 1800
+state pulse: Int = 0
+
+fn new_signal() -> Int:
+  signal_x = rng_int(12, 228)
+  signal_y = 16
+  return signal_x
+
+on start:
+  best = save_get_int("best", 0)
+  new_signal()
+
+on update:
+  if btn(pad1, left):
+    player_x -= 2
+  if btn(pad1, right):
+    player_x += 2
+  if player_x < 10:
+    player_x = 10
+  if player_x > 230:
+    player_x = 230
+  signal_y += 1
+  pulse = (pulse + 1) % 24
+  if signal_y >= 124:
+    if signal_x >= player_x - 13 and signal_x <= player_x + 13:
+      score += 1
+      sfx(#catch)
+    else:
+      sfx(#miss)
+    new_signal()
+  clock -= 1
+  if clock <= 0:
+    if score > best:
+      best = score
+      save_set_int("best", best)
+    score = 0
+    clock = 1800
+
+on draw:
+  clear(2)
+  for row in 0..9:
+    line(0, row * 16 + pulse / 3, 239, row * 16 + pulse / 3, 3)
+  rect_fill(player_x - 12, 128, 25, 5, 25)
+  rect_fill(4, 4, score * 3, 2, 23)
+  triangle(signal_x, signal_y, signal_x - 5, signal_y - 8, signal_x + 5, signal_y - 8, 19)
+  print("POCKET RELAY", 80, 4, 7)
+  print("CATCH", 4, 134, 15)
+  print("BEST", 188, 134, 15)
+  font_print(#typeface, "0123456789", 80, 134, 23)
+
+on raster(line: Int):
+  if line == 96:
+    pal(3, 11)
+"""
+
+[[asset]]
+name = "catch"
+kind = "sound"
+path = "assets/catch.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"pulse","note":76,"durationFrames":7,"volume":0.55,"pan":0.2,"duty":0.25,"envelope":{"attackFrames":0,"decayFrames":1,"sustainLevel":0.7,"releaseFrames":3},"pitch":{"slideSemitonesPerFrame":0.5,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "miss"
+kind = "sound"
+path = "assets/miss.m01s"
+payload = """
+{"revision":1,"kind":"sound","waveform":"noise","note":38,"durationFrames":6,"volume":0.35,"pan":-0.2,"duty":0.5,"envelope":{"attackFrames":0,"decayFrames":1,"sustainLevel":0.5,"releaseFrames":2},"pitch":{"slideSemitonesPerFrame":-0.5,"vibratoDepthSemitones":0,"vibratoPeriodFrames":0}}
+"""
+
+[[asset]]
+name = "typeface"
+kind = "font"
+path = "assets/typeface.m01f"
+payload = """
+{"revision":1,"kind":"font","glyphWidth":3,"glyphHeight":5,"baseline":4,"advanceX":4,"advanceY":6,"missingGlyph":63,"glyphs":[{"code":48,"pixels":[1,1,1,1,0,1,1,0,1,1,0,1,1,1,1]},{"code":49,"pixels":[0,1,0,1,1,0,0,1,0,0,1,0,1,1,1]},{"code":50,"pixels":[1,1,1,0,0,1,1,1,1,1,0,0,1,1,1]},{"code":51,"pixels":[1,1,1,0,0,1,0,1,1,0,0,1,1,1,1]},{"code":52,"pixels":[1,0,1,1,0,1,1,1,1,0,0,1,0,0,1]},{"code":53,"pixels":[1,1,1,1,0,0,1,1,1,0,0,1,1,1,1]},{"code":54,"pixels":[1,1,1,1,0,0,1,1,1,1,0,1,1,1,1]},{"code":55,"pixels":[1,1,1,0,0,1,0,1,0,1,0,0,1,0,0]},{"code":56,"pixels":[1,1,1,1,0,1,1,1,1,1,0,1,1,1,1]},{"code":57,"pixels":[1,1,1,1,0,1,1,1,1,0,0,1,1,1,1]},{"code":63,"pixels":[1,1,1,0,0,1,0,1,0,0,0,0,0,1,0]}]}
+"""
+
+[[file]]
+path = "presentation/label.svg"
+payload = """
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="144"><rect width="240" height="144" fill="#292725"/><path d="M20 116H220" stroke="#e7bd50" stroke-width="12"/><path d="M120 18L100 60H140Z" fill="#79d8cf"/><text x="120" y="92" fill="#f4e9ce" text-anchor="middle" font-family="monospace" font-size="18">POCKET RELAY</text></svg>
+"""

@@ -35,6 +35,7 @@ var HARDWARE = Object.freeze({
   rasterPaletteSize: 32,
   transparentColor: 0,
   visualCapacityBytes: 1048576,
+  visualAllocations: 8192,
   saveCapacityBytes: 8192,
   cartridgeCapacityBytes: 1048576,
   drawCommandsPerFrame: 4096,
@@ -309,11 +310,10 @@ var MEMORY = Object.freeze({
   front: 65536,
   back: 102400,
   display: 139264,
-  visual: 196608,
-  visualExtended: 2162688,
+  visual: 2162688,
   draw: 327680,
   transparency: 327760,
-  palette: 327808,
+  palette: 2097152,
   input: 327936,
   inputBytes: 48,
   system: 328192,
@@ -324,9 +324,7 @@ var MEMORY = Object.freeze({
   cartridgeInfo: 329216,
   save: 360448,
   saveCommitted: 368640,
-  cartridgeRom: 393216,
-  cartridgeRomExtension: 1048576,
-  paletteExtended: 2097152,
+  cartridgeRom: 1048576,
   audio: 331776,
   audioTracker: 331808,
   audioVoices: 332032,
@@ -551,7 +549,6 @@ var MemoryBus = class {
 };
 //#endregion
 //#region src/visual-store.ts
-var LEGACY_VISUAL_BYTES = 131072;
 /** A single packed, little-endian visual image; all drawing views alias these bytes. */
 var VisualAssetStore = class {
   entries = /* @__PURE__ */ new Map();
@@ -561,7 +558,6 @@ var VisualAssetStore = class {
   descriptors;
   allocationTable;
   info = /* @__PURE__ */ new Uint8Array(24);
-  addressBase;
   display;
   usedBytes;
   constructor(assets = [], display) {
@@ -580,7 +576,6 @@ var VisualAssetStore = class {
     if (usedBytes > HARDWARE.visualCapacityBytes)
       throw new RangeError('visual assets exceed the 1 MiB shared capacity');
     this.usedBytes = usedBytes;
-    this.addressBase = usedBytes > LEGACY_VISUAL_BYTES ? MEMORY.visualExtended : MEMORY.visual;
     this.descriptors = new Uint8Array(sorted.length * MEMORY.assetStride);
     const descriptorView = new DataView(this.descriptors.buffer);
     for (const [id, asset] of sorted.entries()) {
@@ -608,7 +603,7 @@ var VisualAssetStore = class {
       const offset = index * MEMORY.allocationStride;
       [
         entry.kind,
-        this.addressBase + entry.offset,
+        MEMORY.visual + entry.offset,
         entry.bytes.length,
         entry.width,
         entry.height,
@@ -624,7 +619,7 @@ var VisualAssetStore = class {
       MEMORY.assets,
       this.allocations.length,
       MEMORY.allocations,
-      display === void 0 ? 0 : this.addressBase + usedBytes - 32 - display.raster.length * 38,
+      display === void 0 ? 0 : MEMORY.visual + usedBytes - 32 - display.raster.length * 38,
     ].forEach((value, field) => {
       info.setUint32(field * 4, value, true);
     });
@@ -661,21 +656,10 @@ var VisualAssetStore = class {
       {
         name: 'visual store',
         address: MEMORY.visual,
-        bytes: this.bytes.subarray(0, LEGACY_VISUAL_BYTES),
+        bytes: this.bytes,
         writable: true,
         validate: (offset, bytes) => this.validate(offset, bytes),
       },
-      ...(this.addressBase === MEMORY.visualExtended
-        ? [
-            {
-              name: 'visual store extended',
-              address: MEMORY.visualExtended,
-              bytes: this.bytes,
-              writable: true,
-              validate: (offset, bytes) => this.validate(offset, bytes),
-            },
-          ]
-        : []),
       {
         name: 'visual allocation status',
         address: MEMORY.visualInfo,
@@ -711,6 +695,8 @@ var VisualAssetStore = class {
     ];
   }
   allocate(kind, width, height, data, reference = 0, validate) {
+    if (this.allocations.length >= HARDWARE.visualAllocations)
+      throw new RangeError('visual allocation descriptors exceed 8192 slots');
     const previous = this.allocations.at(-1);
     const offset = previous === void 0 ? 0 : previous.offset + previous.bytes.length;
     const bytes = this.bytes.subarray(offset, offset + data.length);
@@ -3646,10 +3632,10 @@ function decodeRuntimeAssets(declarations, files, displayPath) {
 function decodeSprite(name, value, animation) {
   if (
     !isRecord$4(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'sprite' ||
-    !boundedInteger(value.width, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
-    !boundedInteger(value.height, 1, value.revision === 1 ? 64 : HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.width, 1, HARDWARE.spriteMaximumAxis) ||
+    !boundedInteger(value.height, 1, HARDWARE.spriteMaximumAxis) ||
     !Array.isArray(value.frames) ||
     value.frames.length === 0 ||
     value.frames.length > 256
@@ -3657,7 +3643,7 @@ function decodeSprite(name, value, animation) {
     throw new TypeError(`sprite asset '${name}' is invalid`);
   const pixelCount = value.width * value.height;
   const frames = value.frames.map((frame) => {
-    if (!isNumberArray(frame, pixelCount, 0, value.revision === 1 ? 31 : 255))
+    if (!isNumberArray(frame, pixelCount, 0, 255))
       throw new TypeError(`sprite asset '${name}' has invalid indexed pixels`);
     return {
       kind: 'sprite',
@@ -3683,7 +3669,7 @@ function decodeSprite(name, value, animation) {
 function decodeTileSet(name, value) {
   if (
     !isRecord$4(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'tile_set' ||
     !Array.isArray(value.tiles) ||
     value.tiles.length === 0 ||
@@ -3695,7 +3681,7 @@ function decodeTileSet(name, value) {
     kind: 'tile_set',
     name,
     tiles: value.tiles.map((pixels, index) => {
-      if (!isNumberArray(pixels, 64, 0, value.revision === 1 ? 31 : 255))
+      if (!isNumberArray(pixels, 64, 0, 255))
         throw new TypeError(`tile ${String(index)} in '${name}' has invalid indexed pixels`);
       return {
         kind: 'sprite',
@@ -3807,9 +3793,9 @@ function decodeDisplay(path, files) {
   const value = JSON.parse(new TextDecoder().decode(bytes));
   if (
     !isRecord$4(value) ||
-    (value.revision !== 1 && value.revision !== 2) ||
+    value.revision !== 2 ||
     value.kind !== 'display' ||
-    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255) ||
+    !isNumberArray(value.remap, HARDWARE.rasterPaletteSize, 0, 255) ||
     !Array.isArray(value.raster) ||
     value.raster.length > HARDWARE.height
   )
@@ -3822,7 +3808,7 @@ function decodeDisplay(path, files) {
       state.line <= previousLine ||
       !boundedInteger(state.scrollX, -32768, 32767) ||
       !boundedInteger(state.scrollY, -32768, 32767) ||
-      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, value.revision === 1 ? 31 : 255)
+      !isNumberArray(state.remap, HARDWARE.rasterPaletteSize, 0, 255)
     )
       throw new TypeError('display configuration has invalid raster state');
     previousLine = state.line;
@@ -4251,9 +4237,7 @@ function isConsoleConfiguration(value) {
     value.workUnitsPerFrame > 0 &&
     value.workUnitsPerFrame <= HARDWARE.workUnitsPerFrame &&
     (value.updateRate === 30 || value.updateRate === 60) &&
-    (value.hardwareRevision === void 0 ||
-      value.hardwareRevision === 1 ||
-      value.hardwareRevision === 2) &&
+    (value.hardwareRevision === void 0 || value.hardwareRevision === 2) &&
     (value.maps === void 0 || isMapQueryCatalog(value.maps)) &&
     (value.save === void 0 || isSaveImage(value.save)) &&
     (value.debug === void 0 || typeof value.debug === 'boolean') &&
@@ -4315,7 +4299,7 @@ function createConsoleRuntime(factory, configuration) {
   const mapQueries = new MapQueryStore(source === void 0 ? (configuration.maps ?? []) : []);
   const saveMemory = new SaveMemory(configuration.save ?? {});
   const cartridgeRom = configuration.rom?.slice() ?? /* @__PURE__ */ new Uint8Array();
-  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 1);
+  const cartridgeInfo = createCartridgeInfo(cartridgeRom, configuration.hardwareRevision ?? 2);
   const debugEnabled = configuration.debug ?? false;
   let debugTrace = [];
   const debugCallStack = [];
@@ -4347,19 +4331,9 @@ function createConsoleRuntime(factory, configuration) {
             {
               name: 'canonical cartridge ROM',
               address: MEMORY.cartridgeRom,
-              bytes: cartridgeRom.subarray(0, 262144),
+              bytes: cartridgeRom,
               writable: false,
             },
-            ...(cartridgeRom.length > 262144
-              ? [
-                  {
-                    name: 'canonical cartridge ROM extension',
-                    address: MEMORY.cartridgeRomExtension,
-                    bytes: cartridgeRom.subarray(262144),
-                    writable: false,
-                  },
-                ]
-              : []),
           ]),
       {
         name: 'controllers and pointer',
@@ -4378,13 +4352,7 @@ function createConsoleRuntime(factory, configuration) {
       {
         name: 'master palette RGBA',
         address: MEMORY.palette,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(0, 128)),
-        writable: false,
-      },
-      {
-        name: 'extended master palette RGBA',
-        address: MEMORY.paletteExtended,
-        bytes: Uint8Array.from(MASTER_PALETTE_RGBA.slice(128)),
+        bytes: Uint8Array.from(MASTER_PALETTE_RGBA),
         writable: false,
       },
     ],
@@ -4786,11 +4754,11 @@ function createCartridgeInfo(rom, hardwareRevision) {
   const validHeader =
     rom.length >= 12 &&
     [77, 79, 68, 45, 48, 49, 26].every((byte, index) => rom[index] === byte) &&
-    rom[7] === 1;
+    rom[7] === 2;
   view.setUint16(0, hardwareRevision, true);
   view.setUint16(2, validHeader ? (rom[7] ?? 0) : 0, true);
   view.setUint32(4, rom.length, true);
-  view.setUint32(8, hardwareRevision === 1 ? 262144 : HARDWARE.cartridgeCapacityBytes, true);
+  view.setUint32(8, HARDWARE.cartridgeCapacityBytes, true);
   view.setUint32(12, MEMORY.cartridgeRom, true);
   view.setUint32(16, Number(rom.length > 0) | (Number(validHeader) << 1), true);
   view.setUint32(
@@ -5210,9 +5178,11 @@ var input = createInterface({
   crlfDelay: Infinity,
 });
 function bytes(encoded) {
-  if (typeof encoded !== 'string' || encoded.length > 4194304)
+  if (typeof encoded !== 'string' || encoded.length > 25165824)
     throw new TypeError('invalid native host byte payload');
-  return Uint8Array.from(Buffer.from(encoded, 'base64'));
+  const decoded = Uint8Array.from(Buffer.from(encoded, 'base64'));
+  if (decoded.length > 16777216) throw new RangeError('native host byte payload exceeds 16 MiB');
+  return decoded;
 }
 function encoded(value) {
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64');
@@ -5279,7 +5249,7 @@ async function handle(command) {
         seed: 0,
         workUnitsPerFrame: HARDWARE.workUnitsPerFrame,
         updateRate: command.manifest.updateRate,
-        hardwareRevision: command.manifest.hardwareRevision ?? 1,
+        hardwareRevision: command.manifest.hardwareRevision ?? 2,
         debug: command.debug === true,
         assets: {
           declarations: manifestAssets,

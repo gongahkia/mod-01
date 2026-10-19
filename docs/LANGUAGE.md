@@ -1,18 +1,16 @@
 # MODL/1 language contract
 
-MODL/1 is frozen as the ASCII-only, statically typed, indentation-sensitive cartridge language of
-MOD-01 Hardware Revision 1. The complete normative syntax, types, name-resolution, initialization,
-task, work-accounting, formatting, and diagnostic behavior is maintained in the
-[MODL/1 reference](MODL.md). This stable entry point exists so cartridge and tool documentation can
-refer to the language contract without depending on an older filename.
+MODL/1 is MOD-01's ASCII-only, statically typed, indentation-sensitive cartridge
+language. The complete syntax, types, resolution, initialization, tasks, work
+accounting and diagnostics are maintained in [MODL.md](MODL.md), with bounded
+math/text/bit helpers in [STANDARD_LIBRARY.md](STANDARD_LIBRARY.md).
 
-V1 adds project semantics without changing existing single-file meaning: declarations are public by
-default, `pub` is explicit, `private` hides an imported member, and `import src.math as math` exposes
-public values as qualified names such as `math.twice`. Modules own separate top-level namespaces;
-dependencies initialize deterministically before importers; import cycles and dependency callbacks
-are rejected. No classes, inheritance, reflection, macros, packages, host JavaScript, or dynamic
-module loading are part of MODL/1.
+Each module has a top-level namespace. Declarations are public by default;
+`private` hides imported members. Dotted imports expose qualified members,
+initialize dependencies before importers, and reject cycles and dependency
+callbacks. No classes, inheritance, reflection, macros, ambient host JavaScript
+or arbitrary dynamic module loading are available.
 
-Compiler behavior and the checked syntax/type/project fixtures are authoritative if prose and code
-ever diverge. `mod01 fmt`, native compilation, the Wasm compiler used by Studio, compiler explorer,
-and `mod01 lsp` all consume the same lexer/parser/type/link pipeline.
+Studio, CLI, formatter, compiler explorer and LSP use the same Rust lexer,
+parser, type analysis and linker. Executable conformance fixtures are the
+authority when implementation and prose diverge.

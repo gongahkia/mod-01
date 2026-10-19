@@ -26,16 +26,12 @@ fn serialize_pixels<S: Serializer>(pixels: &[u8], serializer: S) -> Result<S::Ok
 }
 
 fn deserialize_pixels<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum EncodedPixels {
-        Base64(String),
-        Legacy(Vec<u8>),
+    let value = String::deserialize(deserializer)?;
+    let bytes = STANDARD.decode(&value).map_err(D::Error::custom)?;
+    if STANDARD.encode(&bytes) != value {
+        return Err(D::Error::custom("pixels must use canonical base64"));
     }
-    match EncodedPixels::deserialize(deserializer)? {
-        EncodedPixels::Base64(value) => STANDARD.decode(value).map_err(D::Error::custom),
-        EncodedPixels::Legacy(value) => Ok(value),
-    }
+    Ok(bytes)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -614,15 +610,14 @@ mod tests {
     }
 
     #[test]
-    fn layered_source_uses_compact_pixels_and_reads_legacy_arrays() {
+    fn layered_source_requires_compact_canonical_pixels() {
         let document = SpriteDocument::new(64, 64);
         let compact = serde_json::to_vec(&document).unwrap();
         assert!(compact.len() < 23_000);
         let restored: SpriteDocument = serde_json::from_slice(&compact).unwrap();
         assert_eq!(restored.frames[0].layers[0].pixels.len(), 64 * 64 * 4);
         let old = r#"{"revision":1,"width":1,"height":1,"frames":[{"layers":[{"name":"Base","visible":true,"locked":false,"pixels":[1,2,3,255]}]}]}"#;
-        let restored: SpriteDocument = serde_json::from_str(old).unwrap();
-        assert_eq!(restored.frames[0].layers[0].pixels, [1, 2, 3, 255]);
+        assert!(serde_json::from_str::<SpriteDocument>(old).is_err());
     }
 
     #[test]

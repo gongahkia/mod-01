@@ -3,11 +3,11 @@
   "cartridges": {
     "cinder-circuit": {
       "frames": 120,
-      "cartridgeSha256": "ba6b1ab16a5f841e1d5e732e40dd00c1f9b19251ec876df35308064f2236797e",
+      "cartridgeSha256": "d1734f7a92af5ab50b89fde1af5ac7b77af789769c701dece1f45fa870c7bca2",
       "inputTraceSha256": "4800bc0d0be78e939128a1290c0a18a6c2919b90a6849bd73f2dae7e42240951",
       "workPeak": 3498,
       "framebufferSha256": "7d94f65ddec856bcc0cfd364db57c3130369678e9dc712fa28ffb9ca23d98254",
-      "stateSha256": "ca48d4904f0808a50f0b6f2054d449ebd0369f9a0117a5da6df98281e9a03c0a",
+      "stateSha256": "6da15949890e05cf6be669d179bc2b6d18a825efdbdc46fdf67a5992ecc76264",
       "audioCommandsSha256": "6c3241a1525fa2f3661d15e7361b91ef9ee73845a78d0b7506443bf087f82605",
       "pcmSha256": "c3c2895d1e5c954a5b7c6468af5222d797ceccaba39f19a19f8accb57d4518a4",
       "checkpoints": [
@@ -27,11 +27,11 @@
     },
     "ashvault": {
       "frames": 30,
-      "cartridgeSha256": "b55a19625ba7e3a8dbd73c405340851901a9ba3670c6c5d6d90c8bbd50b2c4e4",
+      "cartridgeSha256": "027a8b55804c9a2468168d6f8abf2afd9606015e6f8b5983ef9773b7c170c3a7",
       "inputTraceSha256": "58e1ae69d7f24fd5c6adaa0d183bd2e2c1f4b2325be63bc84f765fa42176a0fa",
       "workPeak": 19140,
       "framebufferSha256": "7a954d160b1ad0b56b8aa2eef053fd8cee17cec8971c7ca807927286f652c48a",
-      "stateSha256": "b43e819ed144e3d0aae28b5aab7f231e9cd01149ec52fd0d6d4ab0e82de51368",
+      "stateSha256": "d8fad2bb9fef0ad3f8eadc95d34460a114a00d37c76f2c36a83e16d1d4a00ec6",
       "audioCommandsSha256": "3526f2484468e0a94dc650ce1afb8ee9e22212d89f2cfd74e49b19dd5fef5bea",
       "pcmSha256": "82bc2372ff6abe491b20e0ff0cbee6a984901fd43e0192a85c7df752989bef93",
       "checkpoints": [
@@ -51,11 +51,11 @@
     },
     "raster-rush": {
       "frames": 120,
-      "cartridgeSha256": "bbc1663dae0dc2e7b888250928a4c599531b24056e8d33117ed04c36987bdf9a",
+      "cartridgeSha256": "f5a1f119ba5a241c722d7d486d08c660018a321f63ae9abb0117bf6c0624a6c9",
       "inputTraceSha256": "3cbe0ae9b95bae0658fac4b2158d6fb19c1c2c604677185a4f974597007c8541",
       "workPeak": 28140,
       "framebufferSha256": "d133c8d0e21bf432056bd30c20c9e6de07dd56a82ace21a978f874be60aad866",
-      "stateSha256": "4993aee7b2d33cf6ffb8578b190285598d464b2acd5a906d2f6c97820d3519f4",
+      "stateSha256": "bf3147dc41c5b0a77420e114b27ebd7bb3b37cb08e072597e30423b233c7d993",
       "audioCommandsSha256": "11af7f6c80f8d3e4e6a2fe1c5c84e41f8f80d83a64a90be2d0bd4cd4d6fe6e92",
       "pcmSha256": "ca00a064891fc43b5977d2c950c668018cddb41f227922ed5932de05aa3906f0",
       "checkpoints": [

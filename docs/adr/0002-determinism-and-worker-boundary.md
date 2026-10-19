@@ -1,27 +1,17 @@
-# ADR 0002: Determinism and worker boundary
+# ADR 0002: Determinism and native process boundary
 
-- Status: accepted
-- Date: 2026-09-07
+Status: accepted, current native architecture.
 
-## Decision
+Generated MODL executes in a disposable Node child process. Rust recompiles
+cartridge source and verifies its compiled identity instead of trusting imported
+JavaScript. The host accepts bounded input/assets/ROM/save data; time, RNG,
+scheduling, work and replay are console-owned state.
 
-Generated cartridge JavaScript executes in a dedicated disposable module worker. The worker receives
-only validated input frames and console API messages. Cartridge time, RNG, task scheduling, work
-accounting, save access, and replay events are console-owned deterministic state. Network, DOM,
-dynamic code construction, arbitrary imports, and ambient time are unavailable to MODL programs.
+The compiler inserts deterministic work checks at function entries, loop edges,
+task transitions, allocations and console operations. The bridge imposes response
+limits/deadlines and terminates a stalled child. Node permissions add defence in
+depth but are not an OS sandbox for arbitrary malicious JavaScript.
 
-Compile deterministic work checks at function entries, loop back-edges, task transitions, bounded
-capacity operations, and expensive console calls. Treat browser worker termination as the final
-host-side guard for code that cannot return to an inserted check.
-
-## Reasoning
-
-Language-level capability denial is stronger and easier to audit than attempting to make arbitrary
-JavaScript safe. A disposable worker keeps runaway or corrupted cartridges from blocking the studio.
-Explicit deterministic state is also the basis for replay, rewind, and debug/release equivalence.
-
-## Consequences
-
-The sandbox is a practical capability boundary, not a claim of origin isolation. Worker protocol
-validation and CSP remain required. Runtime snapshots must serialize all observable console state.
-Security documentation must state the browser-process limits honestly.
+Every observable device state is included in validated current-schema snapshots.
+Unsupported schemas are rejected rather than migrated. See [SECURITY.md](../SECURITY.md)
+for the precise trust boundary.

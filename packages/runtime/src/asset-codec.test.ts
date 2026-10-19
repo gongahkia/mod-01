@@ -58,7 +58,7 @@ describe('source-visible asset codec', () => {
     }
   });
 
-  it('bounds Worker asset banks and rejects noncanonical paths and structural payloads', () => {
+  it('bounds console asset banks and rejects noncanonical paths and structural payloads', () => {
     const source = {
       declarations: { hero: { kind: 'sprite', path: 'hero.m01g' } },
       files: { 'hero.m01g': new Uint8Array(4) },
@@ -155,14 +155,14 @@ describe('source-visible asset codec', () => {
   it('loads indexed graphics, map query views, synth patches, and tracker patterns', () => {
     const files = {
       'hero.m01g': encodeAssetFile({
-        revision: 1,
+        revision: 2,
         kind: 'sprite',
         width: 2,
         height: 2,
         frames: [[0, 7, 7, 0]],
       }),
       'tiles.m01g': encodeAssetFile({
-        revision: 1,
+        revision: 2,
         kind: 'tile_set',
         tiles: [Array.from({ length: 64 }, () => 3)],
         flags: [1],
@@ -186,7 +186,7 @@ describe('source-visible asset codec', () => {
         loop: true,
       }),
       'display.m01p': encodeAssetFile({
-        revision: 1,
+        revision: 2,
         kind: 'display',
         remap: Array.from({ length: 32 }, (_, index) => (index === 1 ? 7 : index)),
         raster: [
@@ -229,11 +229,11 @@ describe('source-visible asset codec', () => {
         { hero: { kind: 'sprite', path: 'hero.m01g' } },
         {
           'hero.m01g': encodeAssetFile({
-            revision: 1,
+            revision: 2,
             kind: 'sprite',
             width: 1,
             height: 1,
-            frames: [[32]],
+            frames: [[256]],
           }),
         },
       ),

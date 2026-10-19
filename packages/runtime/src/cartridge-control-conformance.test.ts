@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { deepStrictEqual } from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -85,7 +86,7 @@ describe('actual typed MODL cartridge requests in the production console', () =>
       expect(isConsoleRuntimeSnapshot({ ...completed, revision: 6 })).toBe(false);
       runtime.restore(initial);
       expect(control.pendingRequest()).toBeNull();
-      expect(runtime.runFrame(input)).toEqual(frame);
+      deepStrictEqual(runtime.runFrame(input), frame);
       const before = runtime.snapshot();
       const mismatch = {
         ...before,
@@ -94,7 +95,7 @@ describe('actual typed MODL cartridge requests in the production console', () =>
       expect(() => {
         runtime.restore(mismatch);
       }).toThrow(/snapshot/);
-      expect(runtime.snapshot()).toEqual(before);
+      deepStrictEqual(runtime.snapshot(), before);
       const invalid = structuredClone(initial);
       const ram = invalid.memory.regions[0];
       if (ram === undefined) throw new Error('fixture RAM missing');
@@ -102,7 +103,7 @@ describe('actual typed MODL cartridge requests in the production console', () =>
       expect(() => {
         runtime.restore(invalid);
       }).toThrow(/snapshot/);
-      expect(runtime.snapshot()).toEqual(before);
+      deepStrictEqual(runtime.snapshot(), before);
     });
   }
 
@@ -135,13 +136,13 @@ describe('actual typed MODL cartridge requests in the production console', () =>
     });
     expect(deferred.snapshot().machine.execution.booted).toBe(false);
     expect(deferred.inspectMenu()).toEqual([]);
-    expect(deferred.runFrame(emptyInputFrame())).toEqual(expected);
+    deepStrictEqual(deferred.runFrame(emptyInputFrame()), expected);
     const restored = createConsoleRuntime(generated.default, configuration, {
       cartridge: new CartridgeControl(environment),
       deferBoot: true,
     });
     restored.restore(saved);
-    expect(restored.snapshot()).toEqual(saved);
+    deepStrictEqual(restored.snapshot(), saved);
     expect(restored.runFrame(emptyInputFrame()).output.indexedPixels[0]).toBe(2);
     const withoutEnvironment = createConsoleRuntime(generated.default, configuration, {
       deferBoot: true,

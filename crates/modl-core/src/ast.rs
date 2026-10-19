@@ -92,6 +92,7 @@ pub enum CallbackKind {
     Update,
     Draw,
     Raster,
+    Menu,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -127,6 +127,16 @@ are restricted to raster-table addresses. Palette/scroll state is captured for t
 remains in effect until changed by a later scanline. Scroll wraps the already drawn indexed back
 buffer; palette changes happen during display resolution and do not alter framebuffer indices.
 
+## Cartridge pause actions
+
+`menu_item(slot: Int, label: Text)` registers one of five ordered actions; an
+empty label removes it. Labels use up to 24 printable ASCII characters. The
+typed `on menu(action: Int):` callback receives a selected slot on the next
+display frame, before update/draw, including skipped-update frames at 30 Hz.
+Registrations and action inputs participate in snapshots and replay. No machine
+time advances merely because the host menu is open. See [MENU.md](MENU.md) for
+validation, work, source stepping and precise selection semantics.
+
 ## Byte memory access
 
 `mem_read(address)` and `mem_read16(address)` read unsigned bytes / little-endian 16-bit words.

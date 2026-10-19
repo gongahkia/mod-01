@@ -250,22 +250,22 @@ These read-only MMIO fields at `50200` encode actual machine state at the instan
 is no periodically synchronized register image. Multi-byte fields are little-endian. Unsigned 64-bit
 fields represent exact integers through `2^53-1`; their unused upper bits are zero.
 
-| Offset     | Encoding      | Meaning                                                                                 |
-| :--------- | :------------ | :-------------------------------------------------------------------------------------- |
-| `00`       | u64           | Display frames completed; also the current callback's frame index. Reset zero.          |
-| `08`       | u64           | Successful update callbacks completed. Reset zero.                                      |
-| `10`       | IEEE binary64 | Cartridge seconds, exactly the machine's `frame / 60` calculation; no host clock.       |
-| `18`       | u32           | Current normalized RNG state; high-level RNG calls advance this same owner.             |
-| `1c`       | u8            | Configured update cadence, 30 or 60.                                                    |
-| `1d`       | u8            | Phase: 0 idle, 1 start, 2 update, 3 draw, 4 raster, 5 output (scanout and mixing).      |
-| `1e`       | u16           | Active raster line, 0–143; `65535` outside raster.                                      |
-| `20`       | u64           | Current boot/frame work usage, including the charge for this read or copy.              |
-| `28`       | u64           | Actual work limit, 50,000 in production; internal diagnostic hosts may lower it.        |
-| `30`       | u8            | Status bits: 0 boot completed, 1 callback active, 2 terminal fault.                     |
-| `31`–`33`  | zero          | Reserved.                                                                               |
-| `34`       | u16           | Numeric `M019xxx` fault code; zero when healthy, 9199 for an unexpected host exception. |
-| `36`–`37`  | zero          | Reserved.                                                                               |
-| `38`, `3c` | u32           | Fault source span start/end; zero when absent or unavailable.                           |
+| Offset     | Encoding      | Meaning                                                                                    |
+| :--------- | :------------ | :----------------------------------------------------------------------------------------- |
+| `00`       | u64           | Display frames completed; also the current callback's frame index. Reset zero.             |
+| `08`       | u64           | Successful update callbacks completed. Reset zero.                                         |
+| `10`       | IEEE binary64 | Cartridge seconds, exactly the machine's `frame / 60` calculation; no host clock.          |
+| `18`       | u32           | Current normalized RNG state; high-level RNG calls advance this same owner.                |
+| `1c`       | u8            | Configured update cadence, 30 or 60.                                                       |
+| `1d`       | u8            | Phase: 0 idle, 1 start, 2 update, 3 draw, 4 raster, 5 output (scanout and mixing), 6 menu. |
+| `1e`       | u16           | Active raster line, 0–143; `65535` outside raster.                                         |
+| `20`       | u64           | Current boot/frame work usage, including the charge for this read or copy.                 |
+| `28`       | u64           | Actual work limit, 50,000 in production; internal diagnostic hosts may lower it.           |
+| `30`       | u8            | Status bits: 0 boot completed, 1 callback active, 2 terminal fault.                        |
+| `31`–`33`  | zero          | Reserved.                                                                                  |
+| `34`       | u16           | Numeric `M019xxx` fault code; zero when healthy, 9199 for an unexpected host exception.    |
+| `36`–`37`  | zero          | Reserved.                                                                                  |
+| `38`, `3c` | u32           | Fault source span start/end; zero when absent or unavailable.                              |
 
 Updates run on every frame at 60 Hz and even-indexed frames at 30 Hz. The update counter advances
 only after its callback returns successfully; draw/raster see that completed count. The frame

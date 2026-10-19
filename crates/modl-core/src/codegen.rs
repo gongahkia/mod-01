@@ -808,6 +808,7 @@ impl<'input> Generator<'input> {
         let has_update = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Update));
         let has_draw = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Draw));
         let has_raster = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Raster));
+        let has_menu = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Menu));
         if self.mode == CompileMode::Debug {
             self.generate_debug_instance();
             return;
@@ -829,6 +830,9 @@ impl<'input> Generator<'input> {
             ),
             None,
         );
+        if has_menu {
+            self.writer.line("menu:action=>{cb_menu(action);},", None);
+        }
         self.writer.line(
             format!("draw:()=>{{{}}},", if has_draw { "cb_draw();" } else { "" }),
             None,
@@ -863,6 +867,7 @@ impl<'input> Generator<'input> {
         let has_update = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Update));
         let has_draw = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Draw));
         let has_raster = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Raster));
+        let has_menu = self.has_callback(RoutineKind::Callback(crate::ast::CallbackKind::Menu));
         self.writer
             .line("const debugExecutions=Object.create(null);", None);
         self.writer.line(
@@ -904,6 +909,10 @@ impl<'input> Generator<'input> {
         self.writer.line("}", None);
         self.writer.line("return Object.freeze({", None);
         self.writer.indent += 1;
+        if has_menu {
+            self.writer
+                .line("menu:action=>advance('menu',cb_menu,[action]),", None);
+        }
         self.writer
             .line("start:()=>advance('start',debug_start),", None);
         self.writer
@@ -1925,6 +1934,7 @@ fn callback_name(kind: RoutineKind) -> &'static str {
         RoutineKind::Callback(crate::ast::CallbackKind::Update) => "cb_update",
         RoutineKind::Callback(crate::ast::CallbackKind::Draw) => "cb_draw",
         RoutineKind::Callback(crate::ast::CallbackKind::Raster) => "cb_raster",
+        RoutineKind::Callback(crate::ast::CallbackKind::Menu) => "cb_menu",
         RoutineKind::Function | RoutineKind::Task => unreachable!("not a callback"),
     }
 }

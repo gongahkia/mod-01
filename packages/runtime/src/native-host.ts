@@ -197,7 +197,7 @@ async function handle(command: Command): Promise<unknown> {
       cartridgeId = command.manifest.id;
       symbolNames = command.symbolNames ?? {};
       scratchFresh = command.debug === true;
-      return { type: 'loaded', cartridgeId };
+      return { type: 'loaded', cartridgeId, menuItems: runtime.inspectMenu() };
     }
     case 'frame': {
       if (runtime === undefined) throw new Error('no cartridge is loaded');
@@ -212,6 +212,7 @@ async function handle(command: Command): Promise<unknown> {
         right: encoded(result.output.audio.right),
         saveCommit: result.saveCommit === undefined ? null : encoded(result.saveCommit),
         debug: result.debug ?? null,
+        menuItems: runtime.inspectMenu(),
       };
     }
     case 'scratch': {
@@ -267,13 +268,15 @@ async function handle(command: Command): Promise<unknown> {
             right: encoded(result.frame.output.audio.right),
             saveCommit:
               result.frame.saveCommit === undefined ? null : encoded(result.frame.saveCommit),
+            menuItems: runtime.inspectMenu(),
           },
         };
       }
-      if ('booted' in result) return { type: 'step', ...result };
+      if ('booted' in result) return { type: 'step', ...result, menuItems: runtime.inspectMenu() };
       return {
         type: 'step',
         ...result,
+        menuItems: runtime.inspectMenu(),
         watches: evaluateExpressions(command.watches, result.inspection.state, result.event.locals),
         conditions: evaluateExpressions(
           command.conditions,
@@ -304,6 +307,7 @@ async function handle(command: Command): Promise<unknown> {
           type: 'restored',
           frame: snapshot.machine.frame,
           booted: snapshot.machine.execution.booted,
+          menuItems: runtime.inspectMenu(),
         };
       }
     case 'memory': {

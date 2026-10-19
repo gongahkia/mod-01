@@ -3181,6 +3181,61 @@ var WorkBudget = class {
   }
 };
 //#endregion
+//#region src/menu.ts
+function isMenuAction(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 5;
+}
+function isMenuLabel(value) {
+  return typeof value === 'string' && value.length <= 24 && !/[^\x20-\x7e]/.test(value);
+}
+function isMenuSnapshot(value) {
+  return (
+    Array.isArray(value) &&
+    value.length === 5 &&
+    Object.keys(value).length === 5 &&
+    Array.from(value).every((label) => label === null || (isMenuLabel(label) && label.length > 0))
+  );
+}
+/** Cartridge-owned, bounded registrations. The host menu never executes a cartridge callback. */
+var CartridgeMenu = class {
+  labels = [null, null, null, null, null];
+  set(slot, label, span, charge) {
+    if (!isMenuAction(slot) || !isMenuLabel(label))
+      throw new RuntimeFault(
+        'M019016',
+        'menu_item needs slot 1–5 and 0–24 printable ASCII characters',
+        span,
+      );
+    charge(1 + label.length, span);
+    this.labels[slot - 1] = label.length === 0 ? null : label;
+  }
+  requireAction(slot) {
+    if (!isMenuAction(slot) || this.labels[slot - 1] === null)
+      throw new RuntimeFault('M019016', 'selected menu action is not registered', {
+        start: 0,
+        end: 0,
+      });
+  }
+  items() {
+    return this.labels.flatMap((label, index) =>
+      label === null
+        ? []
+        : [
+            {
+              slot: index + 1,
+              label,
+            },
+          ],
+    );
+  }
+  snapshot() {
+    return [...this.labels];
+  }
+  restore(labels) {
+    this.labels = [...labels];
+  }
+};
+//#endregion
 //#region src/input.ts
 var BUTTONS = ['up', 'down', 'left', 'right', 'a', 'b', 'x', 'y', 'l', 'r', 'start', 'menu'];
 function emptyInputFrame() {
@@ -3242,7 +3297,10 @@ function isButton(value) {
 function isInputFrame(value) {
   if (
     !isRecord$7(value) ||
-    !hasExactKeys$3(value, ['controllers', 'pointer']) ||
+    !Object.hasOwn(value, 'controllers') ||
+    !Object.hasOwn(value, 'pointer') ||
+    !Object.keys(value).every((key) => ['controllers', 'pointer', 'menuAction'].includes(key)) ||
+    (Object.hasOwn(value, 'menuAction') && !isMenuAction(value.menuAction)) ||
     !Array.isArray(value.controllers) ||
     value.controllers.length !== 4
   )
@@ -3742,7 +3800,7 @@ function bitCall(name, args, span) {
 }
 //#endregion
 //#region src/system.ts
-var EXECUTION_PHASES = ['idle', 'start', 'update', 'draw', 'raster', 'output'];
+var EXECUTION_PHASES = ['idle', 'start', 'update', 'draw', 'raster', 'output', 'menu'];
 function isExecutionSnapshot(value, frame, rate, budget) {
   if (
     !isRecord$6(value) ||
@@ -3842,6 +3900,7 @@ var DeterministicMachine = class {
   cartridge;
   hooks;
   debugEnabled;
+  menu = new CartridgeMenu();
   currentFrame = 0;
   booted = false;
   input = emptyInputFrame();
@@ -3899,6 +3958,12 @@ var DeterministicMachine = class {
     this.input = structuredClone(input);
     this.budget.beginFrame();
     try {
+      const action = this.input.menuAction;
+      if (action !== void 0) {
+        this.phase = 'menu';
+        this.menu.requireAction(action);
+        this.completeDebugCallback(() => this.cartridge.menu?.(action));
+      }
       if (this.updateRate === 60 || this.currentFrame % 2 === 0) {
         this.phase = 'update';
         this.completeDebugCallback(() => this.cartridge.update());
@@ -3967,12 +4032,20 @@ var DeterministicMachine = class {
     const input = this.debugInput ?? emptyInputFrame();
     this.previousInput = this.input;
     this.input = structuredClone(input);
-    this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
+    if (this.input.menuAction !== void 0) {
+      this.phase = 'menu';
+      this.menu.requireAction(this.input.menuAction);
+    } else this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
   }
   stepDebugPhase() {
     switch (this.phase) {
       case 'start':
         return this.cartridge.start() ?? { done: true };
+      case 'menu': {
+        const action = this.input.menuAction;
+        if (action === void 0) throw new TypeError('menu phase requires a selected action');
+        return this.cartridge.menu?.(action) ?? { done: true };
+      }
       case 'update':
         return this.cartridge.update() ?? { done: true };
       case 'draw':
@@ -3991,6 +4064,9 @@ var DeterministicMachine = class {
         this.phase = 'idle';
         this.debugInput = void 0;
         return 'booted';
+      case 'menu':
+        this.phase = this.updateRate === 60 || this.currentFrame % 2 === 0 ? 'update' : 'draw';
+        return;
       case 'update':
         this.completedUpdates += 1;
         this.phase = 'draw';
@@ -4034,12 +4110,13 @@ var DeterministicMachine = class {
     if (this.phase !== 'idle' && this.lastFault === null)
       throw new TypeError('machine snapshots require a completed frame or fault boundary');
     return structuredClone({
-      revision: 2,
+      revision: 3,
       frame: this.currentFrame,
       rngState: this.rng.state,
       cartridge: this.cartridge.snapshot(),
       input: this.input,
       previousInput: this.previousInput,
+      menu: this.menu.snapshot(),
       updateRate: this.updateRate,
       budget: this.budget.snapshot(),
       execution: {
@@ -4073,10 +4150,14 @@ var DeterministicMachine = class {
     this.rng.restore(snapshot.rngState);
     this.input = structuredClone(snapshot.input);
     this.previousInput = structuredClone(snapshot.previousInput);
+    this.menu.restore(snapshot.menu);
     this.debugInput = void 0;
   }
   inspect() {
     return this.cartridge.inspect();
+  }
+  inspectMenu() {
+    return this.menu.items();
   }
   readInputByte(offset) {
     return inputRegisterByte(this.input, this.previousInput, offset);
@@ -4139,6 +4220,18 @@ var DeterministicMachine = class {
         this.work(units, span);
       });
     switch (name) {
+      case 'menu_item':
+        expectArguments(name, arguments_, 2, sourceSpan);
+        if (this.phase === 'raster')
+          return this.fault(
+            'M019016',
+            'menu registrations are not allowed during raster',
+            sourceSpan,
+          );
+        this.menu.set(arguments_[0], arguments_[1], sourceSpan, (units, span) => {
+          this.work(units, span);
+        });
+        return;
       case 'rng_num':
         expectArguments(name, arguments_, 0, sourceSpan);
         return this.rng.nextNum();
@@ -4269,8 +4362,9 @@ function isMachineSnapshot(value) {
   ))
     return false;
   return (
-    candidate.revision === 2 &&
-    Object.keys(candidate).length === 9 &&
+    candidate.revision === 3 &&
+    Object.keys(candidate).length === 10 &&
+    isMenuSnapshot(candidate.menu) &&
     typeof candidate.rngState === 'number' &&
     candidate.rngState > 0 &&
     candidate.rngState <= 4294967295 &&
@@ -5040,6 +5134,9 @@ function createConsoleRuntime(factory, configuration) {
     memoryRegions() {
       return bus.describe();
     },
+    inspectMenu() {
+      return requireMachine().inspectMenu();
+    },
   };
   function captureSnapshot() {
     return {
@@ -5382,7 +5479,8 @@ function isReplayTrace(value, frameLimit = REPLAY_MAX_FRAMES) {
   for (const item of value.frames) {
     if (
       !isRecord$1(item) ||
-      !hasOnlyKeys(item, ['frame', 'duration', 'controllers', 'pointer']) ||
+      !hasOnlyKeys(item, ['frame', 'duration', 'controllers', 'pointer', 'menuAction']) ||
+      (Object.hasOwn(item, 'menuAction') && !isMenuAction(item.menuAction)) ||
       !('controllers' in item) ||
       typeof item.frame !== 'number' ||
       !Number.isSafeInteger(item.frame) ||
@@ -5411,6 +5509,7 @@ function replayFrameInput(frame) {
   return {
     ...input,
     ...(frame.pointer === void 0 ? {} : { pointer: frame.pointer }),
+    ...(frame.menuAction === void 0 ? {} : { menuAction: frame.menuAction }),
   };
 }
 function isReplayPointer(value) {

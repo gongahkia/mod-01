@@ -1,0 +1,32 @@
+state score: Int = 0
+state updates: Int = 0
+
+on start:
+  menu_item(1, "ADD TEN")
+  menu_item(2, "TEMPORARY")
+  menu_item(2, "")
+  menu_item(5, "FINISH")
+
+on menu(action: Int):
+  assert action == 1 or action == 5, "registered slot"
+  assert mem_read(328221) == 6, "menu scheduler phase"
+  if action == 1:
+    score += 10
+    menu_item(1, "ADD TEN AGAIN")
+  if action == 5:
+    score += 50
+    menu_item(5, "")
+  save_set_int("menu_score", score)
+  save_commit()
+
+on update:
+  updates += 1
+
+on draw:
+  clear(0)
+  if score == 0:
+    pixel(0, 0, 1)
+  if score == 10:
+    pixel(0, 0, 7)
+  if score == 60:
+    pixel(0, 0, 9)

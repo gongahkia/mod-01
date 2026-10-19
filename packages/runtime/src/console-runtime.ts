@@ -26,6 +26,7 @@ import {
   type SaveWrite,
 } from './save';
 import { isInputFrame, type InputFrame } from './input';
+import type { MenuItem } from './menu';
 import { isConsoleConfiguration } from './protocol';
 import type {
   ConsoleCommand,
@@ -65,6 +66,7 @@ export interface ConsoleRuntime {
   };
   editMemory(address: number, bytes: Uint8Array): void;
   memoryRegions(): readonly MemoryRegionDescriptor[];
+  inspectMenu(): readonly MenuItem[];
 }
 
 export interface ConsoleRuntimeSnapshot {
@@ -374,6 +376,9 @@ export function createConsoleRuntime(
     },
     memoryRegions() {
       return bus.describe();
+    },
+    inspectMenu() {
+      return requireMachine().inspectMenu();
     },
   };
 

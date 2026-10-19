@@ -91,7 +91,10 @@ layouts, reproducibility boundaries and OS signing requirements.
 Flags include `--seed`, `--frames`, `--input`, `--save` and `--output`.
 The current input JSON schema is revision 1: ordered, non-overlapping records
 with frame, optional duration, four-port button assignments and optional
-complete pointer state. The current `.m01rec` envelope also uses revision 1;
+complete pointer state. An optional `menuAction` integer 1–5 records a cartridge
+pause-action activation on that frame, before update/draw. Null/invalid actions
+are rejected; absence means no activation. Navigation and pause duration are
+host state, not extra machine frames. The current `.m01rec` envelope also uses revision 1;
 other replay schemas are rejected.
 
 Trace results include framebuffer, state, audio-command, Float32 little-endian

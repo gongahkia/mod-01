@@ -1,3 +1,5 @@
+import { isMenuAction } from './menu';
+
 export const BUTTONS = [
   'up',
   'down',
@@ -35,6 +37,8 @@ export interface InputFrame {
     ControllerState,
   ];
   readonly pointer: PointerState;
+  /** One explicit pause-menu activation, dispatched before this frame's ordinary update. */
+  readonly menuAction?: number;
 }
 
 export function emptyInputFrame(): InputFrame {
@@ -99,7 +103,10 @@ export function isButton(value: unknown): value is Button {
 export function isInputFrame(value: unknown): value is InputFrame {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['controllers', 'pointer']) ||
+    !Object.hasOwn(value, 'controllers') ||
+    !Object.hasOwn(value, 'pointer') ||
+    !Object.keys(value).every((key) => ['controllers', 'pointer', 'menuAction'].includes(key)) ||
+    (Object.hasOwn(value, 'menuAction') && !isMenuAction(value.menuAction)) ||
     !Array.isArray(value.controllers) ||
     value.controllers.length !== 4
   ) {

@@ -70,7 +70,7 @@ enum AudioPreviewMode {
     Pattern,
     Note,
 }
-const fn manual_topics() -> [(&'static str, &'static str); 13] {
+const fn manual_topics() -> [(&'static str, &'static str); 14] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
         ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
@@ -86,6 +86,7 @@ const fn manual_topics() -> [(&'static str, &'static str); 13] {
         ("HARDWARE", include_str!("../../../docs/HARDWARE.md")),
         ("LIMITS", include_str!("../../../docs/LIMITS.md")),
         ("DEBUGGING", include_str!("../../../docs/DEBUGGING.md")),
+        ("PAUSE ACTIONS", include_str!("../../../docs/MENU.md")),
         (
             "CARTRIDGES",
             include_str!("../../../docs/CARTRIDGE_FORMAT.md"),

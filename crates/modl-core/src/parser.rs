@@ -232,8 +232,9 @@ impl<'tokens> Parser<'tokens> {
             TokenKind::Update => CallbackKind::Update,
             TokenKind::Draw => CallbackKind::Draw,
             TokenKind::Raster => CallbackKind::Raster,
+            TokenKind::Identifier(ref name) if name == "menu" => CallbackKind::Menu,
             _ => {
-                self.expected("system callback (`start`, `update`, `draw`, or `raster`)");
+                self.expected("system callback (`start`, `update`, `draw`, `raster`, or `menu`)");
                 return None;
             }
         };

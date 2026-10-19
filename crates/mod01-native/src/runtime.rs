@@ -340,7 +340,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-second"})
+            json!({"type":"loaded","cartridgeId":"epoch-second","menuItems":[]})
         );
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))
@@ -363,7 +363,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             receive(&bridge),
-            json!({"type":"loaded","cartridgeId":"epoch-first"})
+            json!({"type":"loaded","cartridgeId":"epoch-first","menuItems":[]})
         );
         bridge
             .send(json!({"type":"frame","input":crate::replay::empty_input()}))

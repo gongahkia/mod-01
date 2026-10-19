@@ -498,6 +498,7 @@ impl<'syntax> Analyzer<'syntax> {
             vec![Type::Num, Type::Num, Type::Num, Type::Num],
             Type::Rect,
         );
+        self.builtin("menu_item", vec![Type::Int, Type::Text], Type::Unit);
     }
 
     fn install_builtin_values(&mut self) {
@@ -899,7 +900,7 @@ impl<'syntax> Analyzer<'syntax> {
                 format!("`on {:?}` is declared more than once", callback.kind).to_lowercase(),
             );
         }
-        let expected = if callback.kind == CallbackKind::Raster {
+        let expected = if matches!(callback.kind, CallbackKind::Raster | CallbackKind::Menu) {
             vec![Type::Int]
         } else {
             Vec::new()
@@ -918,6 +919,17 @@ impl<'syntax> Analyzer<'syntax> {
                 )
                 .with_primary_label("callback signature does not match the system callback"),
             );
+        }
+        for (parameter, expected_type) in callback.parameters.iter().zip(&expected) {
+            let declared = self.resolve_type(&parameter.type_annotation);
+            if declared != *expected_type && declared != Type::Error {
+                self.type_mismatch(
+                    parameter.span,
+                    &declared,
+                    expected_type,
+                    "callback parameter",
+                );
+            }
         }
         self.check_routine(
             None,

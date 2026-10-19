@@ -294,3 +294,19 @@ choices remain outstanding.
   not present; it no longer promises an automatic native timeline, watchpoints
   or voice inspector. This does not remove or narrow the remaining acceptance
   requirements in the table.
+
+- Typed pause-action core: `menu_item(Int, Text)` maintains five bounded slots;
+  `on menu(action: Int)` is a compiler-derived callback, dispatched before update
+  even on skipped-update 30 Hz frames. Registration, action input, fault/work
+  rules, source stepping and complete snapshot restoration are tested. The
+  public JS/Rust replay codecs retain and validate the same action field. The
+  real MODL fixture compares shared release/debug, source-stepped execution,
+  headless replay and restricted native-host frames/restores for pixels, work,
+  stereo PCM and committed saves. The three existing game goldens retain exact
+  input/work/pixels/checkpoints/audio/PCM; only compiler-derived cartridge and
+  complete snapshot identities changed. `docs/MENU.md` specifies the current
+  typed contract. Common native menu UI/input integration remains open.
+  Verification passes formatting/lint/types, all 230 runtime / 69 native / 95
+  core / 22 CLI tests, all-feature warning-free workspace Clippy and builds,
+  all nine reproducible raw/PNG pairs and 120 bundled Linux native frames
+  without PATH. Windows/macOS and physical-device execution are not claimed.

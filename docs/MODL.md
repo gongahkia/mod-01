@@ -64,8 +64,10 @@ task flash(color: Color):
   wait 2f
 ```
 
-System callbacks are `on start:`, `on update:`, `on draw:`, and
-`on raster(line: Int):`. A task begins only through `start task_name(arguments)`.
+System callbacks are `on start:`, `on update:`, `on draw:`,
+`on raster(line: Int):`, and `on menu(action: Int):`. A task begins only through
+`start task_name(arguments)`. The menu callback receives a registered host-menu
+activation before the normal display-frame update/draw sequence; see [MENU.md](MENU.md).
 
 Records contain typed fields and optional defaults. Enum variants may have typed payloads. `match`
 arms begin with `case`; `else` is the wildcard arm.
@@ -147,7 +149,7 @@ constant     = "const", identifier, [ ":", type ], "=", expression, line-end ;
 state        = "state", identifier, ":", type, "=", expression, line-end ;
 function     = "fn", identifier, parameters, "->", type, ":", block ;
 task         = "task", identifier, parameters, ":", block ;
-callback     = "on", ( "start" | "update" | "draw" | "raster" ),
+callback     = "on", ( "start" | "update" | "draw" | "raster" | "menu" ),
                [ parameters ], ":", block ;
 parameters   = "(", [ parameter, { ",", parameter } ], ")" ;
 parameter    = identifier, ":", type ;

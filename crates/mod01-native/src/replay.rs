@@ -25,6 +25,7 @@ pub fn encode(frames: &[(u32, Value)]) -> Result<Vec<u8>, String> {
             if end == u64::from(*frame)
                 && last["controllers"] == item["controllers"]
                 && last["pointer"] == item["pointer"]
+                && last["menuAction"] == item["menuAction"]
             {
                 last["duration"] = json!(end - last["frame"].as_u64().unwrap_or(0) + 1);
                 continue;
@@ -56,10 +57,9 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
     let mut previous_end = 0;
     for frame in frames {
         let object = frame.as_object().ok_or("invalid replay frame")?;
-        if object
-            .keys()
-            .any(|key| !["frame", "duration", "controllers", "pointer"].contains(&key.as_str()))
-            || !object.contains_key("controllers")
+        if object.keys().any(|key| {
+            !["frame", "duration", "controllers", "pointer", "menuAction"].contains(&key.as_str())
+        }) || !object.contains_key("controllers")
         {
             return Err("replay frame has unknown fields".to_owned());
         }
@@ -121,6 +121,15 @@ pub fn decode(bytes: &[u8]) -> Result<BTreeMap<u32, Value>, String> {
             }
             input["pointer"] = pointer.clone();
         }
+        if object.contains_key("menuAction") {
+            if frame["menuAction"]
+                .as_u64()
+                .is_none_or(|slot| !(1..=5).contains(&slot))
+            {
+                return Err("invalid replay menu action".to_owned());
+            }
+            input["menuAction"] = frame["menuAction"].clone();
+        }
         for offset in 0..duration {
             output.insert((start + offset) as u32, input.clone());
         }
@@ -150,7 +159,20 @@ fn trace_frame(frame: u64, input: &Value) -> Result<Value, String> {
             packed.push(json!({"port":index+1,"buttons":buttons}));
         }
     }
-    Ok(json!({"frame":frame,"controllers":packed,"pointer":input["pointer"]}))
+    let mut value = json!({"frame":frame,"controllers":packed,"pointer":input["pointer"]});
+    if input
+        .as_object()
+        .is_some_and(|input| input.contains_key("menuAction"))
+    {
+        if input["menuAction"]
+            .as_u64()
+            .is_none_or(|slot| !(1..=5).contains(&slot))
+        {
+            return Err("invalid recorded menu action".to_owned());
+        }
+        value["menuAction"] = input["menuAction"].clone();
+    }
+    Ok(value)
 }
 
 pub fn empty_input() -> Value {
@@ -186,5 +208,37 @@ mod tests {
         assert!(decode(invalid).is_err());
         let invalid = br#"{"revision":1,"frames":[{"frame":0,"controllers":[],"pointer":{"x":240,"y":0,"primary":false,"secondary":false,"inside":true}}]}"#;
         assert!(decode(invalid).is_err());
+    }
+
+    #[test]
+    fn menu_actions_round_trip_and_never_merge_with_neutral_inputs() {
+        let mut action = empty_input();
+        action["menuAction"] = 5.into();
+        let frames = vec![
+            (0, empty_input()),
+            (1, action.clone()),
+            (2, action.clone()),
+            (3, empty_input()),
+        ];
+        let bytes = encode(&frames).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["frames"].as_array().unwrap().len(), 3);
+        assert_eq!(value["frames"][1]["duration"], 2);
+        assert_eq!(
+            decode(&bytes).unwrap().into_iter().collect::<Vec<_>>(),
+            frames
+        );
+        for invalid in [
+            serde_json::Value::Null,
+            0.into(),
+            6.into(),
+            1.5.into(),
+            "1".into(),
+        ] {
+            action["menuAction"] = invalid.clone();
+            assert!(encode(&[(0, action.clone())]).is_err());
+            let invalid = serde_json::json!({"revision":1,"frames":[{"frame":0,"controllers":[],"menuAction":invalid}]});
+            assert!(decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
     }
 }

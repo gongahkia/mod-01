@@ -49,6 +49,9 @@ not in a hosted service. Source-only tests are not release entry points.
 `mod01 lsp` provides diagnostics, completion, hover, signature help, definition,
 references/rename, formatting and document/workspace symbols over stdio.
 MODL source is ASCII-only, so source byte columns match LSP UTF-16 columns.
+API completion/hover/signatures are derived from the compiler's complete builtin
+registrations, including memory, math, text and bit helpers. Standard API names
+are reserved consistently at module scope; there is no lazy historical-name path.
 
 See [Studio](STUDIO.md), [standard library](STANDARD_LIBRARY.md), and the
 [native implementation acceptance ledger](NATIVE_IMPLEMENTATION.md).

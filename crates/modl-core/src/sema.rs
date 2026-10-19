@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +31,65 @@ pub struct AnalysisOutput {
     pub symbols: Vec<Symbol>,
     pub ir: Option<IrModule>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Compiler-derived standard API metadata shared by Studio and external editors.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BuiltinDefinition {
+    pub name: String,
+    pub signature: String,
+    pub callable: bool,
+}
+
+/// Returns the complete current API from the same registrations used by type checking.
+#[must_use]
+pub fn builtin_definitions() -> &'static [BuiltinDefinition] {
+    static DEFINITIONS: OnceLock<Vec<BuiltinDefinition>> = OnceLock::new();
+    DEFINITIONS.get_or_init(|| {
+        let source = SourceFile::new(crate::FileId(0), "builtins.modl", "");
+        let parsed = parse(&source);
+        let assets = AssetCatalog::default();
+        let mut analyzer = Analyzer::new(&parsed.module, &assets);
+        analyzer.install_builtins();
+        let mut definitions = analyzer
+            .symbols
+            .iter()
+            .map(|symbol| {
+                let (signature, callable) = if let Type::Function(function) = &symbol.r#type {
+                    (
+                        format!(
+                            "fn {}({}) -> {}",
+                            symbol.name,
+                            function
+                                .parameters
+                                .iter()
+                                .map(|parameter| analyzer.describe_type(parameter))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            analyzer.describe_type(&function.return_type)
+                        ),
+                        true,
+                    )
+                } else {
+                    (
+                        format!(
+                            "{}: {}",
+                            symbol.name,
+                            analyzer.describe_type(&symbol.r#type)
+                        ),
+                        false,
+                    )
+                };
+                BuiltinDefinition {
+                    name: symbol.name.clone(),
+                    signature,
+                    callable,
+                }
+            })
+            .collect::<Vec<_>>();
+        definitions.sort_by(|left, right| left.name.cmp(&right.name));
+        definitions
+    })
 }
 
 /// Parses, resolves, type-checks, and lowers one MODL module to typed IR.
@@ -181,6 +243,7 @@ impl<'syntax> Analyzer<'syntax> {
         ] {
             self.builtin(name, vec![Type::Int, Type::Int], Type::Int);
         }
+        self.install_memory_builtins();
     }
 
     fn install_text_builtins(&mut self) {
@@ -1360,10 +1423,7 @@ impl<'syntax> Analyzer<'syntax> {
             return error_expression(span);
         }
         let name = &path[0];
-        let Some(symbol) = self
-            .lookup(&name.value)
-            .or_else(|| self.memory_builtin(&name.value))
-        else {
+        let Some(symbol) = self.lookup(&name.value) else {
             self.diagnostics.push(
                 Diagnostic::error(
                     "M013002",
@@ -1381,43 +1441,31 @@ impl<'syntax> Analyzer<'syntax> {
         }
     }
 
-    fn memory_builtin(&mut self, name: &str) -> Option<SymbolId> {
-        if name == "font_print" {
-            // Lazy V1 installation preserves every alpha program's generated symbol IDs.
-            self.builtin(
-                "font_print",
-                vec![
-                    Type::Asset(AssetKind::Font),
-                    Type::Text,
-                    Type::Int,
-                    Type::Int,
-                    Type::Color,
-                ],
-                Type::Unit,
-            );
-            return self.lookup(name);
+    fn install_memory_builtins(&mut self) {
+        self.builtin(
+            "font_print",
+            vec![
+                Type::Asset(AssetKind::Font),
+                Type::Text,
+                Type::Int,
+                Type::Int,
+                Type::Color,
+            ],
+            Type::Unit,
+        );
+        self.builtin("visual_id", vec![Type::Text], Type::Int);
+        self.builtin("audio_id", vec![Type::Text], Type::Int);
+        for (name, count, return_type) in [
+            ("mem_read", 1, Type::Int),
+            ("mem_read16", 1, Type::Int),
+            ("mem_write", 2, Type::Unit),
+            ("mem_write16", 2, Type::Unit),
+            ("mem_copy", 3, Type::Unit),
+            ("mem_fill", 3, Type::Unit),
+            ("save_commit", 0, Type::Unit),
+        ] {
+            self.builtin(name, vec![Type::Int; count], return_type);
         }
-        if name == "visual_id" {
-            self.builtin("visual_id", vec![Type::Text], Type::Int);
-            return self.lookup(name);
-        }
-        if name == "audio_id" {
-            self.builtin("audio_id", vec![Type::Text], Type::Int);
-            return self.lookup(name);
-        }
-        let (name, count, return_type) = match name {
-            "mem_read" => ("mem_read", 1, Type::Int),
-            "mem_read16" => ("mem_read16", 1, Type::Int),
-            "mem_write" => ("mem_write", 2, Type::Unit),
-            "mem_write16" => ("mem_write16", 2, Type::Unit),
-            "mem_copy" => ("mem_copy", 3, Type::Unit),
-            "mem_fill" => ("mem_fill", 3, Type::Unit),
-            "save_commit" => ("save_commit", 0, Type::Unit),
-            _ => return None,
-        };
-        // lazy installation preserves alpha symbol IDs and existing user-defined names.
-        self.builtin(name, vec![Type::Int; count], return_type);
-        self.lookup(name)
     }
 
     fn is_raster_builtin(name: &str) -> bool {
@@ -2557,7 +2605,7 @@ on draw:
     }
 
     #[test]
-    fn memory_builtins_are_typed_without_reserving_existing_user_names() {
+    fn memory_builtins_are_typed_and_reserved_like_the_rest_of_the_api() {
         let invalid = analyze("on draw:\n  mem_write(true, 7)\n", &AssetCatalog::default());
         assert!(
             invalid
@@ -2588,16 +2636,52 @@ on draw:
             &AssetCatalog::default(),
         );
         assert!(
-            shadowed.diagnostics.is_empty(),
-            "{:#?}",
-            shadowed.diagnostics
-        );
-        assert!(
             shadowed
-                .symbols
+                .diagnostics
                 .iter()
-                .any(|symbol| symbol.name == "mem_read"
-                    && symbol.kind == crate::ir::SymbolKind::Function)
+                .any(|diagnostic| diagnostic.code == "M013001")
+        );
+    }
+
+    #[test]
+    fn standard_api_metadata_matches_the_complete_compiler_symbol_table() {
+        let analysis = analyze("", &AssetCatalog::default());
+        let definitions = super::builtin_definitions();
+        assert_eq!(definitions.len(), analysis.symbols.len());
+        assert!(
+            definitions
+                .windows(2)
+                .all(|pair| pair[0].name < pair[1].name)
+        );
+        for symbol in &analysis.symbols {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.name == symbol.name)
+                .unwrap();
+            assert_eq!(
+                definition.callable,
+                matches!(symbol.r#type, crate::Type::Function(_))
+            );
+            assert!(definition.signature.contains(&symbol.name));
+        }
+        for name in [
+            "font_print",
+            "mem_copy",
+            "audio_id",
+            "save_commit",
+            "sqrt",
+            "text_split",
+            "bit_ushr",
+        ] {
+            assert!(definitions.iter().any(|definition| definition.name == name));
+        }
+        assert_eq!(
+            definitions
+                .iter()
+                .find(|definition| definition.name == "parse_num")
+                .unwrap()
+                .signature,
+            "fn parse_num(Text) -> Option[Num]"
         );
     }
 

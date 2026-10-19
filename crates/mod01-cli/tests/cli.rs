@@ -1029,6 +1029,18 @@ fn lsp_serves_diagnostics_completion_and_symbol_navigation() {
             .expect("response id exists")
     };
     assert_eq!(response(1)["result"]["serverInfo"]["name"], "mod01");
+    for definition in modl_core::builtin_definitions() {
+        assert!(
+            response(2)["result"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["label"] == definition.name
+                    && item["detail"] == definition.signature),
+            "{}",
+            definition.name
+        );
+    }
     assert!(
         response(2)["result"]
             .as_array()

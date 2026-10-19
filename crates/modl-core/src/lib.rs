@@ -32,7 +32,7 @@ pub use generator::materialize_workcart_recipe;
 pub use lexer::lex;
 pub use native_export::{NativePlatform, NativeToolchain, export_native_game};
 pub use parser::{ParseOutput, parse};
-pub use sema::{AnalysisOutput, analyze_module};
+pub use sema::{AnalysisOutput, BuiltinDefinition, analyze_module, builtin_definitions};
 pub use span::{FileId, LineColumn, SourceFile, Span, Spanned};
 pub use token::{Token, TokenKind};
 pub use types::{AssetCatalog, AssetKind, Type};

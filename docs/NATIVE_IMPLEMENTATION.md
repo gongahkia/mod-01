@@ -247,3 +247,11 @@ choices remain outstanding.
   byte-identical indexed files, layered source, metadata and packed cartridge bytes
   for the same import context. A core test verifies explicit sprite replacement
   updates stale layered source without changing other authored data.
+
+- Checkpoint at `405bdca`: the complete `scripts/check.sh` gate passes with
+  224 runtime tests, 22 CLI tests, 54 native tests and 94 core unit/integration
+  tests, formatting/lint/types, warning-free all-feature Clippy and workspace
+  builds. All nine raw/PNG cartridge pairs remain reproducible, and Linux's
+  bundled player verifies 120 frames without PATH. No replay golden refresh was
+  needed for the tracker/asset-tooling work. The remaining touch/menu/bundle/
+  library/platform acceptance rows are still open.

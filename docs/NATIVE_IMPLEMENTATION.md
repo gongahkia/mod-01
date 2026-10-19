@@ -51,6 +51,18 @@ choices remain outstanding.
 
 ## Progress
 
+- Hardware Gauntlet no longer labels the current machine as R1. Its public-API
+  showcase now renders R2 with an actual `2` bitmap glyph and a current-machine
+  source comment. A regression first failed the old label and now derives the
+  expected HUD from manifest metadata and requires every custom label glyph.
+  Inspected native captures show R2 and keyboard page switching without faults;
+  normal GUI shutdown leaves authored source unchanged. The full gate passes
+  322 runtime/script, 134 core, 143 native, 34 CLI integration and one CLI unit
+  test, formatting/lint/types/all-feature Clippy/builds, ten deterministic raw/PNG
+  pairs and all three Linux package comparisons. An explicit previous-hash
+  comparison proves the other nine raw/PNG pairs unchanged; only this intentionally
+  corrected showcase's bytes differ. Local full-gate log and captures are retained
+  in `output/asset-number-qa-N5dNmf`.
 - Actual native asset GUI inspection used an isolated, validator-admitted bank
   with integral JSON floats. Captures in `output/asset-number-qa-N5dNmf` show
   correct 2×2 map/font/sprite, tile flag 7/colours, tracker 240/C-4 and signed

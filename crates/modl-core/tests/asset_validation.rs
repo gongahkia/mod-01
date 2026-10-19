@@ -43,6 +43,32 @@ fn asset_integer_values_use_numeric_meaning_without_rounding_or_repair() {
     assert!(integer_value(&json!(1), 2, 0).is_none());
 }
 
+#[test]
+fn hardware_showcase_hud_and_bitmap_glyph_agree_with_the_current_machine() {
+    let project = parse_workcart(include_str!(
+        "../../../cartridges/hardware-gauntlet/cart.m01w"
+    ))
+    .unwrap();
+    let source = std::str::from_utf8(&project.files["src/main.modl"]).unwrap();
+    let label = format!("R{}", project.manifest.hardware_revision);
+    assert!(
+        source.contains(&format!("font_print(#typeface, \"{label}\"")),
+        "showcase HUD must identify its actual current machine"
+    );
+    let font: Value = serde_json::from_slice(&project.files["assets/typeface.m01f"]).unwrap();
+    for character in label.chars() {
+        let code = u32::from(character);
+        assert!(
+            font["glyphs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|glyph| glyph["code"] == code),
+            "the {character} label glyph must not fall back to a question mark"
+        );
+    }
+}
+
 fn add(
     manifest: &mut ProjectManifest,
     files: &mut BTreeMap<String, Vec<u8>>,

@@ -21,11 +21,11 @@ pnpm install --frozen-lockfile
 pnpm native
 ```
 
-On Linux, install development packages for ALSA, udev, X11/Wayland, xkbcommon,
+On Linux, install development packages for ALSA, udev, X11/Wayland, xkbcommon (including its X11 bridge),
 OpenGL and GTK3 first. CI's exact Ubuntu package list is in
 [ci.yml](.github/workflows/ci.yml). Fedora uses the corresponding
 `alsa-lib-devel systemd-devel libX11-devel libXrandr-devel libXi-devel
-wayland-devel libxkbcommon-devel mesa-libGL-devel gtk3-devel` packages.
+wayland-devel libxkbcommon-devel libxkbcommon-x11-devel mesa-libGL-devel gtk3-devel` packages.
 If pkg-config does not search system libraries, add the system pkgconfig directories
 to `PKG_CONFIG_PATH`.
 

@@ -56,6 +56,13 @@ choices remain outstanding.
 
 ## Progress
 
+- The first actual-window CI run exposed a missing Linux runtime dependency:
+  xkbcommon's X11 bridge is loaded at window creation, not linked by the headless
+  verifier. Both Ubuntu setup lists now install `libxkbcommon-x11-dev`; local
+  instructions and native-game requirements name the separate bridge too. The
+  real macOS window already passes at `2b72103` (960×674, first frame/save and
+  clean close). The same initial run exposed insufficient OpenGL support on the
+  Windows runner; that remains a separate qualification issue, not a skipped test.
 - Fresh remote CI at `7060d9b` passed the full gate and native Rust/runtime/package
   checks on all three desktop operating systems:
   [run 39257406061](https://github.com/gongahkia/mod-01/actions/runs/39257406061).

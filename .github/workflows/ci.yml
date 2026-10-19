@@ -35,7 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install native desktop libraries
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libgtk-3-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
 
       - name: Set up and build
         run: make setup
@@ -68,7 +68,7 @@ jobs:
 
       - name: Install native desktop libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libgtk-3-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev xvfb xauth xdotool
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgtk-3-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev xvfb xauth xdotool
 
       - name: Install workspace packages
         run: pnpm install --frozen-lockfile

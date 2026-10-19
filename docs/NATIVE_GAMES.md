@@ -37,6 +37,13 @@ is needed on the recipient's machine. Native system libraries and OS trust/signi
 rules still apply; build on the oldest supported OS baseline. Linux CI builds on
 Ubuntu 24.04. These are unsigned publisher artifacts, not notarized installers.
 
+Linux X11 startup also needs the separate xkbcommon X11 runtime library
+(`libxkbcommon-x11-0` on Ubuntu, `libxkbcommon-x11` on Fedora). Installing only
+the base xkbcommon library is insufficient even if compilation/headless tests
+pass. Development/CI setup installs the corresponding X11 development package;
+see the current [Ubuntu package inventory](https://packages.ubuntu.com/source/noble/libxkbcommon)
+and [Fedora packages](https://packages.fedoraproject.org/pkgs/libxkbcommon/).
+
 The player executable is named `cart-ID` (`cart-ID.exe` on Windows), separate
 from reserved package files such as `node`, `game.m01c` and `mod01-game.json`.
 This namespace also keeps the executable out of Windows's

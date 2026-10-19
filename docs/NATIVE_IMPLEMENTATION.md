@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Runtime request control is implemented and unit-tested: local aliases only,
+  a 1,024-byte well-formed UTF-8 transfer parameter, one deferred operation per
+  callback frame, pre-admitted compatible reload banks, work charged before
+  mutation, and strict context-bound snapshots. Seven tests cover exact Unicode
+  bounds, phase/arity/reference failures, work exhaustion and defensive restore.
+  This request component is not yet the game scheduler/host integration; the
+  multi-cart acceptance row remains open.
 - Whole-game Rust packing/admission is implemented in `game.rs`: ordinary game
   bytes remain unchanged; a flat bundle uses the same canonical M01C/2 archive
   encoding with a bounded index, exact enclosing source and 2–32 ordinary current

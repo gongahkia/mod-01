@@ -1,6 +1,7 @@
 //! Current workcart → shared Rust preparation → actual Studio/native process ownership.
 use super::*;
 use modl_core::bundle::BundleSource;
+use std::path::Path;
 use studio_replay_tests::{advance_debug_to, pump};
 
 pub(super) fn game_source() -> String {
@@ -83,13 +84,8 @@ fn save_commits_never_follow_or_publish_a_predictable_temporary_symlink() {
     assert!(!published_link.unwrap());
 }
 
-#[test]
-fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is_selected() {
-    let source = game_source();
-    let mut project = NativeProject::from_source(source.clone(), None).unwrap();
-    let main_id = project.manifest.id.clone();
-    let directory = std::env::temp_dir().join(format!("mod01-native-export-{main_id}"));
-    fs::create_dir(&directory).unwrap();
+fn export_tools(directory: &Path) -> modl_core::NativeToolchain {
+    // Layout/admission fixture only; the repository package verifiers launch real binaries.
     let mut header = [0_u8; 128];
     header[..6].copy_from_slice(b"\x7fELF\x02\x01");
     header[18] = 62;
@@ -97,13 +93,23 @@ fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is
     let license = directory.join("Node-LICENSE");
     fs::write(&tool, header).unwrap();
     fs::write(&license, "Node license fixture").unwrap();
-    let tools = modl_core::NativeToolchain {
+    modl_core::NativeToolchain {
         platform: modl_core::NativePlatform::Linux,
         player: tool.clone(),
         node: tool,
         host: native_host_path(),
         node_license: license,
-    };
+    }
+}
+
+#[test]
+fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is_selected() {
+    let source = game_source();
+    let mut project = NativeProject::from_source(source.clone(), None).unwrap();
+    let main_id = project.manifest.id.clone();
+    let directory = std::env::temp_dir().join(format!("mod01-native-export-{main_id}"));
+    fs::create_dir(&directory).unwrap();
+    let tools = export_tools(&directory);
     project.select_member("arena").unwrap();
     project
         .editor_text
@@ -137,19 +143,14 @@ fn studio_native_export_keeps_the_entire_game_and_mains_identity_when_a_child_is
     fs::remove_dir_all(directory).unwrap();
 }
 
-fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
-    let context = egui::Context::default();
-    let mut app = StudioApp::new_with_devices(None, &context, false);
-    let project = NativeProject::from_source(game_source(), None).unwrap();
-    app.manifest_text = project.manifest_source.clone();
-    app.project = Some(project);
+fn game_inputs() -> BTreeMap<u32, Value> {
     let mut held = replay::empty_input();
     held["controllers"][0]["buttons"]["a"] = true.into();
     let mut transfer = held.clone();
     transfer["menuAction"] = 1.into();
     let mut back = replay::empty_input();
     back["menuAction"] = 1.into();
-    let inputs = BTreeMap::from([
+    BTreeMap::from([
         (0, replay::empty_input()),
         (1, transfer),
         (2, held.clone()),
@@ -157,7 +158,108 @@ fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
         (4, held),
         (5, back),
         (6, replay::empty_input()),
-    ]);
+    ])
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One edit/debug/record/save/export/reopen/replay user workflow.
+fn edited_studio_game_records_source_steps_and_replays_the_exported_game_without_losing_edits() {
+    let source = game_source();
+    let original = NativeProject::from_source(source.clone(), None).unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("mod01-native-workflow-{}", original.manifest.id));
+    fs::create_dir(&directory).unwrap();
+    let workcart = directory.join("cart.m01w");
+    fs::write(&workcart, &source).unwrap();
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(None, &context, false);
+    let mut project = NativeProject::open(&workcart).unwrap();
+    project.editor_text = project.editor_text.replace("clear(1)", "clear(200)");
+    project.dirty = true;
+    app.manifest_text = project.manifest_source.clone();
+    app.project = Some(project);
+    app.select_member("arena");
+    let edited_game = app.project.as_ref().unwrap().game().unwrap();
+    let inputs = game_inputs();
+    app.replay_playback = Some(inputs.clone());
+    app.recording_replay = true;
+    app.run_mode(true);
+    pump(&mut app, &context);
+    let mut debug_frames = Vec::new();
+    for frame in 0..7 {
+        advance_debug_to(&mut app, &context, frame + 1);
+        assert_eq!(app.frame, frame);
+        assert_eq!(
+            app.last_pixels[0],
+            match frame {
+                2 | 3 | 5 => 7,
+                4 => 9,
+                _ => 200,
+            }
+        );
+        debug_frames.push((app.work, app.last_pixels.clone(), app.active_alias.clone()));
+    }
+    assert!(app.debug_trace.iter().any(|event| {
+        event["cartridgeAlias"] == "arena" && event["sourceSpan"]["source"] == "src/main.modl"
+    }));
+    assert_eq!(app.replay_frames, inputs.into_iter().collect::<Vec<_>>());
+    let recorded = app.replay_frames.clone();
+    let replay_file = directory.join("recording.m01rec");
+    fs::write(&replay_file, replay::encode(&recorded).unwrap()).unwrap();
+    app.stop();
+
+    let project = app.project.as_ref().unwrap();
+    project.save().unwrap();
+    assert_eq!(project.member_alias(), "arena");
+    let reopened = NativeProject::open(&workcart).unwrap();
+    assert_eq!(reopened.pack().unwrap(), edited_game.bytes());
+    let revisions = reopened.revisions().unwrap();
+    assert_eq!(revisions.len(), 1);
+    assert_eq!(fs::read_to_string(&revisions[0]).unwrap(), source);
+    let tools = export_tools(&directory);
+    let executable = project.export_native(&directory, &tools).unwrap();
+    let packed = executable.parent().unwrap().join("game.m01c");
+    assert_eq!(fs::read(&packed).unwrap(), edited_game.bytes());
+
+    let context = egui::Context::default();
+    let mut player = StudioApp::new_with_devices(None, &context, false);
+    let project = NativeProject::open(&packed).unwrap();
+    assert_eq!(project.game().unwrap().source(), edited_game.source());
+    player.manifest_text = project.manifest_source.clone();
+    player.project = Some(project);
+    player.replay_playback = Some(replay::read(&replay_file).unwrap());
+    player.recording_replay = true;
+    player.run_mode(false);
+    pump(&mut player, &context);
+    for (index, expected) in debug_frames.into_iter().enumerate() {
+        player.send_input(&context, "frame");
+        pump(&mut player, &context);
+        assert_eq!(player.frame as usize, index);
+        assert_eq!(player.input_frame as usize, index + 1);
+        assert!(
+            (
+                player.work,
+                player.last_pixels.clone(),
+                player.active_alias.clone()
+            ) == expected,
+            "exported release replay diverged at frame {index}"
+        );
+    }
+    assert_eq!(player.replay_frames, recorded);
+    for member in player.running_members.values() {
+        assert!(read_save(&member.id).unwrap().is_empty());
+    }
+    player.stop();
+    fs::remove_dir_all(directory).unwrap();
+}
+
+fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(None, &context, false);
+    let project = NativeProject::from_source(game_source(), None).unwrap();
+    app.manifest_text = project.manifest_source.clone();
+    app.project = Some(project);
+    let inputs = game_inputs();
     app.replay_playback = Some(inputs.clone());
     app.recording_replay = true;
     app.run_mode(debug);

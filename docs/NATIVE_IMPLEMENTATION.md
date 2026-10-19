@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- One actual Studio workflow now starts with an unsaved 256-colour source edit,
+  steps both game members through the debugger, records each accepted input once,
+  saves with the prior source recoverable, exports while the child is selected,
+  and reopens the exported game for release replay. All seven frames' pixels,
+  work and active member match source stepping; saves remain disposable. The
+  export-layout fixture does not execute a fake player: separate fresh Linux
+  release verifiers launch actual ordinary, >1 MiB two-member and maintained
+  Relay Station packages with empty PATH and matching complete traces. The
+  focused workflow test and all-feature workspace Clippy pass; other desktop
+  execution remains an explicit open qualification, not inferred from Linux.
 - Windows runtime admission audit found the old remote CI failure is still
   relevant: Rust's verbatim `\\?\` host path fails Node 24.21's exact-file
   permission check. A SHA-256-verified official Windows Node 24.21 binary executed
@@ -63,7 +73,7 @@ choices remain outstanding.
   and trailing-dot spellings. The helper's full upstream CC0 licence travels in
   existing native library notices. Actual Rust Windows/macOS execution at this
   new commit remains pending; this Node probe is not a complete desktop OS pass.
-  All 150 native tests, seven core native-export tests, workspace Clippy/build,
+  All 150 native tests, five core native-export tests, workspace Clippy/build,
   unchanged ten-cartridge raw/PNG pairs and all three Linux package comparisons
   pass. Windows Node 24.21 also passes the ordinary-path probe from a directory
   containing spaces, Unicode and # while denying its adjacent file.

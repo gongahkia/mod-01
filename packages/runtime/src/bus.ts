@@ -12,6 +12,7 @@ export const MEMORY = Object.freeze({
   visual: 0x210000,
   draw: 0x50000,
   transparency: 0x50050,
+  pattern: 0x50070,
   palette: 0x200000,
   input: 0x50100,
   inputBytes: 48,

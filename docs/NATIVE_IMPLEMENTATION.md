@@ -26,7 +26,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [ ]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [ ]      |
-| Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [ ]      |
+| Pattern fills                 | Configurable two-colour pattern/mask state has defined transparency/reset/snapshot behaviour and real drawing tests.                                                                                        | [x]      |
 | Transparency controls         | Explicit draw transparency mask defaults, state reset, palette interaction and replay/debug restoration are verified.                                                                                       | [x]      |
 | Native touch controller       | Multi-touch D-pad/actions drive the ordinary controller/replay model in the native player without stuck/released-button errors.                                                                             | [ ]      |
 | Pause/system menu             | Common native pause UI and typed cartridge-defined actions have specified input/timing/callback/replay/debug semantics.                                                                                     | [ ]      |
@@ -126,3 +126,13 @@ choices remain outstanding.
   and headless execution also passes. The focused graphics/bus/hardware suite
   passes 41 tests. Master RGB data is now shared by native tools and the runtime
   (`f0d0e30`), fixing native colour 25 without changing console palette values.
+
+- Primitive patterns: typed `fill_pattern`/`fill_pattern_reset`, 4×4 low-bit-first
+  screen anchoring, two remapped colours, transparent holes and an eight-byte
+  validated RW record. Reset, invalid writes, raster restrictions and complete
+  snapshot restore are exercised alongside all primitive kinds. Two compiler
+  tests cover both modes, invalid types and forbidden raster calls; the focused
+  graphics/bus/runtime/hardware suite passes 58 tests, plus lint/types/Clippy.
+  The updated visual workcart asserts real drawing and MMIO in release/debug,
+  native/headless and replay. Its running native-player frame was inspected in
+  `output/native-qa-8iPAwp/pattern-visual-cartridge.png` (960×650 window).

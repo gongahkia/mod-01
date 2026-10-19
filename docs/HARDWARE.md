@@ -59,6 +59,7 @@ reads zero; writing one faults. Offsets below are hexadecimal; lengths and count
 | `22000`  |    34,560 | R      | Resolved indexed scanout; zero before `on start`.                                                                   |
 | `50000`  |        80 | RW     | Draw camera/clip and logical palette remap; layout below.                                                           |
 | `50050`  |        32 | RW     | Blit transparency bitset for all 256 source colours, bit zero set on boot/frame reset.                              |
+| `50070`  |         8 | RW     | Primitive fill mask, second colour, enable/transparency flags and reserved bytes; all zero on boot/frame reset.     |
 | `50100`  |        48 | R      | Four controller ports and pointer, encoded from the machine's current/previous input frames. Reset zero.            |
 | `50200`  |        64 | R      | Scheduler, deterministic time, RNG, work and fault registers, encoded from their actual owners; layout below.       |
 | `50300`  |        24 | R      | Visual allocation status; six little-endian unsigned 32-bit fields, below.                                          |
@@ -105,6 +106,16 @@ bit zero is set on cartridge load and at each boot/display-frame draw-state
 reset; `palt_reset` restores that default explicitly. Bus snapshots retain the
 complete mask, and restore is transactional with the other devices. As with
 other non-raster state, writes from `on raster` are rejected.
+
+Primitive-pattern bytes at `50070`–`50077` are: little-endian unsigned 16-bit
+mask at offsets 0–1; second palette index at 2; enabled flag at 3; transparent
+second-colour flag at 4; reserved zero bytes at 5–7. Flags must be 0 or 1; invalid
+raw writes fault transactionally. High-level `fill_pattern` sets enabled to 1
+and writes these exact fields. Reset disables it and zeros the whole record.
+Bit zero is the top-left screen pixel in each repeating 4×4 block. Screen-space
+mask selection precedes the ordinary palette remap; clear, text and asset blits
+ignore it. The complete record is retained by bus snapshots, including at debug
+frame boundaries, and is restored with the rest of the device state.
 
 Draw-state offsets from `50000`:
 

@@ -110,6 +110,7 @@ export class IndexedGraphics {
   private readonly display: DisplayConfiguration;
   private readonly drawRegisters = new Uint8Array(80);
   private readonly transparency = new Uint8Array(HARDWARE.paletteSize / 8);
+  private readonly pattern = new Uint8Array(8);
   private readonly state = new MemoryDrawState(this.drawRegisters);
   private readonly rasterBytes = new Uint8Array(HARDWARE.height * MEMORY.rasterStride);
   private readonly rasterView = new DataView(this.rasterBytes.buffer);
@@ -148,6 +149,7 @@ export class IndexedGraphics {
     this.drawRegisters.fill(0);
     this.resetTransparency();
     this.state.clipWidth = HARDWARE.width;
+    this.pattern.fill(0);
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.rasterBytes.fill(0);
@@ -273,6 +275,21 @@ export class IndexedGraphics {
         writable: true,
       },
       {
+        name: 'primitive fill pattern',
+        address: MEMORY.pattern,
+        bytes: this.pattern,
+        writable: true,
+        validate: (offset, bytes) => {
+          const candidate = this.pattern.slice();
+          candidate.set(bytes, offset);
+          return (
+            (candidate[3] ?? 0) <= 1 &&
+            (candidate[4] ?? 0) <= 1 &&
+            candidate.subarray(5).every((value) => value === 0)
+          );
+        },
+      },
+      {
         name: 'raster callback state',
         address: MEMORY.rasterLive,
         bytes: this.rasterLive,
@@ -326,7 +343,7 @@ export class IndexedGraphics {
       }
       case 'pixel': {
         const [x, y, color] = expectIntegers(command, 3);
-        this.plot(x, y, color, state);
+        this.plot(x, y, color, state, true);
         return;
       }
       case 'line': {
@@ -393,6 +410,21 @@ export class IndexedGraphics {
         expectIntegers(command, 0);
         this.resetTransparency();
         return;
+      case 'fill_pattern': {
+        if (command.arguments.length !== 3)
+          throw new TypeError('fill_pattern expects three arguments');
+        const mask = expectInteger(command.arguments[0]);
+        const second = expectColor(expectInteger(command.arguments[1]));
+        const transparent = expectBoolean(command.arguments[2]);
+        if (mask < 0 || mask > 65535)
+          throw new RangeError('fill pattern mask must be between 0 and 65535');
+        this.pattern.set([mask & 255, mask >>> 8, second, 1, Number(transparent), 0, 0, 0]);
+        return;
+      }
+      case 'fill_pattern_reset':
+        expectIntegers(command, 0);
+        this.pattern.fill(0);
+        return;
       case 'sprite': {
         const [handle, x, y] = command.arguments;
         this.drawSprite(readAssetName(handle, 'Sprite'), expectInteger(x), expectInteger(y), state);
@@ -458,7 +490,7 @@ export class IndexedGraphics {
     }
   }
 
-  private plot(x: number, y: number, color: number, state: DrawState): void {
+  private plot(x: number, y: number, color: number, state: DrawState, patterned = false): void {
     const screenX = x - state.cameraX;
     const screenY = y - state.cameraY;
     if (
@@ -472,6 +504,14 @@ export class IndexedGraphics {
       screenY >= state.clipY + state.clipHeight
     ) {
       return;
+    }
+    if (patterned && this.pattern[3] === 1) {
+      const mask = (this.pattern[0] ?? 0) | ((this.pattern[1] ?? 0) << 8);
+      const bit = wrap(screenY, 4) * 4 + wrap(screenX, 4);
+      if ((mask & (1 << bit)) !== 0) {
+        if (this.pattern[4] === 1) return;
+        color = this.pattern[2] ?? 0;
+      }
     }
     this.back[screenY * HARDWARE.width + screenX] = state.remap[expectColor(color)] ?? color;
   }
@@ -492,7 +532,7 @@ export class IndexedGraphics {
     const stepY = startY < endY ? 1 : -1;
     let error = deltaX + deltaY;
     for (;;) {
-      this.plot(x, y, color, state);
+      this.plot(x, y, color, state, true);
       if (x === endX && y === endY) {
         return;
       }
@@ -563,7 +603,7 @@ export class IndexedGraphics {
           [centerX + y, centerY - x],
           [centerX + x, centerY - y],
         ] as const) {
-          this.plot(plotX, plotY, color, state);
+          this.plot(plotX, plotY, color, state, true);
         }
       }
       y += 1;
@@ -605,7 +645,7 @@ export class IndexedGraphics {
           (area > 0 && first >= 0 && second >= 0 && third >= 0) ||
           (area < 0 && first <= 0 && second <= 0 && third <= 0)
         ) {
-          this.plot(x, y, color, state);
+          this.plot(x, y, color, state, true);
         }
       }
     }

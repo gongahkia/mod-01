@@ -332,6 +332,7 @@ var MEMORY = Object.freeze({
   visual: 2162688,
   draw: 327680,
   transparency: 327760,
+  pattern: 327792,
   palette: 2097152,
   input: 327936,
   inputBytes: 48,
@@ -1768,6 +1769,7 @@ var IndexedGraphics = class {
   display;
   drawRegisters = /* @__PURE__ */ new Uint8Array(80);
   transparency = new Uint8Array(HARDWARE.paletteSize / 8);
+  pattern = /* @__PURE__ */ new Uint8Array(8);
   state = new MemoryDrawState(this.drawRegisters);
   rasterBytes = new Uint8Array(HARDWARE.height * MEMORY.rasterStride);
   rasterView = new DataView(this.rasterBytes.buffer);
@@ -1803,6 +1805,7 @@ var IndexedGraphics = class {
     this.drawRegisters.fill(0);
     this.resetTransparency();
     this.state.clipWidth = HARDWARE.width;
+    this.pattern.fill(0);
     this.state.clipHeight = HARDWARE.height;
     this.state.remap.set(this.display.remap);
     this.rasterBytes.fill(0);
@@ -1936,6 +1939,21 @@ var IndexedGraphics = class {
         writable: true,
       },
       {
+        name: 'primitive fill pattern',
+        address: MEMORY.pattern,
+        bytes: this.pattern,
+        writable: true,
+        validate: (offset, bytes) => {
+          const candidate = this.pattern.slice();
+          candidate.set(bytes, offset);
+          return (
+            (candidate[3] ?? 0) <= 1 &&
+            (candidate[4] ?? 0) <= 1 &&
+            candidate.subarray(5).every((value) => value === 0)
+          );
+        },
+      },
+      {
         name: 'raster callback state',
         address: MEMORY.rasterLive,
         bytes: this.rasterLive,
@@ -1985,7 +2003,7 @@ var IndexedGraphics = class {
       }
       case 'pixel': {
         const [x, y, color] = expectIntegers(command, 3);
-        this.plot(x, y, color, state);
+        this.plot(x, y, color, state, true);
         return;
       }
       case 'line': {
@@ -2051,6 +2069,21 @@ var IndexedGraphics = class {
       case 'palt_reset':
         expectIntegers(command, 0);
         this.resetTransparency();
+        return;
+      case 'fill_pattern': {
+        if (command.arguments.length !== 3)
+          throw new TypeError('fill_pattern expects three arguments');
+        const mask = expectInteger$1(command.arguments[0]);
+        const second = expectColor(expectInteger$1(command.arguments[1]));
+        const transparent = expectBoolean(command.arguments[2]);
+        if (mask < 0 || mask > 65535)
+          throw new RangeError('fill pattern mask must be between 0 and 65535');
+        this.pattern.set([mask & 255, mask >>> 8, second, 1, Number(transparent), 0, 0, 0]);
+        return;
+      }
+      case 'fill_pattern_reset':
+        expectIntegers(command, 0);
+        this.pattern.fill(0);
         return;
       case 'sprite': {
         const [handle, x, y] = command.arguments;
@@ -2121,7 +2154,7 @@ var IndexedGraphics = class {
         throw new TypeError(`unknown graphics command '${command.name}'`);
     }
   }
-  plot(x, y, color, state) {
+  plot(x, y, color, state, patterned = false) {
     const screenX = x - state.cameraX;
     const screenY = y - state.cameraY;
     if (
@@ -2135,6 +2168,16 @@ var IndexedGraphics = class {
       screenY >= state.clipY + state.clipHeight
     )
       return;
+    if (patterned && this.pattern[3] === 1) {
+      if (
+        (((this.pattern[0] ?? 0) | ((this.pattern[1] ?? 0) << 8)) &
+          (1 << (wrap(screenY, 4) * 4 + wrap(screenX, 4)))) !==
+        0
+      ) {
+        if (this.pattern[4] === 1) return;
+        color = this.pattern[2] ?? 0;
+      }
+    }
     this.back[screenY * HARDWARE.width + screenX] = state.remap[expectColor(color)] ?? color;
   }
   line(startX, startY, endX, endY, color, state) {
@@ -2146,7 +2189,7 @@ var IndexedGraphics = class {
     const stepY = startY < endY ? 1 : -1;
     let error = deltaX + deltaY;
     for (;;) {
-      this.plot(x, y, color, state);
+      this.plot(x, y, color, state, true);
       if (x === endX && y === endY) return;
       const doubled = error * 2;
       if (doubled >= deltaY) {
@@ -2193,7 +2236,7 @@ var IndexedGraphics = class {
           [centerX + y, centerY - x],
           [centerX + x, centerY - y],
         ])
-          this.plot(plotX, plotY, color, state);
+          this.plot(plotX, plotY, color, state, true);
       y += 1;
       if (error < 0) error += 2 * y + 1;
       else {
@@ -2222,7 +2265,7 @@ var IndexedGraphics = class {
           (area > 0 && first >= 0 && second >= 0 && third >= 0) ||
           (area < 0 && first <= 0 && second <= 0 && third <= 0)
         )
-          this.plot(x, y, color, state);
+          this.plot(x, y, color, state, true);
       }
   }
   drawSprite(name, x, y, state) {
@@ -5036,6 +5079,8 @@ var DRAW_CALLS = /* @__PURE__ */ new Set([
   'pal_reset',
   'palt',
   'palt_reset',
+  'fill_pattern',
+  'fill_pattern_reset',
   'raster_scroll',
   'print',
   'font_print',

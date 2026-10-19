@@ -58,6 +58,26 @@ The project display file can supply an initial logical remap and scanline states
 palette and raster commands override those defaults. Asset file schemas are documented in
 [ASSETS.md](ASSETS.md).
 
+### Primitive fill patterns
+
+`fill_pattern(mask: Int, second: Color, transparent: Bool)` enables a repeating
+4×4 pattern for `pixel`, `line`, `rect`, `rect_fill`, `circle`, `circle_fill`
+and `triangle`, including outlines. The mask must be an integer 0–65535. Bit
+`(screen_y % 4) * 4 + screen_x % 4` selects the pixel: zero uses the drawing
+call's colour, one uses `second`. Both selected colours pass through `pal`.
+The pattern is anchored to the screen **after** camera subtraction; clipping
+does not shift it. With `transparent = true`, one-bits leave existing pixels
+unchanged instead of drawing `second`. The blit-transparency mask is unrelated
+and does not suppress either primitive colour.
+
+`fill_pattern_reset()` disables the pattern. Boot/frame reset also disables it;
+`pal_reset` and `palt_reset` leave it alone. Clear, text, asset blits and raw
+framebuffer writes ignore the pattern. Setting/resetting costs one device work
+unit and one draw command; subsequent primitives retain their ordinary work
+costs. Invalid arguments fault with `M019009` at the call's source span, without
+changing pattern registers. Pattern calls are forbidden in `on raster`.
+The [hardware reference](HARDWARE.md) defines raw bytes and snapshot restore.
+
 ## Raster display list
 
 `on raster(line: Int)` runs once for each scanline from 0 through 143 after `on draw`. Only

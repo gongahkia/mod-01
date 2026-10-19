@@ -609,6 +609,8 @@ const DRAW_CALLS = new Set([
   'pal_reset',
   'palt',
   'palt_reset',
+  'fill_pattern',
+  'fill_pattern_reset',
   'raster_scroll',
   'print',
   'font_print',

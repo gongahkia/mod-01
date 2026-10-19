@@ -9,8 +9,9 @@ fi
 pnpm format:check
 pnpm lint
 pnpm typecheck
-pnpm test
+# Native/headless process tests execute these generated hosts, not only TypeScript source.
 pnpm build
+pnpm test
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features

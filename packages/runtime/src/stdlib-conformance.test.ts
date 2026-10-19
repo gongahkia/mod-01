@@ -20,7 +20,7 @@ describe('compiled standard library across production hosts', () => {
     if (temporary) rmSync(temporary, { recursive: true, force: true });
   });
 
-  for (const fixture of ['math', 'text', 'bits']) {
+  for (const fixture of ['math', 'text', 'bits', 'palette']) {
     for (const debug of [false, true]) {
       it(`executes ${fixture} assertions in ${debug ? 'debug' : 'release'}, native and headless`, async () => {
         const output = join(temporary, `${fixture}-${String(debug)}.mjs`);
@@ -42,6 +42,12 @@ describe('compiled standard library across production hosts', () => {
         });
         const first = runtime.runFrame(emptyInputFrame());
         expect(first.output.indexedPixels[34 * 240 + 12]).toBe(11);
+        if (fixture === 'palette') {
+          for (let color = 0; color < 256; color++)
+            expect(first.output.indexedPixels[Math.floor(color / 16) * 240 + (color % 16)]).toBe(
+              color,
+            );
+        }
         const checkpoint = runtime.snapshot();
         const second = runtime.runFrame(emptyInputFrame());
         runtime.restore(checkpoint);

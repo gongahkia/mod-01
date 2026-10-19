@@ -1977,12 +1977,16 @@ impl<'syntax> Analyzer<'syntax> {
     fn literal_type(&mut self, literal: &Literal, expected: Option<&Type>, span: Span) -> Type {
         match literal {
             Literal::Int(value) if expected == Some(&Type::Color) => {
-                if (0..32).contains(value) {
+                if (0..256).contains(value) {
                     Type::Color
                 } else {
                     self.diagnostics.push(
-                        Diagnostic::error("M013119", span, "colour index must be between 0 and 31")
-                            .with_primary_label("outside the fixed master palette"),
+                        Diagnostic::error(
+                            "M013119",
+                            span,
+                            "colour index must be between 0 and 255",
+                        )
+                        .with_primary_label("outside the fixed master palette"),
                     );
                     Type::Error
                 }

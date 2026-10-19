@@ -5,6 +5,10 @@ handles such as `#hero` and `#theme`. Sprite/tile-set/display JSON use current
 revision 2; map/font/sound/music each use their own current revision 1 schema.
 These are independent asset schemas, not compatibility profiles.
 
+Stored noise/WFC map recipes consume current revision-2 tile sets and emit current
+revision-1 maps. Generated results pass the same asset/compiler/packed admission;
+obsolete revision-1 tile sets are rejected instead of producing an un-packable game.
+
 Native sprite/tile PNG import uses the shared Rust decoder and palette converter.
 It checks PNG source size (16 MiB), IHDR geometry and purpose before pixel
 decoding, with decoder allocation limits as well: sprites are 1–128 on each axis;

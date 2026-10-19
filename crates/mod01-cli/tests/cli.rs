@@ -521,7 +521,7 @@ source = "on draw:\n  clear(0)\n"
 name = "tiles"
 kind = "tile_set"
 path = "assets/tiles.m01g"
-payload = '''{{"revision":1,"kind":"tile_set","tiles":[[{pixels}]],"flags":[0]}}'''
+payload = '''{{"revision":2,"kind":"tile_set","tiles":[[{pixels}]],"flags":[0]}}'''
 
 [[asset]]
 name = "world"
@@ -558,6 +558,8 @@ tiles = [0]
     );
     let generated = fs::read_to_string(&cart).expect("generated work-cart reads");
     let project = modl_core::parse_workcart(&generated).expect("generated work-cart parses");
+    let packed = modl_core::pack_workcart(&generated).expect("generated current assets pack");
+    modl_core::load_cartridge_program(&packed.bytes).expect("generated cartridge loads");
     let map: Value =
         serde_json::from_slice(&project.files["assets/world.m01m"]).expect("generated map is JSON");
     assert_eq!(map["layers"][0]["width"], 4);

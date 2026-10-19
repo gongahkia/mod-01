@@ -380,7 +380,7 @@ fn read_tile_set(project: &WorkcartProject, name: &str) -> Result<usize, Cartrid
             "tile set '{name}' is not a valid tile-set payload: {error}"
         ))
     })?;
-    if tiles.revision != 1
+    if tiles.revision != 2
         || tiles.kind != "tile_set"
         || tiles.tiles.is_empty()
         || tiles.tiles.len() > MAX_WFC_TILES
@@ -388,7 +388,7 @@ fn read_tile_set(project: &WorkcartProject, name: &str) -> Result<usize, Cartrid
         || tiles.flags.len() != tiles.tiles.len()
     {
         return Err(generator_error(format!(
-            "tile set '{name}' is not a revision-1 tile set"
+            "tile set '{name}' is not a revision-2 tile set"
         )));
     }
     Ok(tiles.tiles.len())
@@ -564,7 +564,7 @@ source = "on draw:\n  clear(0)\n"
 name = "tiles"
 kind = "tile_set"
 path = "assets/tiles.m01g"
-payload = '''{"revision":1,"kind":"tile_set","tiles":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]],"flags":[0,0]}'''
+payload = '''{"revision":2,"kind":"tile_set","tiles":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]],"flags":[0,0]}'''
 
 [[asset]]
 name = "source"
@@ -605,6 +605,8 @@ pattern_size = 2
         let first = materialize_workcart_recipe(CART, "noise").expect("noise generates");
         let second = materialize_workcart_recipe(CART, "noise").expect("noise generates");
         assert_eq!(first, second);
+        crate::pack_workcart(&first)
+            .expect("generated source passes current asset/capacity admission");
         let project = parse_workcart(&first).expect("generated work-cart parses");
         assert_eq!(project.recipes.len(), 2);
         let map: serde_json::Value =
@@ -619,6 +621,7 @@ pattern_size = 2
     #[test]
     fn wfc_materialization_uses_source_patterns_deterministically() {
         let generated = materialize_workcart_recipe(CART, "wfc").expect("wfc generates");
+        crate::pack_workcart(&generated).expect("WFC output packs through current admission");
         assert_eq!(
             generated,
             materialize_workcart_recipe(CART, "wfc").expect("wfc regenerates")
@@ -642,6 +645,17 @@ pattern_size = 2
 
     #[test]
     fn generation_rejects_unknown_recipes_and_invalid_tile_indexes() {
+        let obsolete = CART.replacen(
+            "\"revision\":2,\"kind\":\"tile_set\"",
+            "\"revision\":1,\"kind\":\"tile_set\"",
+            1,
+        );
+        assert!(
+            materialize_workcart_recipe(&obsolete, "noise")
+                .unwrap_err()
+                .message
+                .contains("revision-2")
+        );
         assert_eq!(
             materialize_workcart_recipe(CART, "missing")
                 .expect_err("missing recipe fails")

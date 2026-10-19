@@ -907,7 +907,7 @@ impl StudioApp {
                 match (&bytes, &schema) {
                     (Ok(bytes), Ok(schema)) => {
                         ui.label(format!("SCHEMA {schema} / {} OF 8192 BYTES", bytes.len()));
-                        ui.label("Browser-compatible .m01save export / checksum verified import");
+                        ui.label("Current .m01save export / checksum verified import");
                     }
                     (Err(error), _) | (_, Err(error)) => {
                         ui.label(error);
@@ -954,12 +954,14 @@ impl StudioApp {
             "export" => {
                 let result = read_save(id).and_then(|bytes| {
                     let schema = read_save_schema(id)?;
-                    save_manager::export(id, schema, &bytes)
+                    let stem = modl_core::cartridge::cartridge_file_stem(id)
+                        .map_err(|error| error.to_string())?;
+                    save_manager::export(id, schema, &bytes).map(|bytes| (stem, bytes))
                 });
                 match result {
-                    Ok(bytes) => {
+                    Ok((stem, bytes)) => {
                         if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name(format!("{id}.m01save"))
+                            .set_file_name(format!("{stem}.m01save"))
                             .add_filter("MOD-01 save", &["m01save"])
                             .save_file()
                         {
@@ -4057,10 +4059,7 @@ fn indexed_image(pixels: &[u8]) -> Option<image::RgbaImage> {
 fn save_path(id: &str) -> Result<PathBuf, String> {
     let directories = ProjectDirs::from("", "MOD-01", "Native Studio")
         .ok_or("cannot find application data directory")?;
-    Ok(directories
-        .data_dir()
-        .join("saves")
-        .join(format!("{id}.bin")))
+    save_manager::storage_path(directories.data_dir(), id)
 }
 
 fn read_save(id: &str) -> Result<Vec<u8>, String> {
@@ -4118,36 +4117,8 @@ fn clear_save_schema(id: &str) -> Result<(), String> {
 fn backup_save(id: &str) -> Result<(), String> {
     let bytes = read_save(id)?;
     let schema = read_save_schema(id)?;
-    let exported = save_manager::export(id, schema, &bytes)?;
     let saves = save_path(id)?;
-    let directory = saves.parent().ok_or("invalid save path")?.join("recovery");
-    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    fs::write(
-        directory.join(format!("{id}-{stamp:020}.m01save")),
-        exported,
-    )
-    .map_err(|error| error.to_string())?;
-    let mut revisions = fs::read_dir(&directory)
-        .map_err(|error| error.to_string())?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.starts_with(&format!("{id}-")) && name.ends_with(".m01save")
-                })
-        })
-        .collect::<Vec<_>>();
-    revisions.sort_by(|left, right| right.cmp(left));
-    for old in revisions.iter().skip(10) {
-        fs::remove_file(old).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    save_manager::backup(&saves, id, schema, &bytes).map(|_| ())
 }
 
 fn write_save(id: &str, bytes: &[u8]) -> Result<(), String> {

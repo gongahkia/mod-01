@@ -51,6 +51,28 @@ choices remain outstanding.
 
 ## Progress
 
+- Native saves/schema/export defaults now use the checked shared portable stem,
+  without changing persistent IDs or the current save-container bytes. Recovery
+  has separate per-ID directories instead of ambiguous `ID-` prefix matching:
+  `abc` retention cannot prune `abc-def`. New backups use create-new plus sync,
+  bounded collision retries and retention that protects the immediate pre-change
+  copy against clock rollback. Only bounded, regular, valid same-ID backups count
+  toward the ten-copy limit; foreign/malformed/oversized/symlink files remain
+  untouched. Four new regressions cover these cases and old development-file
+  preservation. All five save-manager tests, 15 real native game integrations,
+  debug/replay save isolation and warning-free workspace Clippy pass. No user
+  files were migrated, renamed or deleted; old filenames are not silently loaded.
+  The full rerun passes 275 runtime, 128 core, 116 native, 33 CLI integration and
+  one CLI report-unit test, formatting/lint/types/Clippy/builds, nine unchanged
+  raw/PNG pairs and both Linux package verifications without PATH. An earlier
+  gate was terminated by SIGTERM during native tests, not an assertion failure.
+  Inspected `output/native-save-qa-iYFLvq` captures prove `con.foo` displays as
+  its original ID, writes `cart-con_foo.bin`, and fits confirmation/reset at
+  900×600. Confirmed reset leaves a zero-length active image and a recovery with
+  the original 8 KiB SHA-256; stopped Studio exits normally on WM_DELETE_WINDOW.
+  This WSL audio device emitted repeated ALSA I/O errors during play: physical
+  audio/device-error handling is not verified by this GUI check. Asset export
+  defaults, device-failure handling and final cross-host/product audit remain open.
 - Core now provides a checked, injective portable cartridge filename stem:
   `cart-ID`, with dots encoded as underscores (not legal in cartridge IDs).
   Invalid IDs are rejected before path joining. CLI/Studio packed/PNG defaults,

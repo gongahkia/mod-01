@@ -58,6 +58,9 @@ member is selected. `mod01-game.json` records the whole-game SHA-256 identity,
 shipping byte count, main ID and a catalog of alias → persistent ID / logical ROM
 bytes. The README lists every separate save identity. Transfers resolve only
 against the packaged catalog; no loose dependency files or downloads are needed.
+Native on-disk save filenames use the same portable stem; IDs inside save data
+remain unchanged. Existing development save files are not automatically renamed
+or migrated; see [save storage and recovery](STUDIO.md#source-assets-and-recovery).
 
 `--player`, `--node`, `--host`, and `--node-license` select explicit toolchain files.
 `--platform linux|windows|macos` supports packaging existing target binaries, **not**

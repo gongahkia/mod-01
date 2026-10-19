@@ -97,6 +97,22 @@ Saving keeps bounded local recovery revisions. The save manager exports/imports
 checksummed cartridge-bound save containers and retains recovery before
 replacement. Local saves are keyed by validated cartridge identity.
 
+On disk, native saves use the shared portable stem under the application data
+directory: `saves/cart-ID.bin` and `cart-ID.schema`. Dots in an ID become
+underscores only in filenames; the ID inside the game/save container is unchanged.
+Recovery lives in `saves/recovery/cart-ID.saves/TIMESTAMP.m01save`. Pruning retains
+ten valid backups for that exact ID, never a different ID with a shared name
+prefix. The newly created backup is retained even if the clock moves backwards;
+foreign, malformed, oversized and linked files are not pruned. Recovery creation
+uses [atomic create-new](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html#method.create_new)
+so timestamp collisions cannot overwrite an existing file.
+
+There is no old-path fallback or automatic data migration. Existing unprefixed
+development `.bin`/`.schema` files and flat recovery files are left untouched.
+To retain an earlier development save, export/import its current `.m01save`
+container, or—while Studio and players are stopped—copy the raw `.bin` and any
+matching `.schema` sidecar to the new names. Keep the originals until verified.
+
 ## Running and debugging
 
 Keyboard port one uses arrows plus Z/X/A/S, Q/W and Enter. Native gamepads fill

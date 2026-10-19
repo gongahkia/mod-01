@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   decodeRuntimeAssets,
@@ -39,6 +39,39 @@ const font = {
 };
 
 describe('source-visible asset codec', () => {
+  it('uses ASCII declaration order independently of insertion order or host collation', () => {
+    const names = ['a_', 'z', '_a', 'a0', 'a', 'A'];
+    const expected = ['A', '_a', 'a', 'a0', 'a_', 'z'];
+    const collation = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+      throw new Error('locale collation must not affect asset admission');
+    });
+    try {
+      for (const kind of ['sprite', 'sound'] as const) {
+        for (const order of [names, [...names].reverse()]) {
+          const declarations = Object.fromEntries(
+            order.map((name) => [name, { kind, path: `${name}.json` }]),
+          );
+          const files = Object.fromEntries(
+            order.map((name) => [
+              `${name}.json`,
+              encodeAssetFile(
+                kind === 'sound'
+                  ? sound
+                  : { revision: 2, kind: 'sprite', width: 1, height: 1, frames: [[7]] },
+              ),
+            ]),
+          );
+          const assets = decodeRuntimeAssets(declarations, files);
+          expect(
+            (kind === 'sound' ? assets.audio : assets.visual).map((asset) => asset.name),
+          ).toEqual(expected);
+        }
+      }
+    } finally {
+      collation.mockRestore();
+    }
+  });
+
   it('rejects malformed and numerically unsafe sound JSON at the public asset boundary', () => {
     for (const invalid of [
       { ...sound, waveform: 'sample' },

@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- Returned runtime asset lists, integer-save views and pending-write lists now
+  use ascending ASCII order, matching the existing device descriptor stores and
+  canonical on-disk save encoding. This removes the three remaining runtime
+  locale-sensitive comparators; no device IDs or save format are redefined.
+  Regressions first rejected accidental host-collation calls and now verify
+  mixed-case/underscore/digit names, reversed insertion, unchanged save images
+  and restore ordering while localeCompare is deliberately unavailable. The
+  21 focused runtime tests, lint/types/build and existing CLI replay goldens pass.
+  All 322 runtime/script tests pass. The strengthened ten-cartridge artifact
+  verifier and all three actual Linux package comparisons pass with unchanged
+  packed/PNG hashes, including the maintained complete bank-swap route.
 - Native asset number readers now reuse the shared Rust admission helper instead
   of serde_json's storage-specific integer accessors. Regressions first reproduced
   valid `2.0` sprite rejection, `255.0` tile export as transparent black and a

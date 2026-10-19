@@ -2842,7 +2842,7 @@ function decodeRuntimeAssets(declarations, files, displayPath) {
   const visual = [];
   const audio = [];
   for (const [name, declaration] of Object.entries(declarations).sort(([left], [right]) =>
-    left.localeCompare(right),
+    left < right ? -1 : left > right ? 1 : 0,
   )) {
     const bytes = files[declaration.path];
     if (bytes === void 0) throw new TypeError(`asset '${name}' is missing '${declaration.path}'`);
@@ -4762,7 +4762,7 @@ var SaveMemory = class SaveMemory {
   }
   pendingWrites() {
     return [...this.writes]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, value]) => ({
         key,
         value,
@@ -4940,7 +4940,7 @@ function isSaveValues(value) {
 }
 function sortedValues(values) {
   return Object.fromEntries(
-    Object.entries(values).sort(([left], [right]) => left.localeCompare(right)),
+    Object.entries(values).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
   );
 }
 function encodedBytes(values) {
@@ -4948,15 +4948,7 @@ function encodedBytes(values) {
 }
 function encodeValues(values) {
   if (Object.keys(values).length === 0) return /* @__PURE__ */ new Uint8Array();
-  const bytes = new TextEncoder().encode(
-    JSON.stringify(
-      Object.fromEntries(
-        Object.entries(values).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0,
-        ),
-      ),
-    ),
-  );
+  const bytes = new TextEncoder().encode(JSON.stringify(sortedValues(values)));
   if (bytes.length > HARDWARE.saveCapacityBytes)
     throw new RangeError('cartridge save exceeds the 8 KiB capacity');
   return bytes;

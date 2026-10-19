@@ -113,7 +113,7 @@ export class SaveMemory {
 
   public pendingWrites(): readonly SaveWrite[] {
     return [...this.writes]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
       .map(([key, value]) => ({ key, value }));
   }
 
@@ -308,7 +308,7 @@ export function isSaveValues(value: unknown): value is SaveValues {
 
 function sortedValues(values: SaveValues): SaveValues {
   return Object.fromEntries(
-    Object.entries(values).sort(([left], [right]) => left.localeCompare(right)),
+    Object.entries(values).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
   );
 }
 
@@ -318,15 +318,7 @@ function encodedBytes(values: SaveValues): number {
 
 function encodeValues(values: SaveValues): Uint8Array {
   if (Object.keys(values).length === 0) return new Uint8Array();
-  const bytes = new TextEncoder().encode(
-    JSON.stringify(
-      Object.fromEntries(
-        Object.entries(values).sort(([left], [right]) =>
-          left < right ? -1 : left > right ? 1 : 0,
-        ),
-      ),
-    ),
-  );
+  const bytes = new TextEncoder().encode(JSON.stringify(sortedValues(values)));
   if (bytes.length > HARDWARE.saveCapacityBytes)
     throw new RangeError('cartridge save exceeds the 8 KiB capacity');
   return bytes;

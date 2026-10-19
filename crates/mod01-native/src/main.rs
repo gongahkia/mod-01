@@ -23,6 +23,7 @@ mod asset_tools;
 mod audio;
 mod launch;
 mod player;
+mod playground;
 mod project;
 mod replay;
 mod runtime;
@@ -54,7 +55,7 @@ use ui_assets::PixelCursors;
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
-const fn manual_topics() -> [(&'static str, &'static str); 11] {
+const fn manual_topics() -> [(&'static str, &'static str); 12] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
         ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
@@ -64,6 +65,7 @@ const fn manual_topics() -> [(&'static str, &'static str); 11] {
             include_str!("../../../docs/STANDARD_LIBRARY.md"),
         ),
         ("SOURCE TOOLS", include_str!("../../../docs/EDITOR.md")),
+        ("PLAYGROUND", include_str!("../../../docs/PLAYGROUND.md")),
         ("ASSETS", include_str!("../../../docs/ASSETS.md")),
         ("HARDWARE", include_str!("../../../docs/HARDWARE.md")),
         ("LIMITS", include_str!("../../../docs/LIMITS.md")),
@@ -142,6 +144,8 @@ struct StudioApp {
     view: View,
     runtime: RuntimeBridge,
     preview_runtime: RuntimeBridge,
+    playground: playground::Playground,
+    show_playground: bool,
     audio: Option<AudioOutput>,
     gamepads: Option<Gilrs>,
     texture: Option<TextureHandle>,
@@ -223,6 +227,8 @@ impl StudioApp {
             view: View::Code,
             runtime: RuntimeBridge::new(host_path.clone()),
             preview_runtime: RuntimeBridge::new(host_path),
+            playground: playground::Playground::new(),
+            show_playground: false,
             audio: AudioOutput::new().ok(),
             gamepads: Gilrs::new().ok(),
             texture: None,
@@ -1706,17 +1712,34 @@ impl StudioApp {
                         ui.close();
                     }
                 });
-                ui.menu_button("TOOLS", |ui| {
-                    if ui.button("COMPILER EXPLORER").clicked() {
-                        self.open_explorer();
-                        ui.close();
-                    }
-                    if ui.button("SAVE MANAGER").clicked() {
-                        self.show_save_manager = true;
-                        self.confirm_save_action = None;
-                        ui.close();
-                    }
-                });
+            });
+            ui.menu_button("TOOLS", |ui| {
+                if ui.button("MODL PLAYGROUND / REPL").clicked() {
+                    self.show_playground = true;
+                    self.source_editor.dismiss_completion();
+                    self.playground.focus();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        self.project.is_some(),
+                        egui::Button::new("COMPILER EXPLORER"),
+                    )
+                    .clicked()
+                {
+                    self.open_explorer();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(self.project.is_some(), egui::Button::new("SAVE MANAGER"))
+                    .clicked()
+                {
+                    self.show_save_manager = true;
+                    self.confirm_save_action = None;
+                    ui.close();
+                }
+            });
+            ui.add_enabled_ui(self.project.is_some(), |ui| {
                 ui.menu_button("EXPORT", |ui| {
                     if ui.button("NATIVE GAME").clicked() {
                         self.export_native_player();
@@ -2669,6 +2692,7 @@ impl eframe::App for StudioApp {
         let context = root.ctx().clone();
         self.process_events(&context);
         self.process_preview(&context);
+        self.playground.poll(&context);
         if self.player_mode {
             self.player_ui(root);
             return;
@@ -2764,6 +2788,10 @@ impl eframe::App for StudioApp {
             self.show_new_asset &= open;
         }
         self.help_windows(&context);
+        if self.show_playground {
+            self.playground
+                .ui(&context, &mut self.show_playground, self.project.as_ref());
+        }
         if self.project.is_none() {
             egui::CentralPanel::default()
                 .frame(ui_theme::screen_frame())
@@ -2803,6 +2831,7 @@ impl eframe::App for StudioApp {
                             });
                     });
                 });
+            self.cursors.paint(&context);
             return;
         }
         egui::Panel::left("project")

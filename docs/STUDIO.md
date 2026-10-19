@@ -16,7 +16,9 @@ The sample picker opens bundled cartridges for editing or play. The workspace
 contains code, layered sprites, structured assets, player and manifest views.
 PROJECT opens/creates/saves projects and cartridges and exposes recovery.
 BUILD checks, runs, debugs and packs. TOOLS provides compiler/source inspection
-and save management. EXPORT offers native games and cartridge PNGs.
+and save management. Its [MODL playground](PLAYGROUND.md) runs expressions and
+drawing in an isolated production console, with optional copied project context.
+It is available even before opening a cartridge. EXPORT offers native games and cartridge PNGs.
 There is no browser export menu.
 
 ## Source, assets and recovery

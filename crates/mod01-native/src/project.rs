@@ -98,7 +98,10 @@ impl NativeProject {
         Ok(project)
     }
 
-    fn from_source(source: String, workcart_path: Option<PathBuf>) -> Result<Self, String> {
+    pub(crate) fn from_source(
+        source: String,
+        workcart_path: Option<PathBuf>,
+    ) -> Result<Self, String> {
         let view = workcart_project_view(&source).map_err(|error| error.to_string())?;
         let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
         let selected_file = manifest.entry.clone();

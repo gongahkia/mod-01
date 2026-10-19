@@ -42,6 +42,8 @@ Use `target/debug/mod01-studio.exe` on Windows. Studio's sample picker opens the
 bundled cartridges for play or source inspection. Source, layered sprites, maps,
 fonts, audio, compiler inspection and debugger tools are native interfaces.
 The UI uses BigBlue Terminal Plus and Kenney pixel cursors.
+TOOLS → [MODL playground](docs/PLAYGROUND.md) evaluates expressions and drawing
+without modifying your cartridge or saves.
 
 ## CLI and game distribution
 

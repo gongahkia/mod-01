@@ -20,7 +20,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Number formatting/conversion  | Explicit numeric formatting, padding and safe parsing work in HUDs and reject invalid inputs predictably.                                                                                                   | [x]      |
 | Text helpers                  | Bounded length/slice/character conversion/split operations have useful typed results and tested edge cases.                                                                                                 | [x]      |
 | Bit operations                | AND/OR/XOR/NOT/shifts use explicit integer-width/overflow rules with parser, compiler and execution coverage.                                                                                               | [x]      |
-| Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [ ]      |
+| Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [x]      |
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [ ]      |
 | Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
@@ -106,3 +106,13 @@ choices remain outstanding.
   image and compares every frame's pixels and work for the default and seed 1,
   in release/debug. The shared/native/headless helper/palette suite and native
   host tests pass together (11 tests); explicit seed zero remains supported.
+
+- Native playground: `docs/PLAYGROUND.md` specifies fresh-machine expression and
+  drawing evaluations through the ordinary Rust compiler and production host.
+  Tests cover actual values, Unicode/formatting, rendered pixels, frame-boundary
+  state, copied unsaved project/asset context, no save commits, deterministic
+  seeds, runtime/type/work faults, cancellation and history restoration.
+  All 32 native tests and workspace Clippy pass. Real native screenshots were
+  inspected for evaluation, drawing, error byte spans, history restoration,
+  exact wrapped source and 900×600 layout; retained in
+  `output/native-qa-8iPAwp/`. No project was written during this visual QA.

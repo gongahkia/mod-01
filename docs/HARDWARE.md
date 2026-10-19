@@ -90,6 +90,12 @@ does not execute these calls during construction. `tests/conformance/boot.modl` 
 RNG/memory/drawing aliases, start-phase status, retained initializer attribution and the exact combined
 boot-budget boundary in release/debug native and headless tests.
 
+Deferred cartridge loads finish this same boot boundary before their first display
+frame, including when a debug program runs without explicit statement stepping.
+Boot pixels become front-buffer input to frame zero; boot drawing, work and debug
+events do not become that frame's capture. Restoring a deferred boundary repeats
+the same behaviour without changing any previously returned frame or trace.
+
 At each display frame's beginning, back receives front; draw state, raster records and the callback
 accumulator reset to the cartridge display defaults. Drawing and bus writes then occur in program
 order. Scanout reads back through the raster table after all 144 callbacks, publishes resolved pixels,

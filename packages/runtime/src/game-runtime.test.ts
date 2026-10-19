@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { encodeAssetFile, type RuntimeAssetSource } from './asset-codec';
 import { MEMORY } from './bus';
+import { createConsoleRuntime } from './console-runtime';
 import type { GameDefinition } from './game-definition';
 import {
   createGameRuntime,
@@ -108,11 +109,11 @@ describe('whole-game scheduler with actual MODL release/debug factories', () => 
     temporary = mkdtempSync(join(tmpdir(), 'mod01-game-runtime-'));
     execFileSync('cargo', ['build', '--quiet', '-p', 'mod01-cli'], { cwd: root });
     for (const debug of [false, true])
-      for (const name of ['main', 'arena', 'reload']) {
+      for (const name of ['main', 'arena', 'reload', 'boot']) {
         const output = join(temporary, `${name}-${String(debug)}.mjs`);
         execFileSync(join(root, 'target/debug/mod01'), [
           'build',
-          join(root, `tests/conformance/game-${name}.modl`),
+          join(root, `tests/conformance/${name === 'boot' ? 'boot' : `game-${name}`}.modl`),
           '--output',
           output,
           ...(debug ? ['--debug'] : []),
@@ -184,6 +185,49 @@ describe('whole-game scheduler with actual MODL release/debug factories', () => 
 
   for (const debug of [false, true]) {
     const mode = debug ? 'debug' : 'release';
+    it(`finishes boot drawing before a loaded ${mode} cartridge's first display frame`, () => {
+      const target = factory('boot', debug);
+      const reference = createConsoleRuntime(target, { ...configuration, seed: 1, debug });
+      if (debug)
+        for (let step = 0; ; step++) {
+          expect(step).toBeLessThan(250);
+          if ('booted' in reference.stepDebug(emptyInputFrame())) break;
+        }
+      const expected = reference.runFrame(emptyInputFrame());
+      const game = createGameRuntime({
+        identity: 'd'.repeat(64),
+        seed: 1,
+        debug,
+        members: [
+          {
+            alias: 'main',
+            id: 'boot-loader',
+            configuration,
+            factory: (api) => ({
+              ...blank(api),
+              update() {
+                api.call('load_cart', ['arena', ''], span);
+              },
+            }),
+          },
+          { alias: 'arena', id: 'boot-target', configuration, factory: target },
+        ],
+      });
+      game.runFrame(emptyInputFrame());
+      expect(game.inspect()).toMatchObject({ cartridgeAlias: 'arena', booted: false });
+      const boundary = game.snapshot();
+      // Deliberately use full-frame execution, not an explicit debug-boot helper.
+      const actual = game.runFrame(emptyInputFrame());
+      expect(actual).toMatchObject({ frame: 1, cartridgeFrame: 0, cartridgeAlias: 'arena' });
+      deepStrictEqual(actual.output, expected.output);
+      deepStrictEqual(actual.drawCommands, expected.drawCommands);
+      deepStrictEqual(actual.audioCommands, expected.audioCommands);
+      expect(actual.workUnits).toBe(expected.workUnits);
+      expect([...actual.output.indexedPixels.slice(0, 3)]).toEqual([0, 11, 23]);
+      game.restore(boundary);
+      deepStrictEqual(game.runFrame(emptyInputFrame()), actual);
+    });
+
     it(`isolates state/save identities and applies loads after the old ${mode} frame`, () => {
       const game = createGameRuntime(definition(debug));
       const first = frame(game, emptyInputFrame(), debug);

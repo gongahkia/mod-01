@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Deferred loads now publish their separate boot framebuffer before frame zero in
+  release and full-frame debug execution. Two real compiled MODL regressions
+  reproduce the original failure, compare eager/loaded pixels, commands and work,
+  and verify checkpoint replay. Capture resets also prevent restored boot events
+  from mutating a previously returned debug trace. All 274 runtime tests (42 files),
+  including the 41 targeted scheduler/control/hardware tests, lint/types and rebuilt
+  production hosts pass.
 - CLI `pack`/`check`/`watch`/`info --source` and headless play now admit whole games
   through shared Rust preparation and the production scheduler. Three new CLI
   integrations exercise a shipping bundle larger than one ROM (each member still

@@ -5122,11 +5122,19 @@ function createConsoleRuntime(factory, configuration, services = {}) {
         });
       const active = requireMachine();
       active.assertRunnable();
-      drawCommands = [];
-      audioCommands = [];
-      frameOutput = void 0;
-      debugTrace = [];
-      debugTraceTruncated = false;
+      resetCapture();
+      if (!active.inspectExecution().booted) {
+        graphics.beginFrame();
+        rendering = true;
+        try {
+          active.boot();
+        } finally {
+          rendering = false;
+        }
+        graphics.finishFrame();
+        boundarySnapshot = captureSnapshot();
+        resetCapture();
+      }
       graphics.beginFrame();
       rendering = true;
       let report;
@@ -5169,11 +5177,7 @@ function createConsoleRuntime(factory, configuration, services = {}) {
           end: 0,
         });
       if (!debugFrameActive) {
-        drawCommands = [];
-        audioCommands = [];
-        frameOutput = void 0;
-        debugTrace = [];
-        debugTraceTruncated = false;
+        resetCapture();
         graphics.beginFrame();
         debugFrameActive = true;
       }
@@ -5313,6 +5317,13 @@ function createConsoleRuntime(factory, configuration, services = {}) {
       };
     },
   };
+  function resetCapture() {
+    drawCommands = [];
+    audioCommands = [];
+    frameOutput = void 0;
+    debugTrace = [];
+    debugTraceTruncated = false;
+  }
   function captureSnapshot() {
     return {
       revision: 7,

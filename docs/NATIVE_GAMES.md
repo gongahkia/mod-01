@@ -156,3 +156,20 @@ This verifies visible startup, frame/save delivery and orderly shutdown. It is
 not pixel-perfect screenshots on every OS or physical touchscreen/controller/
 speaker-quality qualification; the Linux visual inspection and deterministic
 input/PCM tests provide their separate, stated evidence.
+
+The renderer needs an OpenGL 2.0+ capable driver. Hosted Windows CI initially
+failed that requirement, so its window check uses pinned Mesa 26.2.4 llvmpipe.
+The [setup script](../scripts/setup-windows-qa-mesa.ps1) verifies the primary
+publisher's archive SHA-256 before extraction. Only the uniquely owned GUI-test
+package receives those driver DLLs; no deployment utility or registry/global
+driver installation is run. Normal exports and uploaded Studio archives do not
+gain a Mesa dependency or silently bundle it. On a user's machine the installed
+graphics driver must provide the required OpenGL support.
+
+This follows [Mesa's documented per-application software-driver method](https://docs.mesa3d.org/drivers/llvmpipe.html#windows).
+The additional Windows result is explicitly software-driver qualification, not
+physical GPU qualification. Driver staging is Windows CI-only, preflights all
+targets and refuses overwrites; its unit tests do not pretend dummy DLL fixtures
+are executable graphics drivers. Actual window/frame/normal-close checks still
+run against the real player. Full graphics, PCM and game equivalence have their
+separate conformance checks described above.

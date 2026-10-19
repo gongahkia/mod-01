@@ -92,6 +92,11 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a node scripts/verify-native-window.mjs target/release/mod01-studio
 
+      - name: Prepare pinned software OpenGL for Windows GUI QA
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-qa-mesa.ps1
+
       - name: Open and close a real packaged Windows or macOS window
         if: runner.os != 'Linux'
         run: node scripts/verify-native-window.mjs target/release/mod01-studio${{ runner.os == 'Windows' && '.exe' || '' }}

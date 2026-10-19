@@ -15,6 +15,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { stageWindowsGraphicsDriver } from './native-window-driver.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const platform = process.platform;
@@ -78,8 +79,18 @@ try {
   writeFileSync(workcart, source);
   execute(cli, ['export', 'native', workcart, '--output', output, '--player', player]);
   const metadata = JSON.parse(readFileSync(join(output, 'mod01-game.json'), 'utf8'));
+  const softwareDriver = process.env.MOD01_QA_MESA_DIR;
+  if (softwareDriver)
+    stageWindowsGraphicsDriver(softwareDriver, dirname(join(output, metadata.executable)), {
+      platform,
+      ci: process.env.CI === 'true',
+    });
   const environment = { ...process.env, PATH: '' };
   delete environment.NODE_OPTIONS;
+  if (softwareDriver) {
+    environment.GALLIUM_DRIVER = 'llvmpipe';
+    environment.LIBGL_ALWAYS_SOFTWARE = '1';
+  }
   if (platform === 'linux') {
     delete environment.WAYLAND_DISPLAY;
     environment.LIBGL_ALWAYS_SOFTWARE = '1';
@@ -185,7 +196,7 @@ try {
   assert.equal(child.signalCode, null, 'game died from a signal');
   assert.equal(child.exitCode, 0, 'game did not close normally');
   console.log(
-    `Verified ${platform}: actual ${window.width}x${window.height} packaged window, no-argument/empty-PATH launch, first real frame/save and clean close.`,
+    `Verified ${platform}: actual ${window.width}x${window.height} packaged window, no-argument/empty-PATH launch, first real frame/save and clean close${softwareDriver ? ' (Mesa llvmpipe, CI-only)' : ''}.`,
   );
   succeeded = true;
 } finally {

@@ -56,6 +56,14 @@ choices remain outstanding.
 
 ## Progress
 
+- Windows' first real-window runner exposed insufficient OpenGL support, not a
+  game/runtime failure. Its GUI QA now provisions pinned Mesa 26.2.4 with the
+  primary publisher's SHA-256 verified before extraction, and stages its DLLs
+  only in the owned test package using llvmpipe. No global driver/registry change
+  or upstream deployment script is used; ordinary exports/distributed archives
+  remain unchanged. Four tests cover CI-only gating, required DLLs, dependencies
+  and non-overwrite preflight. This is explicit software-driver qualification;
+  the actual Windows window/frame/clean-close check still must pass remotely.
 - The first actual-window CI run exposed a missing Linux runtime dependency:
   xkbcommon's X11 bridge is loaded at window creation, not linked by the headless
   verifier. Both Ubuntu setup lists now install `libxkbcommon-x11-dev`; local

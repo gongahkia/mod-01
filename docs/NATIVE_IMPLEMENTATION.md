@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Shared reference-safe deletion now validates other map/music documents with
+  the same per-document schema as asset admission. Schema-invalid dependency
+  records cannot be silently treated as unreferenced; the diagnostic names the
+  unverifiable owner and field. Removing that malformed asset itself remains
+  possible. This does not require aggregate capacity admission: a regression
+  deletes an unreferenced 65-frame animation to repair an overcapacity bank.
+  All six core deletion regressions and warning-free workspace Clippy pass.
 - Native debugger request rejection now preserves the healthy host and Studio's
   live source/input/replay/menu context. The regression first proved a malformed
   restore killed the real suspended two-member game. Recovery is explicitly

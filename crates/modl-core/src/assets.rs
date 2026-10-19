@@ -453,6 +453,16 @@ fn number_in(value: &Value, minimum: f64, maximum: f64) -> bool {
         .is_some_and(|value| value.is_finite() && (minimum..=maximum).contains(&value))
 }
 
+/// The same per-document schema used by admission, without aggregate capacity checks.
+pub(crate) fn validate_asset_document(
+    name: &str,
+    path: &str,
+    kind: AssetKind,
+    value: &Value,
+) -> Result<(), AssetDiagnostic> {
+    Schema { name, path }.validate(kind, value).map(|_| ())
+}
+
 /// Reports all independent asset failures (bounded to 128) without changing authored files.
 /// Usage includes only schema-valid payloads; any diagnostic means the bank is not loadable.
 #[must_use]

@@ -685,6 +685,17 @@ fn workcart_asset_references(project: &WorkcartProject, name: &str) -> Vec<Strin
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
             continue;
         };
+        if let Err(error) = crate::assets::validate_asset_document(
+            owner,
+            &declaration.path,
+            declaration.kind,
+            &value,
+        ) {
+            references.push(format!(
+                "unverifiable asset '{owner}': {error}; repair or remove it first"
+            ));
+            continue;
+        }
         let is_dependency = match declaration.kind {
             AssetKind::Map => value["layers"].as_array().is_some_and(|layers| {
                 layers
@@ -1627,6 +1638,85 @@ payload = "on start:\n  assert true\n"
             after.files["src/motion.modl"],
             project.files["src/motion.modl"]
         );
+    }
+
+    #[test]
+    fn asset_deletion_cannot_ignore_unreadable_map_or_music_dependencies_but_can_remove_the_bad_asset()
+     {
+        let mut project =
+            parse_workcart(include_str!("../../../examples/api-tour/cart.m01w")).unwrap();
+        project.files.insert(
+            project.manifest.entry.clone(),
+            b"on draw:\n  clear(0)\n".to_vec(),
+        );
+        project.recipes.clear();
+        project.tests.clear();
+        for (owner, target, path) in [
+            ("room", "tiles", "assets/room.m01m"),
+            ("loop", "beep", "assets/loop.m01t"),
+        ] {
+            for payload in [
+                "null",
+                "[]",
+                r#"{"revision":1,"kind":"map","layers":false}"#,
+                r#"{"revision":1,"kind":"music","framesPerRow":1,"loop":false,"order":["A"],"patterns":{"A":{"rows":[false]}}}"#,
+            ] {
+                let mut files = project.files.clone();
+                files.insert(path.to_owned(), payload.as_bytes().to_vec());
+                let source = encode_workcart(&project.manifest, &files, &[], &[]).unwrap();
+                let result = delete_workcart_asset(&source, target);
+                assert!(
+                    result.is_err(),
+                    "schema-invalid {owner} must block dependency deletion"
+                );
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "M014028");
+                assert!(
+                    error
+                        .message
+                        .contains(&format!("unverifiable asset '{owner}'")),
+                    "{error}"
+                );
+                let without_bad_asset = delete_workcart_asset(&source, owner).unwrap();
+                delete_workcart_asset(&without_bad_asset, target).unwrap();
+                assert_eq!(
+                    parse_workcart(&source).unwrap().files[path],
+                    payload.as_bytes()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn asset_deletion_remains_available_to_repair_an_overcapacity_bank() {
+        let mut project =
+            parse_workcart(include_str!("../../../examples/api-tour/cart.m01w")).unwrap();
+        project.files.insert(
+            project.manifest.entry.clone(),
+            b"on draw:\n  clear(0)\n".to_vec(),
+        );
+        project.manifest.assets.insert(
+            "bulky".to_owned(),
+            crate::ProjectAsset {
+                kind: crate::AssetKind::Animation,
+                path: "assets/bulky.m01g".to_owned(),
+            },
+        );
+        let bulky = serde_json::json!({"revision":2,"kind":"sprite","width":128,"height":128,"frames":vec![vec![0;128*128];65]});
+        project.files.insert(
+            "assets/bulky.m01g".to_owned(),
+            serde_json::to_vec(&bulky).unwrap(),
+        );
+        let report = crate::assets::analyze_project_assets(&project.manifest, &project.files);
+        assert!(report.usage.visual_bytes > crate::assets::VISUAL_CAPACITY_BYTES);
+        assert!(!report.is_valid());
+        let source = encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+        let repaired = delete_workcart_asset(&source, "bulky").unwrap();
+        let repaired = parse_workcart(&repaired).unwrap();
+        assert!(
+            crate::assets::analyze_project_assets(&repaired.manifest, &repaired.files).is_valid()
+        );
+        assert!(!repaired.files.contains_key("assets/bulky.m01g"));
     }
 
     #[test]

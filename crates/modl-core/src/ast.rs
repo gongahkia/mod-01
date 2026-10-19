@@ -4,7 +4,7 @@ use crate::span::{Span, Spanned};
 
 pub type Name = Spanned<String>;
 
-/// Project-link visibility. Declarations default to public for alpha compatibility.
+/// Project-link visibility. Declarations are public unless explicitly marked private.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {

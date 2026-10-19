@@ -21,7 +21,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Text helpers                  | Bounded length/slice/character conversion/split operations have useful typed results and tested edge cases.                                                                                                 | [x]      |
 | Bit operations                | AND/OR/XOR/NOT/shifts use explicit integer-width/overflow rules with parser, compiler and execution coverage.                                                                                               | [x]      |
 | Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [ ]      |
-| Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [ ]      |
+| Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
 | Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [ ]      |
 | Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [ ]      |
@@ -84,3 +84,15 @@ choices remain outstanding.
   unchanged input/work/pixels/checkpoints/audio/PCM, changing only packed and
   complete device-state identities. Windows/macOS execution and visual/input QA
   are not claimed by these Linux checks.
+
+- Compiler-derived tooling: `83a4fc2` unifies the builtin metadata; `212e805`
+  exposes original-file definitions, diagnostics and static call/state/asset
+  relationships, including a display-free `mod01 graph` command. Native CODE
+  now provides the source tools described in `docs/EDITOR.md`.
+  Six source-editor tests include the actual egui widget's keyboard selection,
+  undo/redo, completion acceptance and minimum-size layout with the real font.
+  All 25 native tests and workspace Clippy
+  pass. Native Xvfb screenshots were inspected at 1280×800 for find, imported
+  F12 navigation, comments/undo, diagnostics, graph selection, completion,
+  replace-all and line navigation. Captures are retained locally under
+  `output/native-qa-8iPAwp/`; QA edits were in memory, not saved into game source.

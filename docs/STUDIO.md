@@ -25,11 +25,15 @@ The source editor uses the compiler lexer for highlighting. Module selection
 keeps unsaved text synchronized into the project. Workcarts retain authored
 modules, assets, auxiliary files, generation recipes and tests; source remains
 inspectable when distributed as a packed cartridge or native game.
+Find/replace, line/routine navigation, block shortcuts, undo/redo, compiler API
+completion, cross-module definitions and clickable diagnostics are available in
+CODE. GRAPH shows resolved compiler call/state/asset relationships. See
+[source editor](EDITOR.md) for shortcuts and precise behaviour.
 
 The layered RGBA sprite editor supports animation frames, layers, selection,
 drawing/fill tools, PNG import/export, palette picking and undo. Structured tools
 edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
-raw asset text remains visible. The full source-editor/tracker enhancements are
+raw asset text remains visible. The full tracker enhancements are
 tracked in the acceptance ledger rather than claimed complete here.
 
 Saving keeps bounded local recovery revisions. The save manager exports/imports

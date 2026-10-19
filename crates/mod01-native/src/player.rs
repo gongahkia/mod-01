@@ -91,6 +91,7 @@ impl StudioApp {
                     ui.label(&self.status);
                 }
             });
+        self.capture_keyboard(&context);
         self.send_frame(&context);
         self.cursors.paint(&context);
         context.request_repaint_after(Duration::from_millis(4));

@@ -23,6 +23,7 @@ mod asset_meter;
 mod asset_sessions;
 mod asset_tools;
 mod audio;
+mod keyboard_controller;
 mod launch;
 mod live_audio;
 mod player;
@@ -54,7 +55,7 @@ use asset_tools::AssetWorkbench;
 use audio::AudioOutput;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use directories::ProjectDirs;
-use eframe::egui::{self, Color32, ColorImage, Key, RichText, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use gilrs::{Axis, Button, Gilrs};
 use project::NativeProject;
 use runtime::RuntimeBridge;
@@ -152,6 +153,7 @@ struct StudioApp {
     player_mode: bool,
     player_paused: bool,
     touch_controller: touch_controller::TouchController,
+    keyboard_controller: keyboard_controller::KeyboardController,
     debugging: bool,
     snapshot: Option<String>,
     debug_event: String,
@@ -246,6 +248,7 @@ impl StudioApp {
             player_mode: false,
             player_paused: false,
             touch_controller: touch_controller::TouchController::default(),
+            keyboard_controller: keyboard_controller::KeyboardController::default(),
             debugging: false,
             snapshot: None,
             debug_event: String::new(),
@@ -1219,6 +1222,7 @@ impl StudioApp {
         match self.runtime.send(command) {
             Ok(()) => {
                 self.running = true;
+                self.keyboard_controller.quarantine();
                 self.player_paused = false;
                 self.debugging = debug;
                 self.snapshot = None;
@@ -1252,6 +1256,7 @@ impl StudioApp {
     }
 
     fn stop(&mut self) {
+        self.keyboard_controller.quarantine();
         self.touch_controller.clear();
         self.live_audio.stop();
         if self.preview_pending && !self.preview_cancelling {
@@ -1274,6 +1279,7 @@ impl StudioApp {
     fn set_player_paused(&mut self, paused: bool) {
         self.player_paused = paused;
         self.touch_controller.clear();
+        self.keyboard_controller.quarantine();
         if let Some(audio) = &self.audio {
             audio.clear();
         }
@@ -1338,6 +1344,7 @@ impl StudioApp {
                 }
                 Some("restored") => {
                     self.touch_controller.clear();
+                    self.keyboard_controller.quarantine();
                     self.input_frame = event["frame"].as_u64().unwrap_or(0) as u32;
                     self.frame = self.input_frame.saturating_sub(1);
                     self.frame_input = None;
@@ -1615,30 +1622,17 @@ impl StudioApp {
         });
     }
 
+    fn capture_keyboard(&mut self, context: &egui::Context) {
+        let enabled = self.running
+            && self.loaded
+            && !self.player_paused
+            && (self.player_mode || self.view == View::Player)
+            && self.replay_playback.is_none();
+        self.keyboard_controller.capture(context, enabled);
+    }
+
     fn send_input(&mut self, context: &egui::Context, kind: &str) {
-        let buttons = context.input(|input| {
-            let mut buttons = serde_json::Map::new();
-            for name in [
-                "up", "down", "left", "right", "a", "b", "x", "y", "l", "r", "start", "menu",
-            ] {
-                let key = match name {
-                    "up" => Key::ArrowUp,
-                    "down" => Key::ArrowDown,
-                    "left" => Key::ArrowLeft,
-                    "right" => Key::ArrowRight,
-                    "a" => Key::Z,
-                    "b" => Key::X,
-                    "x" => Key::A,
-                    "y" => Key::S,
-                    "l" => Key::Q,
-                    "r" => Key::W,
-                    "start" => Key::Enter,
-                    _ => Key::Escape,
-                };
-                buttons.insert(name.to_owned(), Value::Bool(input.key_down(key)));
-            }
-            buttons
-        });
+        self.capture_keyboard(context);
         let pointer = context.input(|input| {
             let position = input.pointer.hover_pos();
             if let (Some(position), Some(rect)) = (position, self.screen_rect) {
@@ -1653,14 +1647,12 @@ impl StudioApp {
             }
             json!({"x":0,"y":0,"primary":false,"secondary":false,"inside":false})
         });
-        let empty = || {
-            let mut values = serde_json::Map::new();
-            for key in buttons.keys() {
-                values.insert(key.clone(), Value::Bool(false));
-            }
-            json!({"buttons":values})
-        };
-        let mut controllers = vec![json!({"buttons":buttons}), empty(), empty(), empty()];
+        let mut live_input = replay::empty_input();
+        live_input["pointer"] = pointer;
+        self.keyboard_controller.apply_to(&mut live_input);
+        let controllers = live_input["controllers"]
+            .as_array_mut()
+            .expect("four controller ports");
         if let Some(gamepads) = self.gamepads.as_mut() {
             while gamepads.next_event().is_some() {}
             for (port, (_, gamepad)) in gamepads
@@ -1706,7 +1698,6 @@ impl StudioApp {
                 }
             }
         }
-        let mut live_input = json!({"controllers":controllers,"pointer":pointer});
         self.touch_controller.apply_to(&mut live_input);
         let input = self.frame_input.clone().unwrap_or_else(|| {
             self.replay_playback.as_ref().map_or_else(
@@ -1732,6 +1723,7 @@ impl StudioApp {
             if self.frame_input.is_none() && (kind != "step" || self.debug_booted) {
                 self.frame_input = Some(input);
                 self.touch_controller.consume();
+                self.keyboard_controller.consume();
             }
             if kind == "step" {
                 self.debug_frame_boundary = false;
@@ -2944,6 +2936,7 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
+        self.capture_keyboard(&context);
         self.process_events(&context);
         self.process_preview(&context);
         if (self.player_mode || self.view != View::Assets) && self.live_audio.active() {
@@ -3420,6 +3413,7 @@ impl eframe::App for StudioApp {
                     );
                 }
             });
+        self.capture_keyboard(&context);
         self.send_frame(&context);
         self.cursors.paint(&context);
         if self.running {

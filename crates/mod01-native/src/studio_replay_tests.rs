@@ -194,3 +194,82 @@ fn debug_and_replay_commits_are_disposable_but_ordinary_play_still_persists() {
     );
     assert_eq!(normal.unwrap(), bytes);
 }
+
+fn keyboard_tap(app: &mut StudioApp, context: &egui::Context, key: egui::Key) {
+    let event = |pressed| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    context
+        .run_ui(
+            egui::RawInput {
+                events: vec![event(true), event(false)],
+                ..Default::default()
+            },
+            |ui| {
+                app.capture_keyboard(ui.ctx());
+            },
+        )
+        .drop_without_applying_deltas();
+}
+
+#[test]
+fn short_keyboard_taps_survive_ui_only_frames_and_enter_the_real_vm_trace_once() {
+    let (mut app, context, expected) = fixture(false);
+    app.replay_playback = None;
+    for frame in 0..3 {
+        if frame != 1 {
+            keyboard_tap(&mut app, &context, egui::Key::Z);
+        }
+        for _ in 0..4 {
+            context
+                .run_ui(egui::RawInput::default(), |ui| {
+                    app.capture_keyboard(ui.ctx())
+                })
+                .drop_without_applying_deltas();
+        }
+        assert_eq!(app.input_frame, frame);
+        app.send_input(&context, "frame");
+        pump(&mut app, &context);
+        assert_eq!(app.last_pixels[0], if frame < 2 { 7 } else { 9 });
+    }
+    assert_eq!(app.replay_frames, expected.into_iter().collect::<Vec<_>>());
+    app.stop();
+}
+
+#[test]
+fn debug_boot_does_not_consume_a_tap_and_partial_steps_leave_the_next_frames_tap_pending() {
+    let (mut app, context, _) = fixture(true);
+    app.replay_playback = None;
+    keyboard_tap(&mut app, &context, egui::Key::Z);
+    while !app.debug_booted {
+        app.send_input(&context, "step");
+        pump(&mut app, &context);
+    }
+    app.send_input(&context, "step");
+    pump(&mut app, &context);
+    assert!(app.frame_input.is_some());
+    keyboard_tap(&mut app, &context, egui::Key::X);
+    advance_debug_to(&mut app, &context, 1);
+    assert_eq!(
+        app.replay_frames[0].1["controllers"][0]["buttons"]["a"],
+        true
+    );
+    assert_eq!(
+        app.replay_frames[0].1["controllers"][0]["buttons"]["b"],
+        false
+    );
+    advance_debug_to(&mut app, &context, 2);
+    assert_eq!(
+        app.replay_frames[1].1["controllers"][0]["buttons"]["a"],
+        false
+    );
+    assert_eq!(
+        app.replay_frames[1].1["controllers"][0]["buttons"]["b"],
+        true
+    );
+    app.stop();
+}

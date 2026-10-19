@@ -310,3 +310,12 @@ choices remain outstanding.
   core / 22 CLI tests, all-feature warning-free workspace Clippy and builds,
   all nine reproducible raw/PNG pairs and 120 bundled Linux native frames
   without PATH. Windows/macOS and physical-device execution are not claimed.
+
+- Native keyboard capture now runs independently of frame replies, retaining
+  short taps until one accepted logical frame and preserving new taps during a
+  source-stepped partial frame. Focus/text/shortcut/pause/session/restore rules
+  prevent phantom or stuck presses; Escape is host-only. Three actual egui
+  sampler tests and two real Studio/Node tests cover latency, boot, source-step
+  ownership and exact recorded input. All 74 native tests, native Clippy and
+  builds pass. Native Xvfb QA verified a 12 ms Z tap starts PRISM CORRIDOR;
+  before/after screenshots were inspected under `output/native-qa-8iPAwp/`.

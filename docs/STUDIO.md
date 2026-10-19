@@ -101,6 +101,11 @@ replacement. Local saves are keyed by validated cartridge identity.
 Keyboard port one uses arrows plus Z/X/A/S, Q/W and Enter. Native gamepads fill
 four logical ports. Pointer coordinates map to indexed display pixels. Runtime
 frames return indexed pixels, stereo PCM and complete committed save bytes.
+Keyboard events are sampled on UI passes independently of runtime replies:
+short taps remain latched until one display-frame input accepts them. Source
+boot/partial steps do not consume later frame taps. Pause, session/restore,
+text editing and focus loss discard pending taps and block held keys until
+release; Ctrl/Cmd/Alt shortcuts do not become gameplay. Escape is host-only.
 The host never receives a cartridge-selected filesystem path.
 Runtime loads, stops and isolated previews carry private native session generations;
 queued replies/commands from an abandoned session cannot update a new cartridge's

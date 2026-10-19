@@ -63,6 +63,8 @@ optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
 chromatic notes from the selected octave; comma/L/period/semicolon/slash extend
 the range. STEP controls row advance (zero repeats the same row). AUDITION ONLY
 plays notes without editing. Patch choices come from declared sound assets.
+Selected-cell volume retains full floating-point precision on focus/Enter;
+explicit volume edits remain one ordinary per-asset undo transaction.
 Arrows, Tab/Shift-Tab, Home/End and Page Up/Down navigate; Shift+arrows selects a
 rectangular block. Delete/Backspace clears; Insert inserts an eight-cell row.
 Ctrl/Cmd+A/C/X/V selects/copies/cuts/pastes a block, clipping at the pattern edge.

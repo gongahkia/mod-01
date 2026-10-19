@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Actual native asset GUI inspection used an isolated, validator-admitted bank
+  with integral JSON floats. Captures in `output/asset-number-qa-N5dNmf` show
+  correct 2×2 map/font/sprite, tile flag 7/colours, tracker 240/C-4 and signed
+  raster -3/+8 with physical remap 255. This QA exposed a separate tracker bug:
+  focus/Enter rounded authored volume 0.3333333333333333 to 0.3333 and created an
+  undo entry. The real-font UI regression first reproduced it. Full-precision
+  formatting now preserves focus-only source; a workbench regression verifies
+  explicit 0.125 edits and exact undo/redo with metadata. Both tests and workspace
+  Clippy pass. Rebuilt GUI captures prove full precision and disabled Undo after
+  focus/Enter; both sessions close normally and source SHA-256 stays unchanged.
 - Returned runtime asset lists, integer-save views and pending-write lists now
   use ascending ASCII order, matching the existing device descriptor stores and
   canonical on-disk save encoding. This removes the three remaining runtime

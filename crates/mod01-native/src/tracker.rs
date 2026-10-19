@@ -842,7 +842,7 @@ impl TrackerEditor {
             });
             let mut volume = cell["volume"].as_f64().unwrap_or(1.0);
             ui.label("VOL");
-            if ui.add(egui::DragValue::new(&mut volume).range(0.0..=1.0).speed(0.01)).changed() { cell["volume"] = json!(volume); }
+            if ui.add(egui::DragValue::new(&mut volume).range(0.0..=1.0).speed(0.01).custom_formatter(|value, _| value.to_string())).changed() { cell["volume"] = json!(volume); }
             if ui.button("DEFAULT VOLUME").clicked() { cell.as_object_mut().unwrap().remove("volume"); }
             if ui.button("AUDITION").clicked() { self.actions.push(Action::Audition { sound, note: note.min(127) as u8, volume }); }
         });
@@ -971,6 +971,62 @@ mod tests {
         assert_eq!(
             document, boundary,
             "MIDI boundary preflight must also handle integral floats"
+        );
+    }
+
+    #[test]
+    fn focusing_tracker_volume_preserves_authored_precision() {
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut document = song();
+        document["patterns"]["A"]["rows"][0][0] =
+            json!({"note":60,"sound":"beep","volume":0.333_333_333_333_333_3,"annotation":"keep"});
+        let original = document.clone();
+        let mut editor = TrackerEditor::new();
+        assert!(editor.normalize(&document));
+        let mut frame = |events| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    editor.cell_controls(ui, &mut document, &["beep".to_owned()]);
+                },
+            );
+            let position = output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text.starts_with("0.333")
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            });
+            output.drop_without_applying_deltas();
+            position
+        };
+        frame(vec![]);
+        let position = frame(vec![]).unwrap();
+        frame(vec![egui::Event::PointerMoved(position)]);
+        for pressed in [true, false] {
+            frame(vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+        frame(vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        frame(vec![]);
+        assert_eq!(
+            document, original,
+            "focus/Enter cannot quantize authored volume"
         );
     }
 

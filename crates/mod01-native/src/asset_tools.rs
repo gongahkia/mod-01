@@ -1583,6 +1583,63 @@ mod tests {
     }
 
     #[test]
+    fn tracker_volume_focus_and_explicit_edits_preserve_per_asset_undo() {
+        use eframe::egui;
+        fn type_volume(editor: &mut AssetWorkbench, context: &egui::Context, input: &str) {
+            let labels = sound_frame(editor, context, Vec::new());
+            let point = labels
+                .iter()
+                .find(|(text, _)| text == "0.3333333333333333")
+                .expect("full-precision cell volume is visible")
+                .1
+                .center();
+            sound_click(editor, context, point);
+            sound_frame(
+                editor,
+                context,
+                vec![
+                    egui::Event::Text(input.to_owned()),
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            sound_frame(editor, context, vec![]);
+        }
+        let original = json!({"revision":1,"kind":"music","framesPerRow":6,"loop":false,"order":["A"],"authored":"keep","patterns":{"A":{"rows":[[{"note":60,"sound":"beep","volume":0.333_333_333_333_333_3,"annotation":"keep"},null,null,null,null,null,null,null]]}}});
+        let context = egui::Context::default();
+        crate::ui_assets::install_font(&context);
+        crate::ui_theme::install(&context);
+        let mut editor = AssetWorkbench::new(AssetKind::Music, &original.to_string()).unwrap();
+        for _ in 0..3 {
+            sound_frame(&mut editor, &context, vec![]);
+        }
+        type_volume(&mut editor, &context, "");
+        assert_eq!(editor.document, original);
+        assert!(!editor.dirty && editor.history.is_empty());
+        type_volume(&mut editor, &context, "0.125");
+        let mut expected = original.clone();
+        expected["patterns"]["A"]["rows"][0][0]["volume"] = json!(0.125);
+        assert_eq!(editor.document, expected);
+        assert_eq!(editor.history.len(), 1);
+        editor.undo();
+        assert_eq!(editor.document, original);
+        editor.redo();
+        assert_eq!(editor.document, expected);
+    }
+
+    #[test]
     fn real_sound_controls_write_integers_and_preserve_metadata_with_per_edit_undo() {
         use eframe::egui;
         let context = egui::Context::default();

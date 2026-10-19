@@ -1447,7 +1447,7 @@ impl StudioApp {
             }
             DebugTab::Memory => {
                 ui.horizontal(|ui| {
-                    ui.label("ADDRESS"); ui.add(egui::DragValue::new(&mut self.memory_address).range(0..=0x0030_ffff).hexadecimal(6, false, true));
+                    ui.label("ADDRESS"); ui.add(egui::DragValue::new(&mut self.memory_address).range(0..=0x003f_ffff).hexadecimal(6, false, true));
                     ui.label("BYTES"); ui.add(egui::DragValue::new(&mut self.memory_length).range(1..=256));
                     if ui.button("READ").clicked() {
                         self.pending = self.runtime.send(json!({"type":"memory","address":self.memory_address,"length":self.memory_length})).is_ok();

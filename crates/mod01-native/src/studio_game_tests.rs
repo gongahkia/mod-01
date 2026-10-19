@@ -776,3 +776,77 @@ fn removing_and_reimporting_an_alias_cannot_resurrect_deleted_asset_history_or_b
     );
     app.project.as_ref().unwrap().pack().unwrap();
 }
+
+#[test]
+fn native_png_export_uses_main_identity_and_large_png_games_boot_and_transition_in_the_actual_host()
+{
+    let mut whole = modl_core::parse_workcart(&game_source()).unwrap();
+    let notes = (0..600_000)
+        .map(|index| b'a' + u8::try_from((index * 17 + index / 29) % 26).unwrap())
+        .collect::<Vec<_>>();
+    whole
+        .files
+        .insert("authoring/notes.txt".to_owned(), notes.clone());
+    let mut arena = modl_core::parse_workcart(&whole.bundle[0].source).unwrap();
+    arena.files.insert("authoring/notes.txt".to_owned(), notes);
+    whole.bundle[0].source =
+        modl_core::encode_workcart(&arena.manifest, &arena.files, &[], &[]).unwrap();
+    let source = modl_core::workcart::encode_workcart_with_bundle(
+        &whole.manifest,
+        &whole.files,
+        &[],
+        &[],
+        &whole.bundle,
+    )
+    .unwrap();
+    let mut project = NativeProject::from_source(source, None).unwrap();
+    let game = project.game().unwrap();
+    assert!(game.bytes().len() > 1024 * 1024);
+    project.select_member("arena").unwrap();
+    let (id, png) = project.cartridge_png().unwrap();
+    assert_eq!(id, game.entry().manifest.id);
+    assert_eq!(
+        png,
+        modl_core::cartridge_png::encode_game_png(&game).unwrap()
+    );
+    assert_eq!(
+        modl_core::decode_cartridge_png(&png)
+            .unwrap()
+            .metadata
+            .title,
+        "NATIVE main"
+    );
+    let path = std::env::temp_dir().join(format!(
+        "mod01-native-game-png-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::write(&path, &png).unwrap();
+    let reopened = NativeProject::open(&path).unwrap();
+    assert_eq!(reopened.pack().unwrap(), game.bytes());
+    let bridge = RuntimeBridge::new(native_host_path());
+    let loaded = exchange(&bridge, reopened.load_command(false, &[]).unwrap());
+    assert_eq!(loaded["type"], "loaded", "{loaded}");
+    assert_eq!(loaded["identity"], game.identity());
+    let mut transfer = replay::empty_input();
+    transfer["menuAction"] = 1.into();
+    let old = exchange(&bridge, json!({"type":"frame","input":transfer}));
+    assert_eq!(old["cartridgeAlias"], "main");
+    assert_eq!(old["active"]["cartridgeAlias"], "arena");
+    let child = exchange(
+        &bridge,
+        json!({"type":"frame","input":replay::empty_input()}),
+    );
+    assert_eq!(child["cartridgeAlias"], "arena");
+    assert_eq!(child["frame"], 1);
+    assert_eq!(
+        STANDARD.decode(child["pixels"].as_str().unwrap()).unwrap()[0],
+        7
+    );
+    assert_eq!(exchange(&bridge, json!({"type":"stop"}))["type"], "stopped");
+    assert_eq!(fs::read(&path).unwrap(), png);
+    fs::remove_file(path).unwrap();
+}

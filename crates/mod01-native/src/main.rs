@@ -1117,48 +1117,15 @@ impl StudioApp {
             return;
         };
         project.sync_editor();
-        let packed = match project.pack() {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.status = error;
-                return;
-            }
-        };
-        let identity = project
-            .files
-            .get("presentation/cartridge.json")
-            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
-        let metadata = modl_core::CartridgePngMetadata {
-            title: project.manifest.title.clone(),
-            author: project.manifest.author.clone(),
-            year: identity
-                .as_ref()
-                .and_then(|value| value["year"].as_u64())
-                .and_then(|value| u16::try_from(value).ok())
-                .filter(|year| (1970..=9999).contains(year))
-                .unwrap_or(1999),
-            players: identity
-                .as_ref()
-                .and_then(|value| value["players"].as_u64())
-                .and_then(|value| u8::try_from(value).ok())
-                .filter(|players| (1..=4).contains(players))
-                .unwrap_or(1),
-            controls: identity
-                .as_ref()
-                .and_then(|value| value["controls"].as_str())
-                .filter(|value| value.len() <= 64)
-                .unwrap_or("PAD")
-                .to_owned(),
-        };
-        let png = match modl_core::encode_cartridge_png(&packed, &metadata) {
-            Ok(bytes) => bytes,
+        let (id, png) = match project.cartridge_png() {
+            Ok(png) => png,
             Err(error) => {
                 self.status = error;
                 return;
             }
         };
         if let Some(path) = rfd::FileDialog::new()
-            .set_file_name(format!("{}.m01c.png", project.manifest.id))
+            .set_file_name(format!("{id}.m01c.png"))
             .save_file()
         {
             self.status = match fs::write(path, png) {

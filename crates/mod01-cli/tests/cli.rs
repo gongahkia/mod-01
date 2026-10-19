@@ -298,6 +298,69 @@ fn headless_cycles_all_32_real_cartridges_and_does_not_persist_a_faulted_transit
 }
 
 #[test]
+fn large_whole_game_png_exports_current_bytes_and_replays_identically_with_transitions() {
+    let directory =
+        std::env::temp_dir().join(format!("mod01-game-png-{}-{}", std::process::id(), line!()));
+    fs::create_dir(&directory).unwrap();
+    let source = game_fixture(2, true);
+    let path = directory.join("cart.m01w");
+    let png = directory.join("game.m01c.png");
+    let raw = directory.join("game.m01c");
+    fs::write(&path, &source).unwrap();
+    let game = modl_core::game::pack_game_workcart(&source).unwrap();
+    assert!(game.bytes().len() > 1024 * 1024);
+    fs::write(&raw, game.bytes()).unwrap();
+    let exported = binary()
+        .arg("export")
+        .arg("png")
+        .arg(&path)
+        .arg("--output")
+        .arg(&png)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let bytes = fs::read(&png).unwrap();
+    assert_eq!(
+        bytes,
+        modl_core::cartridge_png::encode_game_png(&game).unwrap()
+    );
+    assert_eq!(
+        modl_core::decode_cartridge_png(&bytes).unwrap().cartridge,
+        game.bytes()
+    );
+    let inspected = binary()
+        .arg("info")
+        .arg(&png)
+        .arg("--source")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        inspected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+    let view: Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    assert_eq!(view["bundle"][0]["alias"], "arena");
+    let trace = directory.join("input.json");
+    fs::write(&trace, serde_json::to_vec(&json!({"revision":1,"frames":[{"frame":1,"controllers":[],"menuAction":1},{"frame":3,"controllers":[],"menuAction":1}]})).unwrap()).unwrap();
+    let reference = game_trace(&path, 5, "root", Some(&trace), None);
+    assert_eq!(reference, game_trace(&raw, 5, "root", Some(&trace), None));
+    assert_eq!(reference, game_trace(&png, 5, "root", Some(&trace), None));
+    assert_eq!(reference["summary"]["completedFrames"], 5);
+    assert!(reference.get("fault").is_none());
+    assert_eq!(reference["frames"][2]["cartridgeAlias"], "arena");
+    assert_eq!(reference["frames"][4]["cartridgeAlias"], "main");
+    assert_eq!(fs::read_to_string(&path).unwrap(), source);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn headless_save_catalogs_and_parameters_are_bounded_and_invalid_unused_members_need_no_node() {
     let directory = std::env::temp_dir().join(format!(
         "mod01-game-invalid-{}-{}",

@@ -187,8 +187,11 @@ checkpoints. `game-runtime.test.ts` exercises actual compiler output in both mod
 replay input encoding, loads/reloads, tasks, faults, save isolation, 32 members,
 counter bounds and restoration failures.
 
-The headless adapter now uses this scheduler for every game. Native Studio/player,
-PNG/native export and bundle-wide analysis integration remain open; their
+The headless and native Studio/player adapters use this scheduler for every game.
+Whole-game PNG export/import is available in Studio and CLI, including shipping
+games larger than a single ROM. Source/raw/PNG headless replay results match through
+actual transitions and native PNG launches use the same whole-game scheduler.
+Native desktop export and bundle-wide analysis integration remain open; their
 entry-only paths reject dependencies instead of discarding them.
 
 `runtime_game::prepare_runtime_game` provides the shared Rust-to-host handoff
@@ -197,9 +200,9 @@ release/debug mode and retains each alias's own symbols, source map, manifest,
 declared asset/display bytes and canonical ≤1 MiB logical ROM. Asset bytes and
 ROM use base64 transport; authored source/artwork/auxiliary files are not module
 imports. The whole-game identity and compiler mode are attached once to this
-internal revision-1 host payload, not a new cartridge format. The headless adapter
-consumes this data structure; native integration will use the same handoff instead
-of rebuilding an entry-only request. Compiled JavaScript has an inclusive 2 MiB-per-member transport
+internal revision-1 host payload, not a new cartridge format. Headless and native
+adapters consume this same handoff rather than rebuilding an entry-only request.
+Compiled JavaScript has an inclusive 2 MiB-per-member transport
 bound, matching the existing native host limit; overflow is `M014072` and is
 alias-qualified. This helper does not execute JavaScript or boot any member.
 

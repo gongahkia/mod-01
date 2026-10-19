@@ -103,6 +103,15 @@ Exactly one private `moCa` chunk contains the byte-exact canonical cartridge
 and one `moCm` chunk contains bounded canonical presentation metadata.
 PNG CRCs and the cartridge inventory are both validated.
 
+The payload is a complete admitted game, including a flat multi-cartridge bundle;
+the PNG wrapper is bounded by the game shipping limit plus 8 MiB of image/chunk
+overhead. This does not enlarge a logical console ROM beyond 1 MiB. Both encoding
+and decoding validate the current whole game, so a valid CRC cannot conceal an
+obsolete or forged payload. CRC calculation streams type/data slices without an
+extra payload-sized temporary copy. Studio and CLI share main's presentation
+metadata even when another member is selected for editing; existing single-cart
+PNG bytes and pixels are unchanged.
+
 The image is presentation only; importing reconstructs source from the packed
 payload, never from the pixels. Studio and CLI accept raw and PNG cartridges.
 Use `mod01 export png PROJECT --output game.m01c.png`.

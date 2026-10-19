@@ -51,6 +51,17 @@ choices remain outstanding.
 
 ## Progress
 
+- PNG export/import now carries an admitted complete game, with separate shipping
+  wrapper and logical-ROM limits. Core rejects CRC-correct invalid/obsolete payloads
+  and computes CRC over slices without another payload-sized temporary buffer.
+  Studio and CLI share main's presentation metadata and preserve ordinary PNG
+  encoding. New core/CLI/native tests exercise >1 MiB games (each logical member
+  remains <1 MiB), byte-identical shared export, exact source/raw/PNG headless traces
+  across transfers, child-selected export identity, and actual native PNG launch/
+  transition. The full gate passes 275 runtime, 122 core, 111 native and 26 CLI
+  tests, formatting/lint/types/all-feature Clippy/builds, nine unchanged raw/PNG
+  pairs and 120 packaged Linux frames without PATH. Desktop package export and
+  bundle-wide analysis remain open.
 - Native GAME CARTRIDGES now imports exact local source/packed members, creates
   blank members with unique IDs and confirms reference-safe removal through shared
   composition validation. Composition changes require stopped execution and valid

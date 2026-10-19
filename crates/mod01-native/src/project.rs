@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use modl_core::{
     CompileMode, ProjectManifest, compile_project, decode_cartridge_png,
-    game::{MAX_GAME_PACKED_BYTES, PackedGame, decode_game, pack_game_workcart},
+    game::{PackedGame, decode_game, pack_game_workcart},
     parse_project_manifest, rewrite_workcart,
     runtime_game::prepare_runtime_game,
     workcart::MAX_WORKCART_DOCUMENT_BYTES,
@@ -52,7 +52,7 @@ impl NativeProject {
         let limit = if is_source {
             MAX_WORKCART_DOCUMENT_BYTES
         } else {
-            MAX_GAME_PACKED_BYTES + 8 * 1024 * 1024
+            modl_core::cartridge_png::MAX_CARTRIDGE_PNG_BYTES
         } as u64;
         if !metadata.is_file() || metadata.len() > limit {
             return Err("cartridge exceeds its source/game container limit".to_owned());
@@ -387,6 +387,12 @@ impl NativeProject {
     pub fn game(&self) -> Result<PackedGame, String> {
         let source = self.source()?;
         pack_game_workcart(&source).map_err(|error| error.to_string())
+    }
+
+    pub fn cartridge_png(&self) -> Result<(String, Vec<u8>), String> {
+        let game = self.game()?;
+        let png = modl_core::cartridge_png::encode_game_png(&game)?;
+        Ok((game.entry().manifest.id.clone(), png))
     }
 
     /// Fresh/disposable entry save convenience; all other members start with empty saves.

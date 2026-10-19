@@ -12,11 +12,11 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use modl_core::{
-    AssetCatalog, AssetKind, CartridgePngMetadata, CompileMode, DecodedCartridge, Diagnostic,
-    FileId, GeneratedProgram, ProjectManifest, SourceFile, WorkcartTest, WorkcartTestKind,
-    analyze_module, compile, compile_project, decode_cartridge_png, encode_cartridge_png,
-    encode_workcart, format_source, load_cartridge_program, materialize_workcart_recipe,
-    pack_workcart, parse_project_manifest, parse_workcart, unpack_cartridge_project,
+    AssetCatalog, AssetKind, CompileMode, DecodedCartridge, Diagnostic, FileId, GeneratedProgram,
+    ProjectManifest, SourceFile, WorkcartTest, WorkcartTestKind, analyze_module, compile,
+    compile_project, decode_cartridge_png, encode_workcart, format_source, load_cartridge_program,
+    materialize_workcart_recipe, pack_workcart, parse_project_manifest, parse_workcart,
+    unpack_cartridge_project,
 };
 
 const HEADLESS_HOST: &str = include_str!("../../../packages/runtime/standalone/headless-host.mjs");
@@ -389,42 +389,10 @@ fn graph_project(path: &Path) -> ExitCode {
 
 fn export_png_directory(path: &Path, output: Option<&Path>) -> Result<PathBuf, ()> {
     let project = load_project(path)?;
-    let packed = project.pack().map_err(|error| {
+    let packed = project.pack_game().map_err(|error| {
         eprintln!("{}: {error}", path.display());
     })?;
-    let identity = project
-        .files
-        .get("presentation/cartridge.json")
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok());
-    let year = identity
-        .as_ref()
-        .and_then(|value| value.get("year"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u16::try_from(value).ok())
-        .filter(|value| (1970..=9999).contains(value))
-        .unwrap_or(1999);
-    let players = identity
-        .as_ref()
-        .and_then(|value| value.get("players"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u8::try_from(value).ok())
-        .filter(|value| (1..=4).contains(value))
-        .unwrap_or(1);
-    let controls = identity
-        .as_ref()
-        .and_then(|value| value.get("controls"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| value.len() <= 64)
-        .unwrap_or("PAD")
-        .to_owned();
-    let metadata = CartridgePngMetadata {
-        title: project.manifest.title.clone(),
-        author: project.manifest.author.clone(),
-        year,
-        players,
-        controls,
-    };
-    let png = encode_cartridge_png(&packed.bytes, &metadata).map_err(|error| {
+    let png = modl_core::cartridge_png::encode_game_png(&packed).map_err(|error| {
         eprintln!("{}: {error}", path.display());
     })?;
     let output = output.map_or_else(
@@ -658,11 +626,8 @@ fn load_game(path: &Path) -> Result<modl_core::game::PackedGame, ()> {
         .extension()
         .is_some_and(|extension| extension == "m01c" || extension == "png")
     {
-        let bytes = read_bounded_file(
-            path,
-            modl_core::game::MAX_GAME_PACKED_BYTES + 8 * 1024 * 1024,
-        )
-        .map_err(|error| eprintln!("{}: {error}", path.display()))?;
+        let bytes = read_bounded_file(path, modl_core::cartridge_png::MAX_CARTRIDGE_PNG_BYTES)
+            .map_err(|error| eprintln!("{}: {error}", path.display()))?;
         let bytes = if path.extension().is_some_and(|extension| extension == "png") {
             decode_cartridge_png(&bytes)
                 .map_err(|error| eprintln!("{}: {error}", path.display()))?

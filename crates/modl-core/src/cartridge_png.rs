@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use crate::cartridge::CARTRIDGE_CAPACITY_BYTES;
+use crate::game::{MAX_GAME_PACKED_BYTES, PackedGame, decode_game};
 
 const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
-const MAX_PNG_BYTES: usize = 8 * 1024 * 1024;
+/// One bounded shipping game plus PNG image/chunk overhead. Logical ROMs retain
+/// their separate 1 MiB admission limit; this is not a second machine profile.
+pub const MAX_CARTRIDGE_PNG_BYTES: usize = MAX_GAME_PACKED_BYTES + 8 * 1024 * 1024;
 const WIDTH: usize = 320;
 const HEIGHT: usize = 240;
 const PALETTE: [[u8; 3]; 8] = [
@@ -31,6 +33,42 @@ pub struct CartridgePngMetadata {
 pub struct CartridgePng {
     pub cartridge: Vec<u8>,
     pub metadata: CartridgePngMetadata,
+}
+
+/// Uses the admitted main cartridge's presentation metadata, regardless of which
+/// member an editor is displaying. Native Studio and CLI export share this path.
+///
+/// # Errors
+/// Returns a current source, metadata or game-admission error before emitting PNG.
+pub fn encode_game_png(game: &PackedGame) -> Result<Vec<u8>, String> {
+    let project = crate::parse_workcart(game.source()).map_err(|error| error.to_string())?;
+    let identity = project
+        .files
+        .get("presentation/cartridge.json")
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok());
+    let metadata = CartridgePngMetadata {
+        title: game.entry().manifest.title.clone(),
+        author: game.entry().manifest.author.clone(),
+        year: identity
+            .as_ref()
+            .and_then(|value| value["year"].as_u64())
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|year| (1970..=9999).contains(year))
+            .unwrap_or(1999),
+        players: identity
+            .as_ref()
+            .and_then(|value| value["players"].as_u64())
+            .and_then(|value| u8::try_from(value).ok())
+            .filter(|players| (1..=4).contains(players))
+            .unwrap_or(1),
+        controls: identity
+            .as_ref()
+            .and_then(|value| value["controls"].as_str())
+            .filter(|value| value.len() <= 64)
+            .unwrap_or("PAD")
+            .to_owned(),
+    };
+    encode_cartridge_png(game.bytes(), &metadata)
 }
 
 /// Encodes canonical cartridge bytes into the deterministic MOD-01 PNG object.
@@ -84,13 +122,13 @@ pub fn encode_cartridge_png(
 /// Returns an error for malformed chunks, bad CRCs, duplicates, trailing bytes, or invalid bounds.
 pub fn decode_cartridge_png(bytes: &[u8]) -> Result<CartridgePng, String> {
     if bytes.len() < PNG_SIGNATURE.len()
-        || bytes.len() > MAX_PNG_BYTES
+        || bytes.len() > MAX_CARTRIDGE_PNG_BYTES
         || !bytes.starts_with(&PNG_SIGNATURE)
     {
         return Err("invalid cartridge PNG size or signature".to_owned());
     }
     let mut offset = PNG_SIGNATURE.len();
-    let mut payload: Option<Vec<u8>> = None;
+    let mut payload: Option<&[u8]> = None;
     let mut metadata: Option<CartridgePngMetadata> = None;
     let mut ended = false;
     while offset < bytes.len() {
@@ -107,7 +145,7 @@ pub fn decode_cartridge_png(bytes: &[u8]) -> Result<CartridgePng, String> {
             .checked_add(12)
             .and_then(|value| value.checked_add(length))
             .ok_or("chunk overflow")?;
-        if length > MAX_PNG_BYTES || end > bytes.len() {
+        if length > MAX_CARTRIDGE_PNG_BYTES || end > bytes.len() {
             return Err("invalid PNG chunk length".to_owned());
         }
         let kind: [u8; 4] = bytes[offset + 4..offset + 8]
@@ -119,18 +157,14 @@ pub fn decode_cartridge_png(bytes: &[u8]) -> Result<CartridgePng, String> {
                 .try_into()
                 .map_err(|_| "chunk CRC")?,
         );
-        let mut checked = kind.to_vec();
-        checked.extend_from_slice(data);
-        if crc32(&checked) != expected {
+        if crc32(&kind, data) != expected {
             return Err("PNG chunk CRC mismatch".to_owned());
         }
         match &kind {
             b"moCa"
-                if payload.is_none()
-                    && !data.is_empty()
-                    && data.len() <= CARTRIDGE_CAPACITY_BYTES =>
+                if payload.is_none() && !data.is_empty() && data.len() <= MAX_GAME_PACKED_BYTES =>
             {
-                payload = Some(data.to_vec());
+                payload = Some(data);
             }
             b"moCa" => return Err("invalid or duplicate cartridge payload".to_owned()),
             b"moCm" if metadata.is_none() && data.len() <= 2048 => {
@@ -149,16 +183,16 @@ pub fn decode_cartridge_png(bytes: &[u8]) -> Result<CartridgePng, String> {
     }
     let cartridge = payload.ok_or("cartridge PNG has no payload")?;
     let metadata = metadata.ok_or("cartridge PNG has no metadata")?;
-    validate(&cartridge, &metadata)?;
+    validate(cartridge, &metadata)?;
     Ok(CartridgePng {
-        cartridge,
+        cartridge: cartridge.to_vec(),
         metadata,
     })
 }
 
 fn validate(cartridge: &[u8], metadata: &CartridgePngMetadata) -> Result<(), String> {
-    if cartridge.is_empty() || cartridge.len() > CARTRIDGE_CAPACITY_BYTES {
-        return Err("cartridge payload exceeds capacity".to_owned());
+    if !valid_payload_length(cartridge.len()) {
+        return Err("game payload exceeds shipping-container capacity".to_owned());
     }
     if metadata.title.is_empty()
         || metadata.title.len() > 64
@@ -170,7 +204,12 @@ fn validate(cartridge: &[u8], metadata: &CartridgePngMetadata) -> Result<(), Str
     {
         return Err("invalid cartridge PNG metadata".to_owned());
     }
+    decode_game(cartridge).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn valid_payload_length(length: usize) -> bool {
+    length > 0 && length <= MAX_GAME_PACKED_BYTES
 }
 
 fn fill(rgba: &mut [u8], left: usize, top: usize, width: usize, height: usize, color: usize) {
@@ -191,9 +230,7 @@ fn chunk(output: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) -> Result<(), String>
     );
     output.extend_from_slice(&kind);
     output.extend_from_slice(data);
-    let mut checked = kind.to_vec();
-    checked.extend_from_slice(data);
-    output.extend_from_slice(&crc32(&checked).to_be_bytes());
+    output.extend_from_slice(&crc32(&kind, data).to_be_bytes());
     Ok(())
 }
 
@@ -212,9 +249,9 @@ fn zlib_stored(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-fn crc32(bytes: &[u8]) -> u32 {
+fn crc32(kind: &[u8], bytes: &[u8]) -> u32 {
     let mut crc = u32::MAX;
-    for byte in bytes {
+    for byte in kind.iter().chain(bytes) {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
             crc = (crc >> 1) ^ if crc & 1 == 1 { 0xedb8_8320 } else { 0 };
@@ -245,12 +282,94 @@ mod tests {
             players: 2,
             controls: "PAD".to_owned(),
         };
-        let png = encode_cartridge_png(b"M01Ctest", &metadata).expect("encode");
+        let game =
+            crate::game::pack_game_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                .unwrap();
+        let png = encode_cartridge_png(game.bytes(), &metadata).expect("encode");
         let decoded = decode_cartridge_png(&png).expect("decode");
-        assert_eq!(decoded.cartridge, b"M01Ctest");
+        assert_eq!(decoded.cartridge, game.bytes());
         assert_eq!(decoded.metadata, metadata);
         let mut corrupt = png;
         corrupt[20] ^= 1;
         assert!(decode_cartridge_png(&corrupt).unwrap_err().contains("CRC"));
+    }
+
+    #[test]
+    fn png_carries_an_entire_large_game_but_each_console_rom_keeps_its_own_capacity() {
+        let mut main =
+            crate::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        main.files.insert(
+            "authoring/notes.txt".to_owned(),
+            (0..600_000)
+                .map(|index| b'a' + u8::try_from((index * 17 + index / 29) % 26).unwrap())
+                .collect(),
+        );
+        let mut child = main.clone();
+        child.manifest.id = "png-child".to_owned();
+        child.manifest.title = "CHILD TITLE".to_owned();
+        let child = crate::encode_workcart(&child.manifest, &child.files, &[], &[]).unwrap();
+        let source = crate::workcart::encode_workcart_with_bundle(
+            &main.manifest,
+            &main.files,
+            &[],
+            &[],
+            &[crate::bundle::BundleSource {
+                alias: "child".to_owned(),
+                source: child,
+            }],
+        )
+        .unwrap();
+        let game = crate::game::pack_game_workcart(&source).unwrap();
+        assert!(game.bytes().len() > crate::cartridge::CARTRIDGE_CAPACITY_BYTES);
+        assert!(
+            game.catalog()
+                .cartridges()
+                .values()
+                .all(|member| member.bytes.len() <= crate::cartridge::CARTRIDGE_CAPACITY_BYTES)
+        );
+        let png = super::encode_game_png(&game).unwrap();
+        let decoded = decode_cartridge_png(&png).unwrap();
+        assert_eq!(decoded.cartridge, game.bytes());
+        assert_eq!(decoded.metadata.title, "BLANK CART");
+        assert_eq!(
+            crate::game::decode_game(&decoded.cartridge)
+                .unwrap()
+                .source(),
+            source
+        );
+        assert_eq!(super::encode_game_png(&game).unwrap(), png);
+    }
+
+    #[test]
+    fn crc_valid_wrappers_do_not_bypass_current_game_admission_and_bounds_need_no_large_allocation()
+    {
+        let metadata = CartridgePngMetadata {
+            title: "TEST".to_owned(),
+            author: "@test".to_owned(),
+            year: 1999,
+            players: 1,
+            controls: "PAD".to_owned(),
+        };
+        for invalid in [b"M01Ctest".as_slice(), b"MOD-01\x1a\x01", b"MOD-01\x1a\x02"] {
+            assert!(encode_cartridge_png(invalid, &metadata).is_err());
+        }
+        assert_eq!(super::crc32(b"1234", b"56789"), 0xcbf4_3926);
+        assert!(!super::valid_payload_length(0));
+        assert!(super::valid_payload_length(super::MAX_GAME_PACKED_BYTES));
+        assert!(!super::valid_payload_length(
+            super::MAX_GAME_PACKED_BYTES + 1
+        ));
+        let game =
+            crate::game::pack_game_workcart(include_str!("../../../templates/blank/cart.m01w"))
+                .unwrap();
+        let mut png = super::encode_game_png(&game).unwrap();
+        let kind = png.windows(4).position(|kind| kind == b"moCa").unwrap();
+        let length = u32::from_be_bytes(png[kind - 4..kind].try_into().unwrap()) as usize;
+        png[kind + 4] ^= 1;
+        let crc = super::crc32(b"moCa", &png[kind + 4..kind + 4 + length]);
+        png[kind + 4 + length..kind + 8 + length].copy_from_slice(&crc.to_be_bytes());
+        let error = decode_cartridge_png(&png).unwrap_err();
+        assert!(!error.contains("CRC"), "{error}");
+        assert!(error.contains("M014"), "{error}");
     }
 }

@@ -202,6 +202,7 @@ struct StudioApp {
     selection_anchor: Option<(usize, usize)>,
     running: bool,
     player_mode: bool,
+    viewport_mode: Option<(bool, bool)>,
     player_paused: bool,
     touch_controller: touch_controller::TouchController,
     keyboard_controller: keyboard_controller::KeyboardController,
@@ -331,6 +332,7 @@ impl StudioApp {
             selection_anchor: None,
             running: false,
             player_mode: false,
+            viewport_mode: None,
             player_paused: false,
             touch_controller: touch_controller::TouchController::default(),
             keyboard_controller: keyboard_controller::KeyboardController::default(),
@@ -3404,6 +3406,7 @@ impl StudioApp {
 impl eframe::App for StudioApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let context = root.ctx().clone();
+        self.sync_viewport_mode(&context);
         self.poll_audio_output();
         self.capture_keyboard(&context);
         self.handle_system_menu_toggle(&context);
@@ -3419,6 +3422,7 @@ impl eframe::App for StudioApp {
         }
         if self.player_mode {
             self.player_ui(root);
+            self.sync_viewport_mode(&context);
             return;
         }
         egui::Panel::top("toolbar")
@@ -3867,6 +3871,7 @@ impl eframe::App for StudioApp {
         self.asset_removal_ui(&context);
         self.advance_runtime(&context);
         self.cursors.paint(&context);
+        self.sync_viewport_mode(&context);
         if self.running {
             context.request_repaint_after(Duration::from_millis(4));
         }
@@ -4248,11 +4253,7 @@ fn main() -> eframe::Result {
             } else {
                 [1280.0, 800.0]
             })
-            .with_min_inner_size(if player_mode {
-                [480.0, 320.0]
-            } else {
-                [900.0, 600.0]
-            }),
+            .with_min_inner_size(player::minimum_size(player_mode, false)),
         ..Default::default()
     };
     eframe::run_native(

@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Actual bundle GUI QA found SOURCE retained the 480×320 player window, leaving
+  Studio unusably small. Native mode/touch transitions now update the same shared
+  viewport minimum policy and grow undersized windows: Studio 900×600, player
+  480×320, touch player 480×500. Unchanged modes emit no repeated resize commands,
+  and disabling touch does not force shrinkage. Real-font framebuffer layout
+  and real viewport-command tests pass. Inspected `output/relay-station-qa-mFRPyN`
+  captures prove the full game/touch controls at 480×500 and SOURCE automatically
+  reopening the active vault member at 900×600. Both GUI sessions exit normally;
+  targeted player tests and workspace Clippy pass. Physical touchscreen QA is
+  still separate from this layout/interaction evidence.
 - Authoring the maintained bundle example exposed a real block-parser gap:
   leading comments were accepted by the lexer but rejected before a block's
   first indent. Records, enums, functions/tasks/callbacks, nested loops and match

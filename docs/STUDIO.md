@@ -205,6 +205,12 @@ request tracking waits for all outstanding replies before advancing debug steps.
 
 The standalone game surface is available through `--play PATH` or OPEN GAME VIEW.
 It uses the same execution/input/audio/save devices. Studio and that game surface
+update native window constraints when switching views: Studio requires 900×600,
+the ordinary player 480×320, and the player with touch controls 480×500. Enabling
+touch or opening SOURCE grows a smaller window so controls cannot clip the full
+240×144 framebuffer or make the source editor unusable. Disabling touch restores
+the smaller allowable minimum without forcing the user's window to shrink.
+Studio and the game surface
 share the native system menu: MENU/PAUSE, Escape, controller Select or touch MENU
 opens it without advancing machine time. Up/down and Z/Enter (controller A/Start)
 select; X/controller B/Escape resumes. Resume/restart/source inspection and the

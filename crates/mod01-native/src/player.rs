@@ -13,7 +13,32 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub(super) fn minimum_size(player: bool, touch: bool) -> egui::Vec2 {
+    if player {
+        egui::vec2(480.0, if touch { 500.0 } else { 320.0 })
+    } else {
+        egui::vec2(900.0, 600.0)
+    }
+}
+
 impl StudioApp {
+    pub(super) fn sync_viewport_mode(&mut self, context: &egui::Context) {
+        let mode = (
+            self.player_mode,
+            self.player_mode && self.touch_controller.enabled(),
+        );
+        if self.viewport_mode == Some(mode) {
+            return;
+        }
+        self.viewport_mode = Some(mode);
+        let minimum = minimum_size(mode.0, mode.1);
+        context.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(minimum));
+        let current = context.content_rect().size();
+        if current.x < minimum.x || current.y < minimum.y {
+            context.send_viewport_cmd(egui::ViewportCommand::InnerSize(current.max(minimum)));
+        }
+    }
+
     pub fn player_ui(&mut self, root: &mut egui::Ui) {
         let context = root.ctx().clone();
         egui::Panel::top("game-controls")
@@ -309,11 +334,16 @@ mod tests {
 
     #[test]
     fn audio_status_and_long_titles_leave_the_entire_framebuffer_visible_at_minimum_player_size() {
-        for size in [egui::vec2(480.0, 320.0), egui::vec2(960.0, 650.0)] {
+        for (size, touch) in [
+            (egui::vec2(480.0, 320.0), false),
+            (egui::vec2(960.0, 650.0), false),
+            (egui::vec2(480.0, 500.0), true),
+        ] {
             let context = egui::Context::default();
             crate::ui_assets::install_font(&context);
             ui_theme::install(&context);
             let mut app = StudioApp::new_with_devices(None, &context, false);
+            app.touch_controller.set_enabled(touch);
             let mut project = NativeProject::from_source(
                 include_str!("../../../templates/blank/cart.m01w").to_owned(),
                 None,
@@ -364,5 +394,63 @@ mod tests {
                 "{size:?}: screen is clipped by status"
             );
         }
+    }
+
+    #[test]
+    fn switching_from_minimum_player_to_source_or_touch_updates_real_viewport_commands_once() {
+        let context = egui::Context::default();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../templates/blank/cart.m01w");
+        let mut app = StudioApp::new_with_devices(Some(path), &context, false);
+        let sync = |app: &mut StudioApp, size| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| app.sync_viewport_mode(ui.ctx()),
+            );
+            let commands = output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .clone();
+            output.drop_without_applying_deltas();
+            commands
+        };
+        app.player_mode = true;
+        let commands = sync(&mut app, egui::vec2(480.0, 320.0));
+        assert!(
+            commands.contains(&egui::ViewportCommand::MinInnerSize(egui::vec2(
+                480.0, 320.0
+            )))
+        );
+        app.active_alias = "main".to_owned();
+        app.system_menu_action(crate::pause_menu::Action::Source);
+        assert!(!app.player_mode);
+        let commands = sync(&mut app, egui::vec2(480.0, 320.0));
+        assert!(
+            commands.contains(&egui::ViewportCommand::MinInnerSize(egui::vec2(
+                900.0, 600.0
+            )))
+        );
+        assert!(commands.contains(&egui::ViewportCommand::InnerSize(egui::vec2(900.0, 600.0))));
+        assert!(sync(&mut app, egui::vec2(900.0, 600.0)).is_empty());
+        app.player_mode = true;
+        app.touch_controller.set_enabled(true);
+        let commands = sync(&mut app, egui::vec2(480.0, 320.0));
+        assert!(
+            commands.contains(&egui::ViewportCommand::MinInnerSize(egui::vec2(
+                480.0, 500.0
+            )))
+        );
+        assert!(commands.contains(&egui::ViewportCommand::InnerSize(egui::vec2(480.0, 500.0))));
+        assert!(sync(&mut app, egui::vec2(480.0, 500.0)).is_empty());
+        app.touch_controller.set_enabled(false);
+        let commands = sync(&mut app, egui::vec2(480.0, 500.0));
+        assert_eq!(
+            commands,
+            vec![egui::ViewportCommand::MinInnerSize(egui::vec2(
+                480.0, 320.0
+            ))]
+        );
     }
 }

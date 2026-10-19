@@ -178,6 +178,18 @@ requests. Compiled JavaScript has an explicit inclusive 2 MiB-per-member transpo
 bound, matching the existing native host limit; overflow is `M014072` and is
 alias-qualified. This helper does not execute JavaScript or boot any member.
 
+`game-loader.ts` reads that one payload shape for host integration. It validates
+all members' configuration/assets/save identities before importing any member,
+then waits for every module factory before booting main. Base64 must be canonical,
+including padding bits; per-file and aggregate member byte bounds are preflighted
+before decoding. The existing 16 MiB data-source bound applies per member; source
+maps are bounded to 128 MiB and total code/map/data/ROM transport to 512 MiB.
+Metadata is retained separately per alias, so identical source paths/symbol IDs in
+different cartridges cannot silently share one debugger map. Tests exercise real
+release/debug compiler output, unused invalid dependencies, deferred boot,
+prototype-named paths, metadata copying and malformed/bounded transport. This
+loader is not yet connected to the native/headless command handlers.
+
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),
 sections 3.4 and 6.1/6.7. MOD-01 does not import PICO-8 cartridges or add online/BBS

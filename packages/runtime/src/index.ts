@@ -9,6 +9,7 @@ export * from './font';
 export * from './graphics';
 export * from './gif';
 export * from './game-definition';
+export * from './game-loader';
 export * from './game-runtime';
 export * from './hardware';
 export * from './input';

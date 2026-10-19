@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- Scheduler/host-handoff checkpoint passes the complete `scripts/check.sh` gate:
+  270 runtime tests, 117 core unit/integration tests, 95 native tests, 22 CLI
+  integrations, formatting/lint/types, warning-free all-feature workspace Clippy,
+  build, nine reproducible raw/PNG pairs and 120 Linux packaged frames with bundled
+  Node and no PATH dependency. Existing cartridge/replay identities are unchanged.
+  The multi-cart acceptance row remains open for actual CLI/Studio/host wiring.
+- The host game loader validates the shared Rust payload, including every unused
+  asset and save identity, before importing code; all member factories must exist
+  before main boots. Eight tests cover real release/debug programs, per-alias
+  debugger metadata, checkpoints across loads, invalid unused members, malformed
+  source/byte transport, prototype-named file keys and pre-allocation aggregate
+  data bounds. The loader/scheduler's combined 26 tests, lint and types pass.
+  Native/headless command-handler integration is the next unfinished step.
 - Shared Rust host preparation is implemented in `runtime_game.rs`: every admitted
   member is compiled in one mode with its own symbols/source map, declared data,
   manifest and logical ROM, plus the whole-game identity. Four tests verify both

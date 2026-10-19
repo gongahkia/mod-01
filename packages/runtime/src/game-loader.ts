@@ -64,6 +64,7 @@ export async function loadRuntimeGame(
       raw.javascript.length === 0 ||
       Buffer.byteLength(raw.javascript, 'utf8') > 2 * 1024 * 1024 ||
       typeof raw.sourceMap !== 'string' ||
+      !raw.sourceMap.isWellFormed() ||
       Buffer.byteLength(raw.sourceMap, 'utf8') > 128 * 1024 * 1024 ||
       !record(raw.symbolNames) ||
       Object.entries(raw.symbolNames).some(
@@ -84,27 +85,36 @@ export async function loadRuntimeGame(
       Object.keys(raw.files).length > 4096
     )
       throw new TypeError(`invalid runtime member '${alias}'`);
+    let fileBytes = 0;
+    for (const [path, value] of Object.entries(raw.files)) {
+      fileBytes += path.length + runtimeByteLength(value, 16 * 1024 * 1024);
+      if (fileBytes > 16 * 1024 * 1024)
+        throw new RangeError(`runtime member '${alias}' asset byte transport exceeds 16 MiB`);
+    }
+    transportBytes +=
+      Buffer.byteLength(raw.javascript, 'utf8') +
+      Buffer.byteLength(raw.sourceMap, 'utf8') +
+      runtimeByteLength(raw.rom, HARDWARE.cartridgeCapacityBytes) +
+      fileBytes;
+    if (transportBytes > 512 * 1024 * 1024)
+      throw new RangeError('runtime game transport exceeds 512 MiB');
     validateSourceMap(raw.sourceMap);
-    const files: Record<string, Uint8Array> = {};
-    for (const [path, value] of Object.entries(raw.files))
-      files[path] = decodeRuntimeBytes(value, 16 * 1024 * 1024);
+    const files = Object.fromEntries(
+      Object.entries(raw.files).map(([path, value]) => [
+        path,
+        decodeRuntimeBytes(value, 16 * 1024 * 1024),
+      ]),
+    );
     const assets = { declarations: raw.manifest.assets, files, displayPath: raw.manifest.display };
     if (!isRuntimeAssetSource(assets))
       throw new TypeError(`invalid runtime asset source '${alias}'`);
     const rom = decodeRuntimeBytes(raw.rom, HARDWARE.cartridgeCapacityBytes);
-    transportBytes +=
-      Buffer.byteLength(raw.javascript, 'utf8') +
-      Buffer.byteLength(raw.sourceMap, 'utf8') +
-      rom.byteLength +
-      Object.values(files).reduce((sum, bytes) => sum + bytes.byteLength, 0);
-    if (transportBytes > 512 * 1024 * 1024)
-      throw new RangeError('runtime game transport exceeds 512 MiB');
     const manifest: RuntimeGameManifest = {
       id: raw.manifest.id,
       hardwareRevision: raw.manifest.hardwareRevision,
       updateRate: raw.manifest.updateRate,
       display: raw.manifest.display,
-      assets: assets.declarations,
+      assets: structuredClone(assets.declarations),
     };
     const symbolNames = Object.fromEntries(
       Object.entries(raw.symbolNames).map(([key, value]) => [key, String(value)]),
@@ -160,16 +170,26 @@ export async function loadRuntimeGame(
 
 /** Canonical base64 only: Buffer's permissive decoder must not silently repair host data. */
 export function decodeRuntimeBytes(value: unknown, maximum: number): Uint8Array {
+  runtimeByteLength(value, maximum);
+  if (typeof value !== 'string') throw new TypeError('invalid runtime byte transport');
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.byteLength > maximum || bytes.toString('base64') !== value)
+    throw new TypeError('noncanonical runtime byte transport');
+  return Uint8Array.from(bytes);
+}
+
+function runtimeByteLength(value: unknown, maximum: number): number {
   if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 0 ||
     typeof value !== 'string' ||
     value.length > Math.ceil(maximum / 3) * 4 ||
     value.length % 4 !== 0
   )
     throw new TypeError('invalid bounded runtime byte transport');
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.byteLength > maximum || bytes.toString('base64') !== value)
-    throw new TypeError('noncanonical runtime byte transport');
-  return Uint8Array.from(bytes);
+  const length = (value.length / 4) * 3 - (value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0);
+  if (length > maximum) throw new RangeError('runtime byte transport exceeds decoded bound');
+  return length;
 }
 
 function validateSourceMap(source: string): void {

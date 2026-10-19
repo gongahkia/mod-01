@@ -844,6 +844,7 @@ fn bundled_cartridges_compile_and_pack_within_capacity() {
         "pocket-relay",
         "hardware-gauntlet",
         "modl-tutorial",
+        "prism-corridor",
     ] {
         let project = cartridges.join(id);
         let check = binary()

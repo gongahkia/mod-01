@@ -55,7 +55,7 @@ use ui_assets::PixelCursors;
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
-const fn manual_topics() -> [(&'static str, &'static str); 12] {
+const fn manual_topics() -> [(&'static str, &'static str); 13] {
     [
         ("START", include_str!("../../../docs/TUTORIAL.md")),
         ("MODL LANGUAGE", include_str!("../../../docs/MODL.md")),
@@ -66,6 +66,7 @@ const fn manual_topics() -> [(&'static str, &'static str); 12] {
         ),
         ("SOURCE TOOLS", include_str!("../../../docs/EDITOR.md")),
         ("PLAYGROUND", include_str!("../../../docs/PLAYGROUND.md")),
+        ("SOFTWARE 3D", include_str!("../../../docs/SOFTWARE_3D.md")),
         ("ASSETS", include_str!("../../../docs/ASSETS.md")),
         ("HARDWARE", include_str!("../../../docs/HARDWARE.md")),
         ("LIMITS", include_str!("../../../docs/LIMITS.md")),

@@ -22,6 +22,11 @@ to `@gongahkia`.
 - `modl-tutorial`: source-visible FIRST SIGNAL lesson that walks through a pixel, drawing, input,
   animation, synth sound, an application save commit, and the final pack command in five-to-ten
   minutes. A advances and B returns to the prior page.
+- `prism-corridor`: complete first-person maze with textured walls, perspective
+  floor, collision, a collectible prism, exit, synth feedback and isolated best
+  time save. Arrows walk/turn, Z starts/restarts, and A toggles the editable map.
+  The DDA/projection are ordinary MODL using `texture_line`, not a native 3D engine.
+  See [software 3D](../docs/SOFTWARE_3D.md) for the design and reproducible route.
 
 Each directory contains its single editable `cart.m01w`. Packed byte sizes are
 measured by `mod01 info`, not source length or compressed code alone.

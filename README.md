@@ -44,6 +44,9 @@ fonts, audio, compiler inspection and debugger tools are native interfaces.
 The UI uses BigBlue Terminal Plus and Kenney pixel cursors.
 TOOLS → [MODL playground](docs/PLAYGROUND.md) evaluates expressions and drawing
 without modifying your cartridge or saves.
+For a playable textured first-person maze, open `cartridges/prism-corridor`;
+its [software 3D walkthrough](docs/SOFTWARE_3D.md) explains the ordinary MODL
+projection, map, controls and tested completion route.
 
 ## CLI and game distribution
 

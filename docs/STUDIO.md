@@ -35,14 +35,36 @@ CODE. GRAPH shows resolved compiler call/state/asset relationships. See
 The layered RGBA sprite editor supports animation frames, layers, selection,
 drawing/fill tools, PNG import/export, palette picking and undo. Structured tools
 edit maps/tile atlases, bitmap fonts, synthesizer patches and tracker patterns;
-raw asset text remains visible. The full tracker enhancements are
-tracked in the acceptance ledger rather than claimed complete here.
+raw asset text remains visible.
+
+The music workbench shows all eight channels together, with MIDI note, patch and
+optional cell volume. Click the grid to focus it: Z/S/X/D/C/V/G/B/H/N/J/M enter
+chromatic notes from the selected octave; comma/L/period/semicolon/slash extend
+the range. STEP controls row advance (zero repeats the same row). AUDITION ONLY
+plays notes without editing. Patch choices come from declared sound assets.
+Arrows, Tab/Shift-Tab, Home/End and Page Up/Down navigate; Shift+arrows selects a
+rectangular block. Delete/Backspace clears; Insert inserts an eight-cell row.
+Ctrl/Cmd+A/C/X/V selects/copies/cuts/pastes a block, clipping at the pattern edge.
+Clipboard operations use the tracker's local block buffer, not arbitrary OS text.
+Ctrl/Cmd+Z/Y (or Shift+Z) undo/redo whole edits, including sequence operations.
+Enter previews the pattern from the cursor; Ctrl/Cmd+Enter starts the song at the
+selected order; Escape stops preview. These keys only act while the grid owns focus.
+
+SEQUENCE / BLOCK TOOLS exposes row deletion, block operations, atomic semitone
+transpose and the order list. Pattern controls create or duplicate patterns,
+rename every order reference together, and refuse deletion while referenced.
+Order entries can be inserted/replaced/removed/reordered; the final entry cannot
+be removed. Patterns retain 1–256 rows; tempo supports the full 1–240 frames/row.
+Existing optional fields/annotations survive unrelated edits and duplicate/copy
+operations. Invalid shapes remain recoverable as raw JSON without silent repair.
 
 Sound/music previews run the production synth in a separate, disposable native
 runtime: LIVE SONG starts the order list; PATTERN FROM CURSOR plays a non-looping
 copy of the selected pattern; AUDITION CELL/PREVIEW PATCH triggers the actual
 patch and eight-voice allocator. Frames are paced at 60 Hz, not per UI repaint.
-Telemetry reports real order/row/tick, voice notes and stereo PCM peaks. Unsaved
+The collapsible LIVE TELEMETRY reports real order/row/tick, voice notes and stereo
+PCM peaks; the grid highlights playback using the frozen preview asset, not later
+source edits. Channel headings remain visible during vertical scrolling. Unsaved
 edits are copied into previews, never written to the cartridge or save memory.
 Restart playback to hear later edits; successive auditions can overlap while
 their patch bank is unchanged. STOP AUDIO, leaving Assets, opening another

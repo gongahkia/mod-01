@@ -22,7 +22,7 @@ Git commit. The final audit must link the evidence for every row below.
 | Bit operations                | AND/OR/XOR/NOT/shifts use explicit integer-width/overflow rules with parser, compiler and execution coverage.                                                                                               | [x]      |
 | Immediate MODL playground     | Native scratchpad/REPL evaluates expressions and drawing through the actual compiler/core; ordinary cart source remains editable and recoverable.                                                           | [x]      |
 | Native source editor          | Find/replace, line/function navigation, block shortcuts, completion, declaration navigation and actionable diagnostics are usable in the native UI.                                                         | [x]      |
-| Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [ ]      |
+| Native tracker                | Full eight-channel grid with keyboard note entry, pattern/sequence operations, audition and playback feedback preserves real assets.                                                                        | [x]      |
 | Native game export            | CLI and Studio package a cartridge with a standalone native player and runtime; launch, input, audio, saves, source inspection and platform packaging are verified.                                         | [ ]      |
 | Sprite-region blit            | Source/destination rectangles, stretching, clipping/flips, deterministic sampling and work costs are tested in a real cartridge.                                                                            | [x]      |
 | Textured lines                | Bounded texture sampling with specified coordinates, wrapping/clipping and work costs supports running pseudo-3D demonstrations.                                                                            | [x]      |
@@ -183,3 +183,15 @@ choices remain outstanding.
   Song playback, stop controls and wrapped 900×600 controls were visually checked
   under Xvfb (`live-audio-song.png`, `live-audio-small.png`). This does not claim
   physical speaker QA or completion of the full tracker grid.
+
+- Native tracker grid: eight-channel keyboard entry, focus-safe navigation,
+  clipped rectangular copy/cut/paste, atomic transpose, cell patch/volume,
+  bounded row operations, reference-safe pattern rename/delete/duplicate and
+  order insert/replace/remove/move are implemented. Eight tracker/workbench
+  tests include actual egui keyboard/undo/redo, off-screen Home/End navigation,
+  malformed-source retention and a round-tripped eight-note asset playing all
+  eight voices in the actual native synth. Native Xvfb QA covered eight-channel
+  entry, copy/paste, undo/redo, pattern playback, scrolling and 900×600 horizontal
+  navigation. Screenshots include `tracker-eight-notes-final.png`,
+  `tracker-pattern-playback.png` and `tracker-minimum-scrolled.png`.
+  Studio help documents the exact shortcuts and local clipboard semantics.

@@ -59,6 +59,21 @@ impl AudioPreview {
         self.phase != Phase::Idle
     }
 
+    /// Resolve the playhead against the immutable audition bank, not subsequently edited source.
+    pub fn playhead(&self, music: &str) -> Option<Value> {
+        if !self.active() || self.packet["position"]["music"].as_str() != Some(music) {
+            return None;
+        }
+        let asset = self
+            .assets
+            .iter()
+            .find(|asset| asset["kind"] == "music" && asset["name"].as_str() == Some(music))?;
+        let mut position = self.packet["position"].clone();
+        let order = usize::try_from(position["orderIndex"].as_u64()?).ok()?;
+        position["pattern"] = asset["order"].get(order)?.clone();
+        Some(position)
+    }
+
     pub fn play(&mut self, assets: Vec<Value>, music: &str, order: usize, row: usize) {
         self.start(Session {assets, command: json!({"type":"audio-preview-play", "music":music, "orderIndex":order, "row":row})});
     }
@@ -236,50 +251,55 @@ impl AudioPreview {
 
     pub fn telemetry_ui(&self, ui: &mut egui::Ui) {
         ui.label(&self.status);
-        if self.packet.is_null() {
-            return;
-        }
-        let position = &self.packet["position"];
-        ui.label(if position.is_null() {
-            format!("SYNTH FRAME {} / PATCH AUDITION", self.packet["frame"])
-        } else {
-            format!(
-                "SYNTH FRAME {} / ORDER {} / ROW {} / TICK {}",
-                self.packet["frame"],
-                position["orderIndex"],
-                position["row"],
-                position["frameInRow"]
-            )
-        });
-        ui.horizontal_wrapped(|ui| {
-            for slot in 0..8 {
-                let voice = &self.packet["voices"][slot];
-                ui.colored_label(
-                    if voice["active"] == true {
-                        crate::ui_theme::CYAN
-                    } else {
-                        crate::ui_theme::MUTED
-                    },
-                    format!(
-                        "V{} {}",
-                        slot + 1,
+        ui.collapsing("LIVE TELEMETRY", |ui| {
+            if self.packet.is_null() {
+                ui.label("NO PREVIEW FRAME YET");
+                return;
+            }
+            let position = &self.packet["position"];
+            ui.label(if position.is_null() {
+                format!("SYNTH FRAME {} / PATCH AUDITION", self.packet["frame"])
+            } else {
+                format!(
+                    "SYNTH FRAME {} / ORDER {} / ROW {} / TICK {}",
+                    self.packet["frame"],
+                    position["orderIndex"],
+                    position["row"],
+                    position["frameInRow"]
+                )
+            });
+            ui.horizontal_wrapped(|ui| {
+                for slot in 0..8 {
+                    let voice = &self.packet["voices"][slot];
+                    ui.colored_label(
                         if voice["active"] == true {
-                            voice["note"].to_string()
+                            crate::ui_theme::CYAN
                         } else {
-                            "--".to_owned()
-                        }
-                    ),
-                );
-            }
-        });
-        ui.horizontal(|ui| {
-            for (label, key) in [("L", "peakLeft"), ("R", "peakRight")] {
-                ui.label(label);
-                ui.add(
-                    egui::ProgressBar::new(self.packet[key].as_f64().unwrap_or(0.0) as f32)
-                        .desired_width(100.0),
-                );
-            }
+                            crate::ui_theme::MUTED
+                        },
+                        format!(
+                            "V{} {}",
+                            slot + 1,
+                            if voice["active"] == true {
+                                voice["note"].to_string()
+                            } else {
+                                "--".to_owned()
+                            }
+                        ),
+                    );
+                }
+            });
+            ui.horizontal(|ui| {
+                for (label, key) in [("L", "peakLeft"), ("R", "peakRight")] {
+                    ui.label(label);
+                    ui.add(
+                        egui::ProgressBar::new(self.packet[key].as_f64().unwrap_or(0.0) as f32)
+                            .desired_width(100.0)
+                            .desired_height(12.0)
+                            .corner_radius(0),
+                    );
+                }
+            });
         });
     }
 }

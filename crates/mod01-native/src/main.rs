@@ -32,6 +32,7 @@ mod save_manager;
 mod source_editor;
 mod sprite;
 mod syntax;
+mod tracker;
 mod ui_assets;
 mod ui_theme;
 
@@ -58,7 +59,7 @@ const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 144;
 #[derive(Clone, Copy)]
 enum AudioPreviewMode {
-    Song,
+    Song(usize),
     Pattern,
     Note,
 }
@@ -1052,7 +1053,11 @@ impl StudioApp {
             Ok((bank, None, row)) => self.live_audio.play(
                 bank,
                 &self.asset_name,
-                0,
+                if let AudioPreviewMode::Song(order) = mode {
+                    order
+                } else {
+                    0
+                },
                 if matches!(mode, AudioPreviewMode::Pattern) {
                     row
                 } else {
@@ -2954,6 +2959,7 @@ impl eframe::App for StudioApp {
                 }
                 View::Sprites => self.sprite_ui(ui),
                 View::Assets => {
+                    egui::ScrollArea::vertical().id_salt("asset-workspace").show(ui, |ui| {
                     if self.asset_name.is_empty() {
                         ui.heading("ASSETS");
                         ui.label("Choose a map, font, sound or music asset from the project list.");
@@ -3022,7 +3028,7 @@ impl eframe::App for StudioApp {
                                     })
                                     .is_some_and(|asset| asset.kind == modl_core::AssetKind::Music);
                                 if music && ui.button("LIVE SONG").clicked() {
-                                    self.start_live_audio(AudioPreviewMode::Song);
+                                    self.start_live_audio(AudioPreviewMode::Song(0));
                                 }
                                 if music && ui.button("PATTERN FROM CURSOR").clicked() {
                                     self.start_live_audio(AudioPreviewMode::Pattern);
@@ -3077,13 +3083,38 @@ impl eframe::App for StudioApp {
                                 self.asset_workbench = None;
                             }
                         });
+                        let sounds = self.project.as_ref().map_or_else(Vec::new, |project| {
+                            project.manifest.assets.iter().filter(|(_, asset)| asset.kind == modl_core::AssetKind::Sound).map(|(name, _)| name.clone()).collect::<Vec<_>>()
+                        });
+                        let position = self.live_audio.playhead(&self.asset_name);
+                        let mut tracker_actions = Vec::new();
                         if let Some(workbench) = self.asset_workbench.as_mut() {
                             ui.separator();
-                            if workbench.ui(ui, &sprite::palette(), &tile_sets) {
+                            if workbench.ui(ui, &sprite::palette(), &tile_sets, &sounds, position.as_ref()) {
                                 self.asset_dirty = true;
+                            }
+                            tracker_actions = workbench.take_tracker_actions();
+                        }
+                        for action in tracker_actions {
+                            match action {
+                                tracker::Action::Pattern => self.start_live_audio(AudioPreviewMode::Pattern),
+                                tracker::Action::Song(order) => self.start_live_audio(AudioPreviewMode::Song(order)),
+                                tracker::Action::Stop => self.live_audio.stop(),
+                                tracker::Action::Audition { sound, note, volume } => {
+                                    let prepared = self.project.as_ref().ok_or_else(|| "no project is open".to_owned()).and_then(|project| {
+                                        let document = self.selected_audio_document()?;
+                                        live_audio::project_bank(project, &self.asset_name, &document, None)
+                                    });
+                                    match prepared {
+                                        Ok(bank) => self.live_audio.audition(bank, &sound, f64::from(note), volume),
+                                        Err(error) => self.status = format!("AUDIO PREVIEW ERROR: {error}"),
+                                    }
+                                }
+                                tracker::Action::Undo | tracker::Action::Redo => unreachable!("history is handled by the asset workbench"),
                             }
                         }
                     }
+                    });
                 }
                 View::Player => {
                     if ui.button("OPEN GAME VIEW").clicked() {

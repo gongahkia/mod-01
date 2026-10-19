@@ -51,6 +51,22 @@ choices remain outstanding.
 
 ## Progress
 
+- Windows runtime admission audit found the old remote CI failure is still
+  relevant: Rust's verbatim `\\?\` host path fails Node 24.21's exact-file
+  permission check. A SHA-256-verified official Windows Node 24.21 binary executed
+  through WSL interop reproduces the denial; ordinary absolute entry/grant paths
+  work and still deny an adjacent fixture. Node 24.19 additionally rejects the
+  verbatim entry during realpath resolution. The native bridge now uses pinned
+  `dunce` 1.0.5 to simplify only unambiguous Windows paths and passes the grant as
+  an OS string, not lossy display text. A real restricted-child probe covers
+  spaces/Unicode/# and adjacent-file denial; Windows-only tests preserve reserved
+  and trailing-dot spellings. The helper's full upstream CC0 licence travels in
+  existing native library notices. Actual Rust Windows/macOS execution at this
+  new commit remains pending; this Node probe is not a complete desktop OS pass.
+  All 150 native tests, seven core native-export tests, workspace Clippy/build,
+  unchanged ten-cartridge raw/PNG pairs and all three Linux package comparisons
+  pass. Windows Node 24.21 also passes the ordinary-path probe from a directory
+  containing spaces, Unicode and # while denying its adjacent file.
 - Save I/O regression first reproduced a predictable `.tmp` symlink overwriting
   an owned foreign fixture and publishing that link as the save. Native storage
   now uses distinct create-new image/schema stages, sync-before-rename and cleanup

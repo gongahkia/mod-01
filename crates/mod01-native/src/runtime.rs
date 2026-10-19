@@ -1,5 +1,6 @@
 use std::{
     cell::Cell,
+    ffi::OsString,
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdout, Command, Stdio},
@@ -103,7 +104,10 @@ fn worker(
     events: Sender<(Option<u64>, Value)>,
     active: Arc<AtomicU64>,
 ) {
-    let host_path = match host_path.canonicalize() {
+    // Rust's Windows verbatim paths are not interchangeable with Node's
+    // permission keys. Preserve realpath identity while simplifying only safe
+    // ordinary-path equivalents (not reserved names/trailing-dot variants).
+    let host_path = match dunce::canonicalize(&host_path) {
         Ok(path) => path,
         Err(error) => {
             let message = format!("native runtime bundle is missing: {error}");
@@ -145,9 +149,11 @@ fn worker(
                 .filter(|path| path.is_file())
                 .unwrap_or_else(|| PathBuf::from("node"));
             let mut process = Command::new(executable);
+            let mut read_permission = OsString::from("--allow-fs-read=");
+            read_permission.push(host_path.as_os_str());
             process
                 .arg("--permission")
-                .arg(format!("--allow-fs-read={}", host_path.display()))
+                .arg(read_permission)
                 .arg(&host_path)
                 .env_clear()
                 .stdin(Stdio::piped())
@@ -263,6 +269,70 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use serde_json::json;
     use std::time::Instant;
+
+    #[test]
+    fn restricted_host_launch_keeps_space_unicode_and_hash_paths_but_denies_adjacent_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "mod01 host é # {}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let host = directory.join("host.mjs");
+        std::fs::write(
+            directory.join("blocked.txt"),
+            b"owned permission probe; do not read",
+        )
+        .unwrap();
+        let source = r"import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
+const host = fileURLToPath(import.meta.url);
+for await (const line of createInterface({input:process.stdin,crlfDelay:Infinity})) {
+  const command = JSON.parse(line);
+  if (command.type === 'stop') { console.log(JSON.stringify({type:'stopped'})); continue; }
+  let denied = '';
+  try { readFileSync(new URL('./blocked.txt',import.meta.url)); } catch(error) { denied = error.code; }
+  console.log(JSON.stringify({type:'permission-probe',bytes:readFileSync(host).length,denied}));
+}
+";
+        std::fs::write(&host, source).unwrap();
+        let runtime = RuntimeBridge::new(host);
+        runtime.send(json!({"type":"load"})).unwrap();
+        let result = receive(&runtime);
+        runtime.send(json!({"type":"stop"})).unwrap();
+        let stopped = receive(&runtime);
+        drop(runtime);
+        // Both files and this uniquely named directory belong only to the probe.
+        std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(result["type"], "permission-probe", "{result}");
+        assert_eq!(result["bytes"], source.len());
+        assert_eq!(result["denied"], "ERR_ACCESS_DENIED");
+        assert_eq!(stopped["type"], "stopped");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn node_cli_paths_simplify_only_unambiguous_windows_drive_names() {
+        use std::path::Path;
+        assert_eq!(
+            dunce::simplified(Path::new(r"\\?\C:\host folder\é\native-host.mjs")),
+            Path::new(r"C:\host folder\é\native-host.mjs")
+        );
+        for path in [
+            r"\\?\C:\host.\native-host.mjs",
+            r"\\?\C:\CON\native-host.mjs",
+        ] {
+            assert_eq!(
+                dunce::simplified(Path::new(path)),
+                Path::new(path),
+                "unsafe spelling cannot silently identify another module"
+            );
+        }
+    }
 
     #[test]
     fn queued_frame_save_audio_and_stop_replies_cannot_cross_runtime_sessions() {

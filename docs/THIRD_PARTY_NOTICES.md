@@ -4,10 +4,14 @@ MOD-01 is private proprietary software. This notice inventories dependencies; it
 license to MOD-01 source, cartridges, identity, art, font, music, or other first-party material.
 
 The Rust workspace includes clap, serde/serde_json, toml, eframe/egui, cpal,
-gilrs, directories, rfd, image and base64. The complete transitive graph,
+gilrs, directories, dunce, rfd, image and base64. The complete transitive graph,
 versions and declared licenses are available with `cargo metadata` against
 `Cargo.lock`; do not infer the complete native dependency inventory from a
 short list of compiler crates.
+
+Windows host-launch path compatibility uses pinned `dunce` 1.0.5. Its upstream
+CC0-1.0 licence is retained in `crates/mod01-native/assets/LIBRARY-LICENSES.txt`
+and travels with the existing native-library notices in Studio/game packages.
 
 The JavaScript development graph's direct packages are TypeScript 6.0.3 (Apache-2.0), Vite 8.2.2
 (MIT), Vitest 5.0.0 (MIT), ESLint 10.10.0 (MIT), `@eslint/js` 10.0.1 (MIT), typescript-eslint

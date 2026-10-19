@@ -368,6 +368,20 @@ fn studio_library_preserves_dirty_work_until_save_discard_or_cancel_and_failed_o
     assert!(app.pending_library_open.is_some());
     assert_eq!(fs::read(&alpha).unwrap(), original);
     app.manifest_text = app.project.as_ref().unwrap().manifest_source.clone();
+    // A real filesystem save failure (destination is an existing directory), not
+    // a mocked return value, must leave both the pending request and source alive.
+    app.project.as_mut().unwrap().workcart_path = Some(temporary.0.clone());
+    app.confirm_library_open(ConfirmOpen::Save);
+    assert!(app.pending_library_open.is_some());
+    assert!(
+        app.project
+            .as_ref()
+            .unwrap()
+            .editor_text
+            .contains("clear(7)")
+    );
+    assert_eq!(fs::read(&alpha).unwrap(), original);
+    app.project.as_mut().unwrap().workcart_path = Some(alpha.clone());
     app.confirm_library_open(ConfirmOpen::Save);
     assert!(app.pending_library_open.is_none());
     assert!(

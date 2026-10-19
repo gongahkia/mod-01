@@ -13,7 +13,12 @@ pub fn encode(frames: &[(u32, Value)]) -> Result<Vec<u8>, String> {
         return Err("replay exceeds 36,000 frames".to_owned());
     }
     let mut compact: Vec<Value> = Vec::new();
+    let mut previous = None;
     for (frame, input) in frames {
+        if previous.is_some_and(|previous| *frame <= previous) {
+            return Err("recorded input frames must strictly increase".to_owned());
+        }
+        previous = Some(*frame);
         let item = trace_frame(u64::from(*frame), input)?;
         if let Some(last) = compact.last_mut() {
             let end = last["frame"].as_u64().unwrap_or(0) + last["duration"].as_u64().unwrap_or(1);
@@ -175,6 +180,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_duration_and_pointer() {
+        assert!(encode(&[(0, empty_input()), (0, empty_input())]).is_err());
+        assert!(encode(&[(1, empty_input()), (0, empty_input())]).is_err());
         let invalid = br#"{"revision":1,"frames":[{"frame":0,"duration":"2","controllers":[]}]}"#;
         assert!(decode(invalid).is_err());
         let invalid = br#"{"revision":1,"frames":[{"frame":0,"controllers":[],"pointer":{"x":240,"y":0,"primary":false,"secondary":false,"inside":true}}]}"#;

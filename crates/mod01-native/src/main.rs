@@ -35,6 +35,8 @@ mod source_editor;
 mod sprite;
 #[cfg(test)]
 mod studio_asset_tests;
+#[cfg(test)]
+mod studio_replay_tests;
 mod syntax;
 mod touch_controller;
 mod tracker;
@@ -179,6 +181,10 @@ struct StudioApp {
     loaded: bool,
     pending: bool,
     frame: u32,
+    input_frame: u32,
+    frame_input: Option<Value>,
+    debug_booted: bool,
+    debug_frame_boundary: bool,
     work: u32,
     last_tick: Instant,
     screen_rect: Option<egui::Rect>,
@@ -269,6 +275,10 @@ impl StudioApp {
             loaded: false,
             pending: false,
             frame: 0,
+            input_frame: 0,
+            frame_input: None,
+            debug_booted: false,
+            debug_frame_boundary: true,
             work: 0,
             last_tick: Instant::now(),
             screen_rect: None,
@@ -970,6 +980,18 @@ impl StudioApp {
         };
     }
 
+    fn start_replay_recording(&mut self) {
+        let debug = self.running && self.debugging;
+        self.stop();
+        self.replay_playback = None;
+        self.replay_frames.clear();
+        self.recording_replay = true;
+        self.run_mode(debug);
+        if !self.running {
+            self.recording_replay = false;
+        }
+    }
+
     fn load_replay(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("MOD-01 replay", &["m01rec"])
@@ -1208,6 +1230,13 @@ impl StudioApp {
                 self.loaded = false;
                 self.pending = true;
                 self.frame = 0;
+                self.input_frame = 0;
+                self.frame_input = None;
+                self.debug_booted = !debug;
+                self.debug_frame_boundary = true;
+                if self.recording_replay {
+                    self.replay_frames.clear();
+                }
                 self.last_pixels.clear();
                 self.status = if debug {
                     "LOADING DEBUG CARTRIDGE"
@@ -1234,6 +1263,7 @@ impl StudioApp {
         self.debug_running = false;
         self.loaded = false;
         self.pending = false;
+        self.frame_input = None;
         if let Some(audio) = &self.audio {
             audio.clear();
         }
@@ -1269,6 +1299,8 @@ impl StudioApp {
                         self.accept_frame(&event["frame"], context);
                         self.status = format!("DEBUG FRAME {} COMPLETE", self.frame);
                     } else if event["booted"] == true {
+                        self.debug_booted = true;
+                        self.debug_frame_boundary = true;
                         self.status = "DEBUG BOOT COMPLETE".to_owned();
                     } else if event["event"].is_object() {
                         self.debug_inspection = event["inspection"].clone();
@@ -1290,7 +1322,13 @@ impl StudioApp {
                 Some("snapshot") => {
                     self.snapshot = event["snapshot"].as_str().map(str::to_owned);
                     if let Some(snapshot) = &self.snapshot {
-                        self.debug_snapshots.push((self.frame, snapshot.clone()));
+                        self.debug_snapshots.push((
+                            event["frame"]
+                                .as_u64()
+                                .unwrap_or(u64::from(self.input_frame))
+                                as u32,
+                            snapshot.clone(),
+                        ));
                         if self.debug_snapshots.len() > 120 {
                             self.debug_snapshots.remove(0);
                         }
@@ -1299,6 +1337,14 @@ impl StudioApp {
                 }
                 Some("restored") => {
                     self.touch_controller.clear();
+                    self.input_frame = event["frame"].as_u64().unwrap_or(0) as u32;
+                    self.frame = self.input_frame.saturating_sub(1);
+                    self.frame_input = None;
+                    self.debug_booted = event["booted"] == true;
+                    self.debug_frame_boundary = true;
+                    self.debug_running = false;
+                    self.replay_frames
+                        .retain(|(frame, _)| *frame < self.input_frame);
                     self.status = "DEBUG SNAPSHOT RESTORED".to_owned();
                     if let Some(audio) = &self.audio {
                         audio.clear();
@@ -1343,6 +1389,7 @@ impl StudioApp {
                 _ => self.status = format!("UNEXPECTED RUNTIME MESSAGE: {}", event["type"]),
             }
         }
+        self.pending = self.runtime.has_pending();
         if self.debug_running && self.running && self.loaded && !self.pending {
             self.step(context);
         }
@@ -1375,6 +1422,14 @@ impl StudioApp {
 
     fn accept_frame(&mut self, event: &Value, context: &egui::Context) {
         self.frame = event["frame"].as_u64().unwrap_or(0) as u32;
+        self.input_frame = self.frame.saturating_add(1);
+        self.debug_frame_boundary = true;
+        if let Some(input) = self.frame_input.take()
+            && self.recording_replay
+            && self.replay_frames.len() < 36000
+        {
+            self.replay_frames.push((self.frame, input));
+        }
         self.work = event["workUnits"].as_u64().unwrap_or(0) as u32;
         if let Some(encoded) = event["pixels"].as_str() {
             if let Ok(pixels) = STANDARD.decode(encoded) {
@@ -1548,9 +1603,8 @@ impl StudioApp {
                 for event in self.debug_trace.iter().rev().take(8) { ui.label(format!("{}", event["sourceSpan"])); }
                 ui.label("SAVED DEBUG SNAPSHOTS");
                 for (frame, snapshot) in self.debug_snapshots.iter().rev() {
-                    if ui.button(format!("RESTORE FRAME {frame}")).clicked() {
+                    if ui.button(format!("RESTORE BEFORE FRAME {frame}")).clicked() {
                         self.pending = self.runtime.send(json!({"type":"restore","snapshot":snapshot})).is_ok();
-                        self.frame = *frame;
                         self.debug_running = false;
                     }
                 }
@@ -1651,18 +1705,17 @@ impl StudioApp {
         }
         let mut live_input = json!({"controllers":controllers,"pointer":pointer});
         self.touch_controller.apply_to(&mut live_input);
-        let input = self.replay_playback.as_ref().map_or_else(
-            || live_input.clone(),
-            |frames| {
-                frames
-                    .get(&self.frame)
-                    .cloned()
-                    .unwrap_or_else(replay::empty_input)
-            },
-        );
-        if self.recording_replay && self.replay_frames.len() < 36_000 {
-            self.replay_frames.push((self.frame, input.clone()));
-        }
+        let input = self.frame_input.clone().unwrap_or_else(|| {
+            self.replay_playback.as_ref().map_or_else(
+                || live_input.clone(),
+                |frames| {
+                    frames
+                        .get(&self.input_frame)
+                        .cloned()
+                        .unwrap_or_else(replay::empty_input)
+                },
+            )
+        });
         let command = if kind == "step" {
             json!({"type":kind,"input":input,"watches":self.watches,
                 "conditions":self.breakpoints.iter().map(|point| point.condition.as_str()).collect::<Vec<_>>()})
@@ -1673,7 +1726,13 @@ impl StudioApp {
             self.status = error;
             self.running = false;
         } else {
-            self.touch_controller.consume();
+            if self.frame_input.is_none() && (kind != "step" || self.debug_booted) {
+                self.frame_input = Some(input);
+                self.touch_controller.consume();
+            }
+            if kind == "step" {
+                self.debug_frame_boundary = false;
+            }
             self.pending = true;
         }
     }
@@ -1825,8 +1884,7 @@ impl StudioApp {
                         if self.recording_replay {
                             self.finish_replay();
                         } else {
-                            self.replay_frames.clear();
-                            self.recording_replay = true;
+                            self.start_replay_recording();
                         }
                         ui.close();
                     }
@@ -1884,7 +1942,11 @@ impl StudioApp {
                     self.step(ui.ctx());
                 }
                 if ui
-                    .add_enabled(self.loaded && !self.pending, egui::Button::new("SNAPSHOT"))
+                    .add_enabled(
+                        self.loaded && !self.pending && self.debug_frame_boundary,
+                        egui::Button::new("SNAPSHOT"),
+                    )
+                    .on_disabled_hover_text("Snapshots require a completed frame or boot boundary")
                     .clicked()
                 {
                     self.pending = self.runtime.send(json!({"type":"snapshot"})).is_ok();

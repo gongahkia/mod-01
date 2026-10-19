@@ -112,6 +112,15 @@ watches, memory inspection/editing, state/tasks and snapshot restore. It uses th
 same compiler IR and device implementation as ordinary play. A paused debugger
 does not advance machine frame time.
 
+RECORD REPLAY starts a fresh run (using the current save), clears loaded playback
+and records one input per completed display frame, including frame zero exactly
+once. Source stepping locks that input for the entire frame; boot and individual
+statements do not add trace entries. Reproducing an input-only trace requires the
+same cartridge, seed and initial save. SNAPSHOT is available only before boot or
+at completed boot/frame boundaries. RESTORE uses the runtime's next-frame cursor,
+clears the suspended continuation and trims any later recorded inputs. Native
+request tracking waits for all outstanding replies before advancing debug steps.
+
 The standalone game surface is available through `--play PATH` or OPEN GAME VIEW.
 It uses the same execution/input/audio/save devices. PAUSE/Escape suspends frame
 submission; RESTART reboots; SOURCE opens the authored modules/assets in Studio.

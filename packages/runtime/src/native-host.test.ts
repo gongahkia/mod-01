@@ -93,10 +93,12 @@ describe('native process host', () => {
       expect(Buffer.from(first.pixels as string, 'base64')[0]).toBe(255);
       expect(Buffer.from(first.left as string, 'base64').length).toBe(800 * 4);
       const snapshot = await request({ type: 'snapshot' });
-      expect(snapshot.type).toBe('snapshot');
+      expect(snapshot).toMatchObject({ type: 'snapshot', frame: 1, booted: true });
       const second = await request({ type: 'frame', input: emptyInputFrame() });
       expect(await request({ type: 'restore', snapshot: snapshot.snapshot })).toMatchObject({
         type: 'restored',
+        frame: 1,
+        booted: true,
       });
       const replayed = await request({ type: 'frame', input: emptyInputFrame() });
       expect(replayed.pixels).toBe(second.pixels);

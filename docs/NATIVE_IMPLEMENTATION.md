@@ -274,3 +274,14 @@ choices remain outstanding.
   `touch-player-paused.png`, `touch-player-minimum-final.png`). These are software
   event/visual checks, not physical touchscreen or audible-speaker claims. The
   common typed cartridge-action pause menu remains its separate open requirement.
+
+- Native input/replay sequencing now distinguishes the next input frame from
+  the last displayed frame, locks inputs across source steps, records only
+  completed frames and starts recording from a fresh machine. Snapshot/restore
+  replies carry authoritative frame/boot cursors; restore trims the recording
+  branch and clears suspended input. Pending debug commands are counted rather
+  than cleared by the first unrelated reply. Four real Studio/Node tests cover
+  release and stepped three-frame button traces, record restart and snapshot
+  rewind without duplicate frame zero/statement entries. All 67 native tests,
+  the native-host test, lint and type checks pass. This does not claim completion
+  of the typed menu or platform verification requirements.

@@ -5889,15 +5889,27 @@ async function handle(command) {
     }
     case 'snapshot':
       if (runtime === void 0) throw new Error('no cartridge is loaded');
-      return {
-        type: 'snapshot',
-        snapshot: serialize(runtime.snapshot()).toString('base64'),
-      };
+      {
+        const snapshot = runtime.snapshot();
+        return {
+          type: 'snapshot',
+          snapshot: serialize(snapshot).toString('base64'),
+          frame: snapshot.machine.frame,
+          booted: snapshot.machine.execution.booted,
+        };
+      }
     case 'restore':
       if (runtime === void 0) throw new Error('no cartridge is loaded');
       scratchFresh = false;
       runtime.restore(deserialize(Buffer.from(command.snapshot, 'base64')));
-      return { type: 'restored' };
+      {
+        const snapshot = runtime.snapshot();
+        return {
+          type: 'restored',
+          frame: snapshot.machine.frame,
+          booted: snapshot.machine.execution.booted,
+        };
+      }
     case 'memory': {
       if (runtime === void 0) throw new Error('no cartridge is loaded');
       const result = runtime.inspectMemory(command.address, command.length);

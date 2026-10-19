@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdout, Command, Stdio},
@@ -32,6 +33,7 @@ pub struct RuntimeBridge {
     sender: Sender<(u64, Value)>,
     receiver: Receiver<(Option<u64>, Value)>,
     generation: Arc<AtomicU64>,
+    pending: Cell<usize>,
 }
 
 impl RuntimeBridge {
@@ -45,14 +47,16 @@ impl RuntimeBridge {
             sender: command_tx,
             receiver: event_rx,
             generation,
+            pending: Cell::new(0),
         }
     }
 
     pub fn send(&self, command: Value) -> Result<(), String> {
-        let generation = if matches!(
+        let replaces_session = matches!(
             command["type"].as_str(),
             Some("load" | "render-wav" | "audio-preview-load" | "stop")
-        ) {
+        );
+        let generation = if replaces_session {
             self.generation
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
@@ -61,7 +65,17 @@ impl RuntimeBridge {
         };
         self.sender
             .send((generation, command))
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        self.pending.set(if replaces_session {
+            1
+        } else {
+            self.pending.get().saturating_add(1)
+        });
+        Ok(())
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending.get() != 0
     }
 
     pub fn poll(&self) -> Option<Value> {
@@ -69,6 +83,11 @@ impl RuntimeBridge {
             if generation
                 .is_none_or(|generation| generation == self.generation.load(Ordering::Relaxed))
             {
+                self.pending.set(if event["type"] == "error" {
+                    0
+                } else {
+                    self.pending.get().saturating_sub(1)
+                });
                 return Some(event);
             }
         }
@@ -239,6 +258,7 @@ mod tests {
             sender: commands,
             receiver: replies,
             generation: Arc::new(AtomicU64::new(0)),
+            pending: Cell::new(0),
         };
         events
             .send((
@@ -257,6 +277,16 @@ mod tests {
             json!({"type":"loaded","cartridgeId":"new"})
         );
         assert!(bridge.poll().is_none());
+        bridge.send(json!({"type":"memory"})).unwrap();
+        bridge.send(json!({"type":"snapshot"})).unwrap();
+        assert_eq!(received.recv().unwrap().0, 1);
+        assert_eq!(received.recv().unwrap().0, 1);
+        events.send((Some(1), json!({"type":"memory"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "memory");
+        assert!(bridge.has_pending());
+        events.send((Some(1), json!({"type":"snapshot"}))).unwrap();
+        assert_eq!(bridge.poll().unwrap()["type"], "snapshot");
+        assert!(!bridge.has_pending());
         bridge.send(json!({"type":"stop"})).unwrap();
         assert_eq!(received.recv().unwrap().0, 2);
         events

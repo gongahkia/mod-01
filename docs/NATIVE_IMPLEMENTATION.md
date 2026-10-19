@@ -167,3 +167,11 @@ choices remain outstanding.
   Nine cartridges now pack/PNG-export reproducibly and boot, and Linux bundled
   game verification still passes 120 frames without PATH. Actual speaker and
   physical-controller QA, and Windows/macOS execution, remain unclaimed.
+
+- Current checkpoint: the complete `scripts/check.sh` gate passes: formatting,
+  lint, types, 181 runtime tests, warning-free all-feature workspace Clippy,
+  20 CLI / 32 native / 82 core unit/integration tests, builds, all nine
+  reproducible raw/PNG artifacts and the Linux bundled-game verification.
+  PRISM CORRIDOR also independently passes its own 120-frame native package
+  check without PATH. This is a checkpoint, not completion of the still-open
+  tracker, touch, menus, bundles, library or cross-platform/input/audio QA rows.

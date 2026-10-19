@@ -1,8 +1,14 @@
 //! Bounded PNG admission and one deterministic master-palette converter for all Rust tools.
 use crate::{CartridgeError, hardware::master_palette};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{ImageFormat, ImageReader, Limits};
+use serde::Serialize;
 use serde_json::{Value, json};
-use std::io::Cursor;
+use std::{
+    fs::File,
+    io::{Cursor, Read},
+    path::Path,
+};
 
 const MAX_PNG_BYTES: usize = 16 * 1024 * 1024;
 
@@ -24,6 +30,146 @@ fn error(message: impl Into<String>) -> CartridgeError {
         code: "M014065",
         message: message.into(),
     }
+}
+
+/// Reads at most the documented 16 MiB PNG source limit, including changing/special files.
+/// # Errors
+/// Returns M014065 for read failures or oversized input.
+pub fn read_png_source(path: &Path) -> Result<Vec<u8>, CartridgeError> {
+    let file =
+        File::open(path).map_err(|failure| error(format!("{}: {failure}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(MAX_PNG_BYTES + 1).unwrap_or(u64::MAX))
+        .read_to_end(&mut bytes)
+        .map_err(|failure| error(format!("{}: {failure}", path.display())))?;
+    if bytes.len() > MAX_PNG_BYTES {
+        return Err(error("PNG source exceeds 16 MiB"));
+    }
+    Ok(bytes)
+}
+
+/// Serializes the current single-frame, single-layer editable RGBA source (not palette loss).
+/// Its field order and layer defaults match native Studio's ordinary layered source writer.
+/// # Errors
+/// Returns M014065 for invalid sprite geometry/data or serialization failures.
+pub fn layered_source(source: &RgbaSource) -> Result<Vec<u8>, CartridgeError> {
+    #[derive(Serialize)]
+    struct Document {
+        revision: u8,
+        width: usize,
+        height: usize,
+        frames: Vec<Frame>,
+    }
+    #[derive(Serialize)]
+    struct Frame {
+        layers: Vec<Layer>,
+    }
+    #[derive(Serialize)]
+    struct Layer {
+        name: &'static str,
+        visible: bool,
+        locked: bool,
+        pixels: String,
+    }
+    if !(1..=128).contains(&source.width)
+        || !(1..=128).contains(&source.height)
+        || source.width * source.height * 4 != source.pixels.len()
+    {
+        return Err(error("invalid layered PNG source"));
+    }
+    let document = Document {
+        revision: 1,
+        width: source.width,
+        height: source.height,
+        frames: vec![Frame {
+            layers: vec![Layer {
+                name: "Layer 1",
+                visible: true,
+                locked: false,
+                pixels: STANDARD.encode(&source.pixels),
+            }],
+        }],
+    };
+    let mut bytes = serde_json::to_vec(&document).map_err(|failure| error(failure.to_string()))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// Adds or explicitly replaces an entire PNG-backed sprite/tile set in a current workcart.
+/// Preserves modules, auxiliary files, recipes/tests, metadata and tile flags. Sprite replacement
+/// also replaces its editable RGBA sidecar; it does not leave stale layered source behind.
+/// Validates the complete asset bank, source compilation and packed capacity before returning.
+/// # Errors
+/// Returns M014066 for replacement/name/kind conflicts, or the underlying admission/pack error.
+pub fn import_workcart_png(
+    source: &str,
+    name: &str,
+    png: &[u8],
+    kind: PngAssetKind,
+    replace: bool,
+) -> Result<String, CartridgeError> {
+    let conflict = |message| CartridgeError {
+        code: "M014066",
+        message,
+    };
+    if name.is_empty()
+        || name.len() > 64
+        || !name.as_bytes()[0].is_ascii_alphabetic()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(conflict(
+            "asset name must be a 1–64 byte MODL identifier beginning with a letter".to_owned(),
+        ));
+    }
+    let mut project = crate::parse_workcart(source)?;
+    let existing = project.manifest.assets.get(name).cloned();
+    if existing.is_some() && !replace {
+        return Err(conflict(format!(
+            "asset '{name}' already exists; --replace explicitly replaces its data and layered source"
+        )));
+    }
+    let asset_kind = match kind {
+        PngAssetKind::Sprite => crate::AssetKind::Sprite,
+        PngAssetKind::TileSet => crate::AssetKind::TileSet,
+    };
+    if let Some(existing) = &existing {
+        let compatible = existing.kind == asset_kind
+            || kind == PngAssetKind::Sprite && existing.kind == crate::AssetKind::Animation;
+        if !compatible {
+            return Err(conflict(format!("asset '{name}' has a different kind")));
+        }
+    }
+    let decoded = decode_png(png, kind)?;
+    let previous: Option<Value> = existing
+        .as_ref()
+        .and_then(|asset| project.files.get(&asset.path))
+        .map(|bytes| serde_json::from_slice(bytes).map_err(|failure| error(failure.to_string())))
+        .transpose()?;
+    let asset = indexed_asset(&decoded, kind, previous.as_ref())?;
+    let path = existing.map_or_else(|| format!("assets/{name}.m01g"), |asset| asset.path);
+    let mut encoded = serde_json::to_vec(&asset).map_err(|failure| error(failure.to_string()))?;
+    encoded.push(b'\n');
+    project.files.insert(path.clone(), encoded);
+    if kind == PngAssetKind::Sprite {
+        project.files.insert(
+            format!("editor/sprites/{name}.m01paint"),
+            layered_source(&decoded)?,
+        );
+    }
+    project.manifest.assets.insert(
+        name.to_owned(),
+        crate::ProjectAsset {
+            kind: asset_kind,
+            path,
+        },
+    );
+    let manifest =
+        toml::to_string(&project.manifest).map_err(|failure| error(failure.to_string()))?;
+    let edited = crate::rewrite_workcart(source, &manifest, &project.files)?;
+    crate::pack_workcart(&edited)?;
+    Ok(edited)
 }
 
 /// Alpha 0–127 maps to zero; opaque colours choose the nearest RGB among indices 1–255.
@@ -274,5 +420,47 @@ mod tests {
         assert_eq!(source.pixels, pixels);
         assert_eq!(previous["flags"], json!([1, 2]));
         assert!(indexed_asset(&source, PngAssetKind::Sprite, Some(&previous)).is_err());
+    }
+
+    #[test]
+    fn replacing_a_sprite_replaces_its_editable_rgba_source_but_not_other_authored_data() {
+        let source = include_str!("../../../examples/api-tour/cart.m01w");
+        let original = crate::parse_workcart(source).unwrap();
+        let first = png(1, 1, vec![119, 37, 92, 255]);
+        let second = png(1, 1, vec![45, 121, 9, 128]);
+        let imported =
+            import_workcart_png(source, "art", &first, PngAssetKind::Sprite, false).unwrap();
+        assert_eq!(
+            import_workcart_png(&imported, "art", &second, PngAssetKind::Sprite, false)
+                .unwrap_err()
+                .code,
+            "M014066"
+        );
+        let replaced =
+            import_workcart_png(&imported, "art", &second, PngAssetKind::Sprite, true).unwrap();
+        let project = crate::parse_workcart(&replaced).unwrap();
+        let before = crate::parse_workcart(&imported).unwrap();
+        assert_ne!(
+            before.files["editor/sprites/art.m01paint"],
+            project.files["editor/sprites/art.m01paint"]
+        );
+        let layered: Value =
+            serde_json::from_slice(&project.files["editor/sprites/art.m01paint"]).unwrap();
+        assert_eq!(
+            STANDARD
+                .decode(
+                    layered["frames"][0]["layers"][0]["pixels"]
+                        .as_str()
+                        .unwrap()
+                )
+                .unwrap(),
+            vec![45, 121, 9, 128]
+        );
+        assert_eq!(project.recipes, original.recipes);
+        assert_eq!(project.tests, original.tests);
+        for (path, data) in original.files {
+            assert_eq!(project.files.get(&path), Some(&data));
+        }
+        crate::load_cartridge_program(&crate::pack_workcart(&replaced).unwrap().bytes).unwrap();
     }
 }

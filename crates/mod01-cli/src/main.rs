@@ -67,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         command: GenerateCommand,
     },
+    /// Import source art through native Studio's shared conversion and validation.
+    Import {
+        #[command(subcommand)]
+        command: ImportCommand,
+    },
     /// Compile one MODL/1 source module to JavaScript and a source map.
     Build {
         path: PathBuf,
@@ -168,6 +173,30 @@ enum ExportCommand {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PngImportKind {
+    Sprite,
+    TileSet,
+}
+
+#[derive(Debug, Subcommand)]
+enum ImportCommand {
+    /// Import a PNG as a named asset, atomically updating the input workcart by default.
+    Png {
+        path: PathBuf,
+        name: String,
+        png: PathBuf,
+        #[arg(long, value_enum, default_value = "sprite")]
+        kind: PngImportKind,
+        /// Replace an entire existing asset and its editable layered source explicitly.
+        #[arg(long)]
+        replace: bool,
+        /// Write a new workcart instead; existing outputs are never overwritten.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Args)]
 struct NativeExportArguments {
     path: PathBuf,
@@ -256,6 +285,17 @@ fn main() -> ExitCode {
                     output,
                 },
         } => generate_map(&path, &recipe, output.as_deref()),
+        Command::Import {
+            command:
+                ImportCommand::Png {
+                    path,
+                    name,
+                    png,
+                    kind,
+                    replace,
+                    output,
+                },
+        } => import_png(&path, &name, &png, kind, replace, output.as_deref()),
         Command::Build {
             path,
             debug,
@@ -884,6 +924,49 @@ fn generate_map(path: &Path, recipe: &str, output: Option<&Path>) -> ExitCode {
         return ExitCode::FAILURE;
     }
     println!("generated map '{recipe}' in {}", output.display());
+    ExitCode::SUCCESS
+}
+
+fn import_png(
+    path: &Path,
+    name: &str,
+    png: &Path,
+    kind: PngImportKind,
+    replace: bool,
+    output: Option<&Path>,
+) -> ExitCode {
+    use modl_core::asset_import::{PngAssetKind, import_workcart_png, read_png_source};
+    let Ok(project) = load_project(path) else {
+        return ExitCode::FAILURE;
+    };
+    let input = if path.is_dir() {
+        path.join("cart.m01w")
+    } else {
+        path.to_path_buf()
+    };
+    let destination = output.unwrap_or(&input);
+    if !is_workcart_path(destination) || output.is_some_and(|_| destination.exists()) {
+        eprintln!("output must be a new .m01w file; omit --output to update the input atomically");
+        return ExitCode::FAILURE;
+    }
+    let kind = match kind {
+        PngImportKind::Sprite => PngAssetKind::Sprite,
+        PngImportKind::TileSet => PngAssetKind::TileSet,
+    };
+    let imported = read_png_source(png)
+        .and_then(|bytes| import_workcart_png(&project.source, name, &bytes, kind, replace));
+    let source = match imported {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(error) = write_workcart_atomically(destination, source.as_bytes()) {
+        eprintln!("{}: {error}", destination.display());
+        return ExitCode::FAILURE;
+    }
+    println!("imported '{name}' into {}", destination.display());
     ExitCode::SUCCESS
 }
 

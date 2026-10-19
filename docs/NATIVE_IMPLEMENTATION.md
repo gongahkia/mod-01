@@ -236,3 +236,14 @@ choices remain outstanding.
   A native regression compares actual imported pixels against that converter and
   proves resize/import is one undo transaction with no mutation on rejection.
   CLI workcart import remains the next integration slice.
+
+- `mod01 import png` now atomically adds/replaces sprites or tile sets, preserving
+  source/auxiliary files, recipes/tests, metadata and flags, and retaining original
+  RGBA in the current layered-source schema. Replacement is explicit and full-bank
+  validation/compilation/capacity must pass before a write. Bounded source reading
+  is shared with native dialogs. CLI tests prove occupied-output/implicit-replace
+  refusal, no-op repeat determinism, invalid tile-reference rejection, malformed
+  PNG rollback and no temporary-file leaks. A native/CLI integration test proves
+  byte-identical indexed files, layered source, metadata and packed cartridge bytes
+  for the same import context. A core test verifies explicit sprite replacement
+  updates stale layered source without changing other authored data.

@@ -57,6 +57,47 @@ fn example() -> PathBuf {
 }
 
 #[test]
+fn native_and_cli_png_paths_produce_identical_indexed_and_layered_files() {
+    use modl_core::asset_import::{PngAssetKind, import_workcart_png};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let png = fs::read(root.join("crates/mod01-native/assets/kenney/tile_0028.png")).unwrap();
+    let source = fs::read_to_string(root.join("templates/blank/cart.m01w")).unwrap();
+    let imported = import_workcart_png(&source, "hero", &png, PngAssetKind::Sprite, false).unwrap();
+    let imported =
+        import_workcart_png(&imported, "tiles", &png, PngAssetKind::TileSet, false).unwrap();
+    let expected = modl_core::parse_workcart(&imported).unwrap();
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(
+        Some(root.join("templates/blank/cart.m01w")),
+        &context,
+        false,
+    );
+    app.sprite_name = "hero".to_owned();
+    app.create_sprite();
+    app.sprite.as_mut().unwrap().import_png(&png).unwrap();
+    app.save_sprite().unwrap();
+    app.new_asset_name = "tiles".to_owned();
+    app.new_asset_kind = modl_core::AssetKind::TileSet;
+    app.create_asset();
+    app.asset_workbench
+        .as_mut()
+        .unwrap()
+        .import_tile_png(&png)
+        .unwrap();
+    app.sync_asset().unwrap();
+    let actual = app.project.as_ref().unwrap();
+    assert_eq!(actual.files, expected.files);
+    assert_eq!(actual.manifest, expected.manifest);
+    assert_eq!(
+        actual.pack().unwrap(),
+        modl_core::pack_workcart(&imported).unwrap().bytes
+    );
+    context
+        .run_ui(egui::RawInput::default(), |_| {})
+        .drop_without_applying_deltas();
+}
+
+#[test]
 fn studio_switches_music_sound_sprite_and_display_without_losing_asset_undo_or_writing_disk() {
     let context = egui::Context::default();
     let mut app = StudioApp::new_with_devices(Some(example()), &context, false);

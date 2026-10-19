@@ -1489,6 +1489,7 @@ dependencies = [
 name = "modl-core"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "base64",
  "image",
  "serde",
  "serde_json",

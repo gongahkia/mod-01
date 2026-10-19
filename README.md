@@ -54,6 +54,7 @@ projection, map, controls and tested completion route.
 target/debug/mod01 new my-game --title "MY GAME"
 target/debug/mod01 check my-game
 target/debug/mod01 assets my-game
+target/debug/mod01 import png my-game hero art/hero.png
 target/debug/mod01 test my-game
 target/debug/mod01 run my-game
 target/debug/mod01 run my-game --headless --frames 120

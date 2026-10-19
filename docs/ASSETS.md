@@ -15,6 +15,26 @@ remains editable; sprite resize/import is one undo transaction. Tile import
 preserves authored metadata and existing flags, truncating/extending flags with
 the new tile count. `M014065` identifies failed PNG/conversion admission.
 
+The CLI uses that same pipeline and writes one current workcart atomically:
+
+```sh
+mod01 import png my-game hero art/hero.png
+mod01 import png my-game tiles art/atlas.png --kind tile-set
+mod01 import png my-game hero art/revised.png --replace
+mod01 import png my-game hero art/hero.png --output new-cart.m01w
+```
+
+Use `--replace` only to replace an entire existing asset. A sprite replacement
+also replaces its editable RGBA sidecar, not just the indexed pixels; native PNG
+IN instead targets the current layer/frame. Both paths produce identical files
+and packed bytes for the same single-layer context. Other modules, auxiliary
+files, recipes and tests are retained. Metadata and existing tile flags survive.
+The CLI validates the complete asset bank, compiler output and packed capacity
+before writing; shrinking an atlas cannot leave invalid map references behind.
+Existing `--output` paths and implicit asset replacement are refused (`M014066`).
+Every admission failure leaves the input unchanged. PNG reads are byte-bounded,
+not merely checked after an unbounded file read.
+
 `mod01 assets PATH` prints the shared Rust validation/capacity report as JSON
 without needing Node or a display. Its exit status is nonzero for an invalid
 bank. `mod01 check PATH` prints independent asset failures alongside source

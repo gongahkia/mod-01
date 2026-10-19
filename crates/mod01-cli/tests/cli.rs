@@ -170,6 +170,178 @@ fn assets_check_and_pack_share_precise_reference_diagnostics_without_needing_nod
 }
 
 #[test]
+fn png_import_is_atomic_source_preserving_explicit_about_replacement_and_reference_safe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temporary = std::env::temp_dir().join(format!(
+        "mod01-png-import-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir(&temporary).unwrap();
+    let input = temporary.join("original.m01w");
+    let output = temporary.join("imported.m01w");
+    let original = fs::read_to_string(root.join("examples/api-tour/cart.m01w")).unwrap();
+    fs::write(&input, &original).unwrap();
+    let png = root.join("crates/mod01-native/assets/kenney/tile_0028.png");
+    let imported = binary()
+        .args(["import", "png"])
+        .arg(&input)
+        .arg("art")
+        .arg(&png)
+        .arg("--output")
+        .arg(&output)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    assert_eq!(fs::read_to_string(&input).unwrap(), original);
+    let edited = fs::read_to_string(&output).unwrap();
+    let project = modl_core::parse_workcart(&edited).unwrap();
+    let before = modl_core::parse_workcart(&original).unwrap();
+    assert_eq!(project.recipes, before.recipes);
+    assert_eq!(project.tests, before.tests);
+    for (path, bytes) in &before.files {
+        assert_eq!(project.files.get(path), Some(bytes));
+    }
+    assert!(project.files.contains_key("editor/sprites/art.m01paint"));
+    let duplicate = binary()
+        .args(["import", "png"])
+        .arg(&output)
+        .arg("art")
+        .arg(&png)
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("--replace"));
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    let repeat = binary()
+        .args(["import", "png"])
+        .arg(&output)
+        .arg("art")
+        .arg(&png)
+        .arg("--replace")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        repeat.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repeat.stderr)
+    );
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    let occupied = binary()
+        .args(["import", "png"])
+        .arg(&input)
+        .arg("another")
+        .arg(&png)
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert_eq!(occupied.status.code(), Some(1));
+    assert_eq!(fs::read_to_string(&output).unwrap(), edited);
+    assert_png_replacement_is_reference_safe(&output, &png, &temporary, &edited);
+    fs::remove_dir_all(temporary).unwrap();
+}
+
+fn assert_png_replacement_is_reference_safe(
+    output: &Path,
+    png: &Path,
+    temporary: &Path,
+    edited: &str,
+) {
+    let mut project = modl_core::parse_workcart(edited).unwrap();
+    project.files.insert("assets/tiles.m01g".to_owned(),serde_json::to_vec(&json!({"revision":2,"kind":"tile_set","tiles":vec![vec![0;64];5],"flags":[1,2,3,4,5],"memo":"retain"})).unwrap());
+    let mut room: Value = serde_json::from_slice(&project.files["assets/room.m01m"]).unwrap();
+    room["layers"][0]["cells"][0] = json!(4);
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&room).unwrap(),
+    );
+    let valid_before = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    modl_core::pack_workcart(&valid_before).unwrap();
+    fs::write(output, &valid_before).unwrap();
+    let shrink = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("tiles")
+        .arg(png)
+        .args(["--kind", "tile-set", "--replace"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(shrink.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&shrink.stderr).contains("M014061"));
+    assert_eq!(fs::read_to_string(output).unwrap(), valid_before);
+    room["layers"][0]["cells"][0] = json!(3);
+    project.files.insert(
+        "assets/room.m01m".to_owned(),
+        serde_json::to_vec(&room).unwrap(),
+    );
+    let valid = modl_core::encode_workcart(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+    )
+    .unwrap();
+    fs::write(output, &valid).unwrap();
+    let replaced = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("tiles")
+        .arg(png)
+        .args(["--kind", "tile-set", "--replace"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(
+        replaced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+    let successful = fs::read_to_string(output).unwrap();
+    let result = modl_core::parse_workcart(&successful).unwrap();
+    let tiles: Value = serde_json::from_slice(&result.files["assets/tiles.m01g"]).unwrap();
+    assert_eq!(tiles["flags"], json!([1, 2, 3, 4]));
+    assert_eq!(tiles["memo"], "retain");
+    let mut huge = fs::read(png).unwrap();
+    huge[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+    let bad = temporary.join("oversized.png");
+    fs::write(&bad, huge).unwrap();
+    let failed = binary()
+        .args(["import", "png"])
+        .arg(output)
+        .arg("art")
+        .arg(&bad)
+        .arg("--replace")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("M014065"));
+    assert_eq!(fs::read_to_string(output).unwrap(), successful);
+    assert!(!fs::read_dir(temporary).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
+}
+
+#[test]
 fn formatter_check_distinguishes_valid_unformatted_source() {
     let path =
         std::env::temp_dir().join(format!("mod01-cli-{}-{}.modl", std::process::id(), line!()));

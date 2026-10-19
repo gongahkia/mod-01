@@ -2096,12 +2096,8 @@ impl StudioApp {
         else {
             return;
         };
-        let bytes = match fs::read(&path) {
-            Ok(bytes) if bytes.len() <= 16 * 1024 * 1024 => bytes,
-            Ok(_) => {
-                self.status = "PNG EXCEEDS 16 MIB".to_owned();
-                return;
-            }
+        let bytes = match modl_core::asset_import::read_png_source(&path) {
+            Ok(bytes) => bytes,
             Err(error) => {
                 self.status = error.to_string();
                 return;
@@ -2705,7 +2701,7 @@ impl StudioApp {
                                     .add_filter("PNG", &["png"])
                                     .pick_file()
                                 {
-                                    match fs::read(path)
+                                    match modl_core::asset_import::read_png_source(&path)
                                         .map_err(|error| error.to_string())
                                         .and_then(|bytes| editor.import_png(&bytes))
                                     {

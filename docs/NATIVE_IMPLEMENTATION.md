@@ -56,6 +56,14 @@ choices remain outstanding.
 
 ## Progress
 
+- With the Linux dependency repaired, Linux and macOS pass actual-window CI.
+  Windows' Mesa setup succeeds and window detection passes, but its first saved
+  frame has not yet been qualified. The probe now targets the owning PID and
+  exact game title (not a console window), uses the native roaming known folder,
+  and preserves bounded GUI evidence separately from shipping artifacts. The
+  Windows enumeration/capture/targeted-close helper is verified against an owned
+  WinForms fixture; Linux's real game probe still passes. Software-driver cold
+  startup gets 30 seconds without removing the first-frame/save/clean-exit gates.
 - Windows' first real-window runner exposed insufficient OpenGL support, not a
   game/runtime failure. Its GUI QA now provisions pinned Mesa 26.2.4 with the
   primary publisher's SHA-256 verified before extraction, and stages its DLLs

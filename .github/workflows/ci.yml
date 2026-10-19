@@ -101,6 +101,14 @@ jobs:
         if: runner.os != 'Linux'
         run: node scripts/verify-native-window.mjs target/release/mod01-studio${{ runner.os == 'Windows' && '.exe' || '' }}
 
+      - name: Preserve native GUI QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod01-gui-qa-${{ matrix.os }}
+          path: ${{ runner.temp }}/mod01-native-window/
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: mod01-native-${{ matrix.os }}

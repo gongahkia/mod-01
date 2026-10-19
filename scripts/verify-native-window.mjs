@@ -8,7 +8,9 @@ import {
   mkdtempSync,
   openSync,
   closeSync,
+  copyFileSync,
   readFileSync,
+  mkdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -28,18 +30,42 @@ const player = resolve(process.argv[2] ?? `target/release/mod01-studio${suffix}`
 const cli = resolve(process.argv[3] ?? join(dirname(player), `mod01${suffix}`));
 const temporary = mkdtempSync(join(tmpdir(), 'mod01-window-'));
 const id = `gui-qa-${randomUUID()}`;
+const windowsRoaming =
+  platform === 'win32'
+    ? execute('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)',
+      ]).trim()
+    : undefined;
 const data =
   platform === 'linux'
     ? join(temporary, 'data', 'nativestudio')
     : platform === 'darwin'
       ? join(homedir(), 'Library', 'Application Support', 'MOD-01.Native-Studio')
-      : join(process.env.APPDATA, 'MOD-01', 'Native Studio', 'data');
+      : join(windowsRoaming, 'MOD-01', 'Native Studio', 'data');
 const save = join(data, 'saves', `cart-${id}.bin`);
 const log = join(temporary, 'player.log');
 const closeX11 = join(temporary, 'close-window');
 let child;
 let ownsSave = false;
 let succeeded = false;
+let window;
+let failure;
+
+function windowsWindow(extra = []) {
+  return execute('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    join(root, 'scripts/native-window.ps1'),
+    '-GameProcessId',
+    String(child.pid),
+    ...extra,
+  ]);
+}
 
 function execute(command, args) {
   return execFileSync(command, args, { encoding: 'utf8', timeout: 45_000 });
@@ -112,20 +138,9 @@ try {
   } finally {
     closeSync(descriptor);
   }
-  let window;
   let x11Window;
   if (platform === 'win32') {
-    window = JSON.parse(
-      execute('powershell.exe', [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass', // This trusted helper process only; never change machine/user policy.
-        '-File',
-        join(root, 'scripts/native-window.ps1'),
-        '-GameProcessId',
-        String(child.pid),
-      ]),
-    );
+    window = JSON.parse(windowsWindow(['-ExpectedTitle', 'BLANK CART']));
   } else if (platform === 'darwin') {
     window = JSON.parse(
       execute('swift', [join(root, 'scripts/native-window.swift'), String(child.pid)]),
@@ -161,28 +176,30 @@ try {
   assert.equal(window.pid, child.pid);
   assert.equal(window.visible, true);
   assert.ok(window.width >= 480 && window.height >= 320);
-  await waitUntil(() => {
-    try {
-      const bytes = readFileSync(save);
-      return (
-        bytes.length === 8192 &&
-        JSON.parse(bytes.subarray(0, bytes.indexOf(0)).toString()).gui_ready === 73
-      );
-    } catch {
-      return false;
-    }
-  }, 'first real game frame committed by this fresh cartridge');
+  console.log(`Observed owned game window ${JSON.stringify(window)}; expected save: ${save}`);
+  await waitUntil(
+    () => {
+      try {
+        const bytes = readFileSync(save);
+        return (
+          bytes.length === 8192 &&
+          JSON.parse(bytes.subarray(0, bytes.indexOf(0)).toString()).gui_ready === 73
+        );
+      } catch {
+        return false;
+      }
+    },
+    'first real game frame committed by this fresh cartridge',
+    softwareDriver ? 30_000 : 10_000,
+  );
   if (platform === 'win32') {
-    execute('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      join(root, 'scripts/native-window.ps1'),
-      '-GameProcessId',
-      String(child.pid),
-      '-Close',
+    windowsWindow([
+      '-ExpectedTitle',
+      'BLANK CART',
+      '-CapturePath',
+      join(temporary, 'window-ready.png'),
     ]);
+    windowsWindow(['-ExpectedTitle', 'BLANK CART', '-Close']);
   } else if (platform === 'darwin') {
     execute('swift', [join(root, 'scripts/native-window.swift'), String(child.pid), '--close']);
   } else {
@@ -199,6 +216,16 @@ try {
     `Verified ${platform}: actual ${window.width}x${window.height} packaged window, no-argument/empty-PATH launch, first real frame/save and clean close${softwareDriver ? ' (Mesa llvmpipe, CI-only)' : ''}.`,
   );
   succeeded = true;
+} catch (error) {
+  failure = error.message;
+  if (platform === 'win32' && child?.pid && child.exitCode === null && child.signalCode === null) {
+    try {
+      windowsWindow(['-CapturePath', join(temporary, 'window-failure.png')]);
+    } catch (captureError) {
+      console.error(`Window diagnostics: ${captureError.message}`);
+    }
+  }
+  throw error;
 } finally {
   if (child?.pid && child.exitCode === null && child.signalCode === null) {
     child.kill();
@@ -207,6 +234,33 @@ try {
       await delay(100);
   }
   const stillRunning = child?.pid && child.exitCode === null && child.signalCode === null;
+  if (process.env.CI === 'true' && process.env.RUNNER_TEMP) {
+    const evidenceRoot = join(process.env.RUNNER_TEMP, 'mod01-native-window');
+    const evidence = join(evidenceRoot, id);
+    mkdirSync(evidenceRoot, { recursive: true });
+    mkdirSync(evidence);
+    for (const file of ['player.log', 'window-ready.png', 'window-failure.png']) {
+      const source = join(temporary, file);
+      if (existsSync(source)) copyFileSync(source, join(evidence, file));
+    }
+    writeFileSync(
+      join(evidence, 'report.json'),
+      JSON.stringify(
+        {
+          id,
+          window,
+          save,
+          saveExists: existsSync(save),
+          saveBytes: existsSync(save) ? readFileSync(save).length : 0,
+          succeeded,
+          failure,
+        },
+        null,
+        2,
+      ),
+      { flag: 'wx' },
+    );
+  }
   if (ownsSave && !stillRunning) rmSync(save, { force: true });
   if (succeeded) rmSync(temporary, { recursive: true, force: true });
   else {

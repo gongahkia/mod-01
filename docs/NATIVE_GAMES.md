@@ -173,3 +173,11 @@ targets and refuses overwrites; its unit tests do not pretend dummy DLL fixtures
 are executable graphics drivers. Actual window/frame/normal-close checks still
 run against the real player. Full graphics, PCM and game equivalence have their
 separate conformance checks described above.
+
+Windows window observation matches the game title and owning process, excluding
+console windows, and sends WM_CLOSE to that exact window. Its save check queries
+the native roaming known folder instead of assuming APPDATA is authoritative.
+CI preserves window captures, the player's log and a small diagnostic report in
+the separate `mod01-gui-qa-*` artifacts, including on failure. Cold llvmpipe
+startup has a bounded 30-second first-frame allowance; the real save assertion
+and normal-exit checks are unchanged.

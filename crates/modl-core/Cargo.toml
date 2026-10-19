@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+image = { workspace = true, features = ["png"] }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

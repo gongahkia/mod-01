@@ -205,4 +205,5 @@ choices remain outstanding.
   QA verified returning to a newly added pattern, undoing it, visiting Display
   and returning with redo still available (`asset-history-returned.png`,
   `asset-history-undo.png`). First-use Display also now safely inserts its
-  manifest key and initializes all 256 remap entries.
+  manifest key. The master palette has 256 colours; the display/drawing remap
+  remains the documented 32 logical entries (with targets 0–255).

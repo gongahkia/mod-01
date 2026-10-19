@@ -2186,7 +2186,7 @@ impl StudioApp {
         let source = project.files.entry(path.clone()).or_insert_with(|| {
             serde_json::to_vec(&json!({
                 "revision":2,"kind":"display",
-                "remap":(0..256).collect::<Vec<_>>(),"raster":[]
+                "remap":(0..32).collect::<Vec<_>>(),"raster":[]
             }))
             .unwrap_or_default()
         });

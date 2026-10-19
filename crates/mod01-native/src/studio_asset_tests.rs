@@ -27,6 +27,10 @@ fn studio_switches_music_sound_sprite_and_display_without_losing_asset_undo_or_w
     let painted = editor.document.frames[0].layers[0].pixels.clone();
     app.open_display();
     assert!(app.sprite.is_none());
+    assert_eq!(
+        app.asset_workbench.as_ref().unwrap().document["remap"],
+        json!((0..32).collect::<Vec<_>>())
+    );
     app.open_asset("loop");
     let editor = app.asset_workbench.as_mut().unwrap();
     assert_eq!(editor.document["framesPerRow"], 240);

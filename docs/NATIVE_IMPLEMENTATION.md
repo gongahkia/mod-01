@@ -56,6 +56,20 @@ choices remain outstanding.
 
 ## Progress
 
+- Fresh remote CI at `7060d9b` passed the full gate and native Rust/runtime/package
+  checks on all three desktop operating systems:
+  [run 39257406061](https://github.com/gongahkia/mod-01/actions/runs/39257406061).
+  This confirms the Windows path repair in actual Rust/Node execution. The audit
+  also identified that those package verifiers bypass the real window. A new
+  CI probe launches an actual no-argument, empty-PATH packaged game, observes its
+  own visible OS window, requires the first committed frame/save, requests a
+  normal close and rejects nonzero/signal exits. Linux/X11 passes locally; the
+  new Windows/macOS GUI probes still require execution. No synthetic event or
+  display-free result is being counted as proof that those windows opened.
+  Windows interop also parses and executes the exact PowerShell helper: it
+  observes an owned 600×400 WinForms fixture and closes it. The helper uses a
+  process-only execution policy; this does not alter user/machine policy or
+  substitute for the pending complete Windows packaged-game GUI check.
 - The acceptance audit now maps every original review ID, including rejected
   items and note overrides, to concrete code/tests and scope qualifications.
   At `7060d9b` the full gate passes 322 runtime/script, 134 core, 151 native,

@@ -2,8 +2,8 @@
 
 Audit date: 2026-10-19. Tested code: `7060d9b571db89dcf1c89425903c56d943bfd68d`.
 This is an evidence map, **not a declaration of cross-platform completion**.
-Native game export and final handoff remain open until current Windows/macOS
-execution has been qualified. The [implementation ledger](NATIVE_IMPLEMENTATION.md)
+Native game export and final handoff remain open until actual Windows/macOS
+window startup has been qualified. The [implementation ledger](NATIVE_IMPLEMENTATION.md)
 retains those unchecked rows.
 
 ## Decision authority
@@ -38,7 +38,7 @@ the behaviour. It does not imply physical-device or other-OS execution.
 | `authoring-repl`           | Approve immediate scratchpad                               | [Native authoring proof](#native-authoring-proof): real compiler/child execution of expressions/drawing, faults, copied assets, cancellation and disposable saves.                                                                         |
 | `native-code-workflow`     | Approve integrated editing baseline                        | The same proof covers find/replace, navigation, block shortcuts/undo, compiler-backed completion/declarations/diagnostics and code/state graph.                                                                                            |
 | `native-tracker`           | Approve full eight-channel tracker                         | The same proof covers focused keyboard entry, patterns/orders, clipped clipboard blocks, transpose, audition/transport and actual native synth execution.                                                                                  |
-| `export-native-games`      | Approve desktop packages; remove web exports               | [Export/workflow proof](#export-and-workflow-proof) passes on Linux. Current Windows/macOS Rust/package execution is **open**. Target-header/layout tests and a Windows Node probe do not close it.                                        |
+| `export-native-games`      | Approve desktop packages; remove web exports               | [Export/workflow proof](#export-and-workflow-proof) and fresh Windows/macOS/Linux Rust/package CI pass. Actual Linux window startup also passes; new Windows/macOS GUI probes remain **open**.                                             |
 | `export-raspberry-pi`      | Reject                                                     | No Raspberry Pi or ARM-handheld qualification/delivery is claimed or added. Desktop macOS ARM64 is not a Pi/handheld target.                                                                                                               |
 | `graphics-region-blit`     | Approve                                                    | [Graphics proof](#graphics-proof): independently checked source/destination sampling, clipping, flips, transparency/remaps and bounded atomic work failure.                                                                                |
 | `graphics-textured-lines`  | Approve                                                    | The same proof covers every line octant, wrapping/skipping, fixed texture precision, clipped sampling and calibrated work bounds.                                                                                                          |
@@ -211,23 +211,23 @@ above rather than treat these local paths as a remote CI pass.
 
 ## Remaining qualification
 
-- Run the existing [desktop CI matrix](../.github/workflows/ci.yml) on this branch's
-  current code, including real Windows/macOS Rust tests and bundled execution.
-  The latest inspected remote run was on older commit `c1da7c6`, not this audit's
-  code, and failed on Windows. Its old macOS/Linux successes are not current proof.
-- The Windows host-path fix in `02aa5eb` has a real restricted-child regression
-  and an official Windows Node 24.21 probe that reproduces the old verbatim-path
-  denial and validates the ordinary-path fix while denying adjacent files. That
-  is useful bootstrap evidence, **not** a complete Windows Rust/package result.
-- Obtain current native-window startup evidence for Windows/macOS as well. The
-  matrix's package verifiers are display-free; neither they nor synthetic egui
-  input tests prove that an actual window opened on those operating systems.
-  Only the Linux/X11 window has been inspected in this local audit.
-- Inspect the current matrix results, fix any failures in atomic commits, then
+- [CI run 39257406061](https://github.com/gongahkia/mod-01/actions/runs/39257406061)
+  at `7060d9b` passed the full repository check and all Windows/macOS/Linux native
+  jobs, including real Rust/runtime tests and both bundled game verifiers. The
+  Windows host-path fix therefore has real Windows Rust/package evidence now,
+  not only the earlier isolated Windows Node probe. The old `c1da7c6` run is
+  superseded and is not being used to qualify current code.
+- Run the new [actual-window probe](../scripts/verify-native-window.mjs) through
+  the updated [desktop matrix](../.github/workflows/ci.yml). Linux/X11 locally
+  passes visible 960×650 no-argument/empty-PATH launch, first real frame/save and
+  ordinary close with exit status 0. Windows/macOS execution of this new check
+  remains open. Earlier display-free package checks and synthetic egui inputs
+  are not being counted as evidence that those windows opened.
+- Inspect those results, fix any failures in atomic commits, then
   update this receipt and close the export/final-handoff ledger rows only when
   their evidence is sufficient.
 
-Publishing this local branch requires the user's approval; no push, PR or remote
-workflow mutation has been performed for this audit. Physical touchscreen,
+The audit observed an existing push-triggered run; it did not issue a push, PR or
+workflow dispatch. Further remote writes require the user's approval. Physical touchscreen,
 controller and speaker quality, signing/notarization, Pi/handheld delivery and
 hosted discovery are not claimed by Linux automated or virtual-display checks.

@@ -118,3 +118,34 @@ Studio replay imports use that same bounded reader. It does not open
 a window, initialize an audio device, read local saves or persist save commits.
 Frame count is bounded to 1–36,000. This is a smoke
 test, not a substitute for graphical/input/audio QA.
+
+## Actual desktop-window startup check
+
+`node scripts/verify-native-window.mjs target/release/mod01-studio` tests the
+graphical entrypoint rather than `--verify`. It exports a fresh, uniquely named
+cartridge, launches the shipped executable with no arguments and empty PATH,
+observes a visible window belonging to that exact process, checks its first
+real frame committed the expected 8 KiB save, and requests an ordinary window
+close. Only exit status 0 without a signal passes; forced teardown on failure is
+never called a clean shutdown. It does not modify the maintained cartridges.
+
+Linux needs X11, `xdotool`, a C compiler and X11 headers. For a virtual display,
+use `xvfb-run -a node scripts/verify-native-window.mjs`; XDG data/config/cache are
+isolated under the verifier's own temporary directory. Windows/macOS runs are
+restricted to `CI=true`: native known-folder APIs ignore XDG overrides, and the
+normal GUI can update library metadata. The desktop CI runners are disposable;
+the probe uses a fresh save ID and only removes that owned save, never existing
+user data. Do not set `CI=true` just to bypass this local-profile safeguard.
+The trusted Windows helper runs with a
+[process-only execution policy](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies);
+it does not change the user's or machine's PowerShell policy.
+
+Window observation uses the OS's actual facilities:
+[Windows main-window/close messages](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.closemainwindow),
+[macOS on-screen window metadata](<https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo(_:_:)>)
+and X11 window ownership/WM_DELETE_WINDOW. A macOS runner without a WindowServer
+GUI session fails explicitly rather than silently substituting a headless check.
+This verifies visible startup, frame/save delivery and orderly shutdown. It is
+not pixel-perfect screenshots on every OS or physical touchscreen/controller/
+speaker-quality qualification; the Linux visual inspection and deterministic
+input/PCM tests provide their separate, stated evidence.

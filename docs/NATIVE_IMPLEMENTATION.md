@@ -51,6 +51,14 @@ choices remain outstanding.
 
 ## Progress
 
+- Multi-cartridge admission foundation: `modl-core::bundle` validates 1–32 current
+  cartridges with a required `main` alias, bounded local aliases/source allocation,
+  unique persistent cartridge IDs and ordinary per-member compiler/asset/packed
+  limits. Catalog identity covers sorted aliases and every packed/source byte.
+  Five tests pack/load all 32 members, prove exact source recovery and input-order
+  independence, and reject invalid/unused members and identity/size ambiguities.
+  This is shared in-memory admission, not a user-facing bundle format or runtime
+  transition implementation; the multi-cartridge acceptance row remains open.
 - Offline native library is implemented: `docs/LIBRARY.md`, `library.rs`,
   `library_preview.rs`, `library_store.rs` and their tests cover bundled/user
   workcarts, packed/PNG source inspection, labels/search/favourites/recents,

@@ -3,6 +3,7 @@
 pub mod asset_import;
 pub mod assets;
 pub mod ast;
+pub mod bundle;
 pub mod cartridge;
 pub mod cartridge_png;
 pub mod codegen;

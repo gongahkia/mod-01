@@ -1545,7 +1545,7 @@ fn cartridge_error(code: &'static str, message: String) -> CartridgeError {
     CartridgeError { code, message }
 }
 
-fn sha256_hex(input: &[u8]) -> String {
+pub(crate) fn sha256_hex(input: &[u8]) -> String {
     let mut output = String::with_capacity(64);
     for byte in sha256(input) {
         write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");

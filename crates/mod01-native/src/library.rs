@@ -320,7 +320,10 @@ impl Library {
             return;
         };
         let favourite = self.entry(&path).is_some_and(|entry| entry.favourite) ^ toggle;
-        let labels: Vec<_> = if self.labels.trim().is_empty() {
+        let labels: Vec<_> = if toggle {
+            self.entry(&path)
+                .map_or_else(Vec::new, |entry| entry.labels.clone())
+        } else if self.labels.trim().is_empty() {
             Vec::new()
         } else {
             self.labels.split(',').map(str::to_owned).collect()
@@ -330,8 +333,10 @@ impl Library {
         };
         match store.preferences(&path, favourite, &labels) {
             Ok(()) => {
-                self.labels = self.entry(&path).unwrap().labels.join(", ");
-                self.labels_dirty = false;
+                if !toggle {
+                    self.labels = self.entry(&path).unwrap().labels.join(", ");
+                    self.labels_dirty = false;
+                }
                 self.status = "LIBRARY PREFERENCES SAVED / CARTRIDGE UNCHANGED".to_owned();
             }
             Err(error) => self.status = error,
@@ -520,6 +525,7 @@ impl Library {
             ui.label("SEARCH");
             ui.add(
                 egui::TextEdit::singleline(&mut self.query)
+                    .char_limit(256)
                     .desired_width(260.0)
                     .hint_text("title, author, path, labels"),
             );
@@ -606,12 +612,6 @@ impl Library {
                 } else if let Some(Err(error)) = &card.preview {
                     ui.colored_label(ui_theme::CORAL, format!("CARTRIDGE UNAVAILABLE: {error}"));
                 } else { ui.label("READING CARTRIDGE..."); }
-                if let Some(cover) = &self.cover {
-                    let width = ui.available_width().min(360.0);
-                    let ratio = cover.size()[1] as f32 / cover.size()[0] as f32;
-                    ui.image((cover.id(), egui::vec2(width, width * ratio)));
-                } else { ui.label(RichText::new("MOD-01 / CARTRIDGE").color(ui_theme::AMBER)); }
-                ui.label(RichText::new(path.to_string_lossy()).small().color(ui_theme::MUTED));
                 ui.horizontal_wrapped(|ui| {
                     if ui.add_enabled(ready, egui::Button::new("PLAY")).clicked() { action = self.open_action(true); }
                     if ui.add_enabled(ready, egui::Button::new("INSPECT SOURCE")).clicked() { action = self.open_action(false); }
@@ -620,6 +620,12 @@ impl Library {
                 if ui.add_enabled(self.writable(), egui::Button::new(if favourite { "* FAVOURITE" } else { "+ FAVOURITE" })).clicked() {
                     self.preferences(true);
                 }
+                if let Some(cover) = &self.cover {
+                    let width = ui.available_width().min(360.0);
+                    let ratio = cover.size()[1] as f32 / cover.size()[0] as f32;
+                    ui.image((cover.id(), egui::vec2(width, width * ratio)));
+                } else { ui.label(RichText::new("MOD-01 / CARTRIDGE").color(ui_theme::AMBER)); }
+                ui.label(RichText::new(path.to_string_lossy()).small().color(ui_theme::MUTED));
                 ui.label("LABELS (COMMA SEPARATED)");
                 self.labels_dirty |= ui.add_enabled(self.writable(), egui::TextEdit::singleline(&mut self.labels).char_limit(300)).changed();
                 if ui.add_enabled(self.writable() && self.labels_dirty, egui::Button::new("SAVE LABELS")).clicked() { self.preferences(false); }

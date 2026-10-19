@@ -47,6 +47,8 @@ trimmed and deduplicated case-insensitively. Selecting another cartridge or
 refreshing abandons unapplied label text, not cartridge edits. FORGET BOOKMARK
 removes only that local entry/preferences: it never deletes cartridge files or
 save data. Bundled entries cannot be forgotten, but their preferences can change.
+Toggling a favourite never applies unsaved label text. PLAY and INSPECT SOURCE
+precede cover art so they remain visible in the minimum-size native window.
 
 The displayed preferences path is the platform's MOD-01 Native Studio application
 data directory, `library.json`, separate from `saves/` and cartridge formats.

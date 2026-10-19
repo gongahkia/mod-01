@@ -74,7 +74,14 @@ fn real_worker_search_favourites_labels_recents_and_missing_cards_survive_restar
     assert_eq!(library.visible().len(), 1);
     library.select(Some(alpha.clone()));
     library.labels = " Jam , Puzzle".to_owned();
+    library.labels_dirty = true;
     library.preferences(true);
+    assert!(
+        library.entry(&alpha).unwrap().labels.is_empty(),
+        "favourite must not commit unapplied label text"
+    );
+    assert!(library.labels_dirty);
+    library.preferences(false);
     assert_eq!(library.entry(&alpha).unwrap().labels, ["Jam", "Puzzle"]);
     library.query = "puzzle ALPHA".to_owned();
     assert_eq!(library.visible().len(), 1);

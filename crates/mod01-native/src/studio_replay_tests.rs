@@ -150,3 +150,47 @@ fn restoring_a_real_snapshot_rewinds_input_and_recording_to_its_authoritative_ne
     );
     app.stop();
 }
+
+#[test]
+fn debug_and_replay_commits_are_disposable_but_ordinary_play_still_persists() {
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(None, &context, false);
+    let mut project = NativeProject::from_source(
+        include_str!("../../../templates/blank/cart.m01w").to_owned(),
+        None,
+    )
+    .unwrap();
+    project.manifest.id = format!(
+        "save-isolation-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let path = save_path(&project.manifest.id).unwrap();
+    assert!(!path.exists());
+    app.project = Some(project);
+    let bytes = vec![57_u8; 8192];
+    let reply = json!({"frame":0,"workUnits":1,"saveCommit":STANDARD.encode(&bytes)});
+    app.debugging = true;
+    app.accept_frame(&reply, &context);
+    let debug_wrote = path.exists();
+    app.debugging = false;
+    app.replay_playback = Some(BTreeMap::new());
+    app.accept_frame(&reply, &context);
+    let replay_wrote = path.exists();
+    app.replay_playback = None;
+    app.accept_frame(&reply, &context);
+    let normal = fs::read(&path);
+    // This unique path was absent before the test and is exclusively test-owned.
+    if path.exists() {
+        fs::remove_file(&path).unwrap();
+    }
+    assert!(!debug_wrote, "debugging must not persist cartridge saves");
+    assert!(
+        !replay_wrote,
+        "loaded replay must not persist cartridge saves"
+    );
+    assert_eq!(normal.unwrap(), bytes);
+}

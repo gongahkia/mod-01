@@ -1466,8 +1466,10 @@ impl StudioApp {
                 self.status = format!("AUDIO: {error}");
             }
         }
-        if let (Some(project), Some(encoded)) =
-            (self.project.as_ref(), event["saveCommit"].as_str())
+        if !self.debugging
+            && self.replay_playback.is_none()
+            && let (Some(project), Some(encoded)) =
+                (self.project.as_ref(), event["saveCommit"].as_str())
         {
             if let Ok(bytes) = STANDARD.decode(encoded) {
                 if let Err(error) = write_save(&project.manifest.id, &bytes) {

@@ -285,3 +285,12 @@ choices remain outstanding.
   rewind without duplicate frame zero/statement entries. All 67 native tests,
   the native-host test, lint and type checks pass. This does not claim completion
   of the typed menu or platform verification requirements.
+
+- Debug and loaded-replay save commits are now explicitly disposable at Studio's
+  persistence boundary; ordinary gameplay still writes its committed bytes.
+  A native regression exercises all three cases using an exclusively test-owned
+  save identity. The debugger guide now describes the actual native controls
+  and separates runtime-library replay capabilities from UI features that are
+  not present; it no longer promises an automatic native timeline, watchpoints
+  or voice inspector. This does not remove or narrow the remaining acceptance
+  requirements in the table.

@@ -51,6 +51,13 @@ choices remain outstanding.
 
 ## Progress
 
+- Shared composition operations now preflight local member addition/removal before
+  returning changed source. Three core tests cover exact untouched source/metadata,
+  nesting/alias/save-ID/invalid-code rejection, member 32 versus 33, and safe removal
+  across retained modules, MODL tests and siblings. Computed request targets refuse
+  removal conservatively; comments/ordinary text/transfer parameters do not count.
+  These pure operations never touch disk or delete player saves. All 120 core unit/
+  integration tests and core Clippy pass; native composition controls are next.
 - Native source debugging now qualifies breakpoints/events by alias and original
   module, using an immutable per-member source snapshot from the admitted launch.
   Same-path/same-line breakpoints cannot hit a different cart; unsaved line edits

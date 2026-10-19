@@ -411,6 +411,179 @@ pub fn rewrite_workcart(
     )
 }
 
+/// Embeds one admitted local cartridge without replacing aliases or reading host paths.
+/// Existing member source, recipes, tests and auxiliary files are preserved.
+///
+/// # Errors
+/// Rejects invalid/reserved/duplicate aliases, nesting, duplicate save identities,
+/// limits and any invalid member before returning a changed enclosing source.
+pub fn add_workcart_member(
+    source: &str,
+    alias: &str,
+    member_source: &str,
+) -> Result<String, CartridgeError> {
+    let mut project = parse_workcart(source)?;
+    if alias == BUNDLE_ENTRY
+        || !valid_alias(alias)
+        || project.bundle.iter().any(|member| member.alias == alias)
+    {
+        return Err(workcart_error(
+            "M014070",
+            "new member needs an unused local alias other than main".to_owned(),
+        ));
+    }
+    if project.bundle.len() + 1 >= MAX_BUNDLE_CARTRIDGES {
+        return Err(workcart_error(
+            "M014070",
+            "game already has 32 cartridges including main".to_owned(),
+        ));
+    }
+    checked_source_size(0, member_source.len())?;
+    let member = parse_workcart(member_source)?;
+    if !member.bundle.is_empty() {
+        return Err(workcart_error(
+            "M014073",
+            "import one flat cartridge, not a game containing dependencies".to_owned(),
+        ));
+    }
+    project.bundle.push(BundleSource {
+        alias: alias.to_owned(),
+        source: member_source.to_owned(),
+    });
+    let output = encode_workcart_with_bundle(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+        &project.bundle,
+    )?;
+    crate::game::pack_game_workcart(&output)?;
+    Ok(output)
+}
+
+/// Removes a local dependency only when retained authored modules/tests cannot
+/// request it. Computed request targets conservatively prevent removal: this is
+/// not an attempt to predict runtime strings. Player saves are never removed.
+///
+/// # Errors
+/// Returns M014075 for retained literal/computed references, M014070 for an
+/// absent/reserved alias, and ordinary validation errors without changing input.
+pub fn remove_workcart_member(source: &str, alias: &str) -> Result<String, CartridgeError> {
+    let mut project = parse_workcart(source)?;
+    if alias == BUNDLE_ENTRY || !project.bundle.iter().any(|member| member.alias == alias) {
+        return Err(workcart_error(
+            "M014070",
+            "only a declared dependency can be removed; main is permanent".to_owned(),
+        ));
+    }
+    check_member_removal_references(&project, BUNDLE_ENTRY, alias)?;
+    for member in &project.bundle {
+        if member.alias != alias {
+            check_member_removal_references(
+                &parse_workcart(&member.source)?,
+                &member.alias,
+                alias,
+            )?;
+        }
+    }
+    project.bundle.retain(|member| member.alias != alias);
+    let output = encode_workcart_with_bundle(
+        &project.manifest,
+        &project.files,
+        &project.recipes,
+        &project.tests,
+        &project.bundle,
+    )?;
+    crate::game::pack_game_workcart(&output)?;
+    Ok(output)
+}
+
+fn check_member_removal_references(
+    project: &WorkcartProject,
+    owner: &str,
+    removed: &str,
+) -> Result<(), CartridgeError> {
+    let sources = project
+        .files
+        .iter()
+        .filter(|(path, _)| has_extension(path, "modl"))
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        .chain(
+            project
+                .tests
+                .iter()
+                .filter(|test| test.kind == WorkcartTestKind::Modl)
+                .map(|test| (test.path.as_str(), test.payload.as_bytes())),
+        );
+    for (path, bytes) in sources {
+        let source = std::str::from_utf8(bytes).map_err(|_| {
+            workcart_error(
+                "M014075",
+                format!("cannot prove safe removal: {owner}/{path} is not UTF-8"),
+            )
+        })?;
+        let lexed = lex(&SourceFile::new(FileId(0), path, source));
+        if !lexed.diagnostics.is_empty() {
+            return Err(workcart_error(
+                "M014075",
+                format!(
+                    "cannot prove safe removal: cartridge '{owner}' module/test '{path}' has lexical errors"
+                ),
+            ));
+        }
+        let tokens = lexed
+            .tokens
+            .iter()
+            .filter(|token| !matches!(token.kind, TokenKind::Comment(_)))
+            .collect::<Vec<_>>();
+        for (index, token) in tokens.iter().enumerate() {
+            let TokenKind::Identifier(name) = &token.kind else {
+                continue;
+            };
+            if !matches!(name.as_str(), "load_cart" | "reload_assets")
+                || !tokens
+                    .get(index + 1)
+                    .is_some_and(|token| token.kind == TokenKind::LeftParen)
+            {
+                continue;
+            }
+            let target = match (tokens.get(index + 2), tokens.get(index + 3)) {
+                (Some(target), Some(end))
+                    if (name == "load_cart" && end.kind == TokenKind::Comma)
+                        || (name == "reload_assets" && end.kind == TokenKind::RightParen) =>
+                {
+                    if let TokenKind::Text(alias) = &target.kind {
+                        Some(alias.as_str())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if target.is_none() || target == Some(removed) {
+                let line = 1 + source
+                    .as_bytes()
+                    .iter()
+                    .take(token.span.start as usize)
+                    .filter(|byte| **byte == b'\n')
+                    .count();
+                return Err(workcart_error(
+                    "M014075",
+                    format!(
+                        "cannot remove '{removed}': {owner}/{path}:{line} contains {name} with {}",
+                        if target.is_some() {
+                            "that literal target"
+                        } else {
+                            "a computed target; edit the request first"
+                        }
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Deletes an unreferenced asset from an `M01W/2` work-cart.
 ///
 /// References from authored MODL modules, stored MODL tests, asset payloads and generation recipes prevent the
@@ -870,6 +1043,213 @@ fn utf8_payload(bytes: &[u8], path: &str, role: &str) -> Result<String, Cartridg
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn composition_add_remove_preserves_other_members_and_rejects_ambiguous_or_invalid_imports() {
+        let source = bundled_fixture();
+        let before = parse_workcart(&source).unwrap();
+        let child = format!(
+            "# imported exactly\r\n{}",
+            CART.replace("workcart-test", "new-child")
+                .replace('\n', "\r\n")
+        );
+        let added = super::add_workcart_member(&source, "bonus", &child).unwrap();
+        let after = parse_workcart(&added).unwrap();
+        assert_eq!(after.bundle[0], before.bundle[0]);
+        assert_eq!(after.bundle[1].source, child);
+        assert_eq!(after.files, before.files);
+        assert_eq!(after.tests, before.tests);
+        assert_eq!(after.recipes, before.recipes);
+        assert_eq!(
+            crate::game::pack_game_workcart(&added)
+                .unwrap()
+                .catalog()
+                .cartridges()
+                .len(),
+            3
+        );
+        let removed = super::remove_workcart_member(&added, "bonus").unwrap();
+        assert_eq!(parse_workcart(&removed).unwrap().bundle, before.bundle);
+        for alias in ["main", "level", "../escape", "Upper", ""] {
+            assert_eq!(
+                super::add_workcart_member(&source, alias, &child)
+                    .unwrap_err()
+                    .code,
+                "M014070"
+            );
+        }
+        assert_eq!(
+            super::add_workcart_member(&source, "duplicate-id", CART)
+                .unwrap_err()
+                .code,
+            "M014071"
+        );
+        assert_eq!(
+            super::add_workcart_member(&source, "nested", &added)
+                .unwrap_err()
+                .code,
+            "M014073"
+        );
+        let mut invalid = parse_workcart(&child).unwrap();
+        invalid.files.insert(
+            "src/main.modl".to_owned(),
+            b"on draw:\n  unknown_call()\n".to_vec(),
+        );
+        let invalid = super::encode_workcart(
+            &invalid.manifest,
+            &invalid.files,
+            &invalid.recipes,
+            &invalid.tests,
+        )
+        .unwrap();
+        assert!(super::add_workcart_member(&source, "invalid", &invalid).is_err());
+        for alias in ["main", "absent"] {
+            assert_eq!(
+                super::remove_workcart_member(&source, alias)
+                    .unwrap_err()
+                    .code,
+                "M014070"
+            );
+        }
+    }
+
+    #[test]
+    fn composition_removal_protects_modules_tests_and_computed_requests_but_not_comments_or_transfer_text()
+     {
+        let original = parse_workcart(&bundled_fixture()).unwrap();
+        let fixture = |script: &str, test: bool| {
+            let mut project = original.clone();
+            if test {
+                project.tests = vec![super::WorkcartTest {
+                    name: "reference".to_owned(),
+                    path: "tests/reference.modl".to_owned(),
+                    kind: super::WorkcartTestKind::Modl,
+                    payload: script.to_owned(),
+                }];
+            } else {
+                project
+                    .files
+                    .insert("src/main.modl".to_owned(), script.as_bytes().to_vec());
+            }
+            super::encode_workcart_with_bundle(
+                &project.manifest,
+                &project.files,
+                &project.recipes,
+                &project.tests,
+                &project.bundle,
+            )
+            .unwrap()
+        };
+        for request in [
+            "load_cart(\"level\", \"\")",
+            "reload_assets(\"level\")",
+            "load_cart(cart_parameter(), \"\")",
+            "load_cart(\"main\" + cart_parameter(), \"\")",
+            "reload_assets((\"level\"))",
+        ] {
+            for test in [false, true] {
+                let source = fixture(&format!("on update:\n  {request}\n"), test);
+                let error = super::remove_workcart_member(&source, "level").unwrap_err();
+                assert_eq!(error.code, "M014075", "{request}");
+                assert!(error.message.contains(if test {
+                    "main/tests/reference.modl:2"
+                } else {
+                    "main/src/main.modl:2"
+                }));
+            }
+        }
+        let harmless = fixture(
+            "// load_cart(\"level\", \"\")\non update:\n  load_cart(\"main\", \"level\")\non draw:\n  print(\"reload_assets(level)\", 0, 0, 1)\n",
+            false,
+        );
+        assert!(
+            parse_workcart(&super::remove_workcart_member(&harmless, "level").unwrap())
+                .unwrap()
+                .bundle
+                .is_empty()
+        );
+        // Calls inside an imported but unexecuted module are still authored references.
+        let mut project = original.clone();
+        project.files.insert(
+            "src/unused.modl".to_owned(),
+            b"fn unused():\n  reload_assets(\"level\")\n".to_vec(),
+        );
+        let source = super::encode_workcart_with_bundle(
+            &project.manifest,
+            &project.files,
+            &project.recipes,
+            &project.tests,
+            &project.bundle,
+        )
+        .unwrap();
+        assert!(
+            super::remove_workcart_member(&source, "level")
+                .unwrap_err()
+                .message
+                .contains("src/unused.modl")
+        );
+        // A retained sibling's request prevents removing the destination too.
+        let mut sibling = parse_workcart(CART).unwrap();
+        sibling.manifest.id = "retained-sibling".to_owned();
+        sibling.files.insert(
+            "src/main.modl".to_owned(),
+            b"on update:\n  load_cart(\"level\", \"\")\n".to_vec(),
+        );
+        let sibling = super::encode_workcart(
+            &sibling.manifest,
+            &sibling.files,
+            &sibling.recipes,
+            &sibling.tests,
+        )
+        .unwrap();
+        let source = super::add_workcart_member(&bundled_fixture(), "sibling", &sibling).unwrap();
+        assert!(
+            super::remove_workcart_member(&source, "level")
+                .unwrap_err()
+                .message
+                .contains("sibling/src/main.modl:2")
+        );
+    }
+
+    #[test]
+    fn composition_accepts_member_32_and_refuses_member_33_without_replacing_anything() {
+        let mut project =
+            parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
+        for index in 1..31 {
+            project.manifest.id = format!("compose-{index}");
+            project.bundle.push(crate::bundle::BundleSource {
+                alias: format!("level-{index}"),
+                source: super::encode_workcart(&project.manifest, &project.files, &[], &[])
+                    .unwrap(),
+            });
+        }
+        project.manifest.id = "compose-main".to_owned();
+        let source = super::encode_workcart_with_bundle(
+            &project.manifest,
+            &project.files,
+            &[],
+            &[],
+            &project.bundle,
+        )
+        .unwrap();
+        project.manifest.id = "compose-last".to_owned();
+        let last = super::encode_workcart(&project.manifest, &project.files, &[], &[]).unwrap();
+        let source = super::add_workcart_member(&source, "last", &last).unwrap();
+        assert_eq!(
+            crate::game::pack_game_workcart(&source)
+                .unwrap()
+                .catalog()
+                .cartridges()
+                .len(),
+            32
+        );
+        assert_eq!(
+            super::add_workcart_member(&source, "excess", &last)
+                .unwrap_err()
+                .code,
+            "M014070"
+        );
+    }
+
     fn bundled_fixture() -> String {
         let root = parse_workcart(CART).unwrap();
         let child = format!(

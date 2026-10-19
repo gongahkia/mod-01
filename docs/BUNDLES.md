@@ -61,6 +61,16 @@ count/alias errors, `M014071` duplicate save IDs, `M014072` source resource boun
 `M014073` forbidden nested/entry-only operations and `M014074` invalid packages.
 Ordinary compiler/asset errors retain their codes and include the member alias.
 
+Shared `workcart::add_workcart_member` and `remove_workcart_member` operations
+preflight the whole candidate game before returning changed source. Addition
+requires a fresh alias and a single flat cartridge; it never replaces a member.
+Removal cannot remove `main` and preserves player saves. It checks retained
+modules (including unused ones), stored MODL tests and sibling cartridges for
+`load_cart`/`reload_assets` requests. Literal references prevent removal; computed
+targets conservatively prevent it too (`M014075`). Comments, ordinary text and
+transfer parameters are not destination references. Request-shaped calls are
+checked conservatively using the shared lexer, not runtime string prediction.
+
 `encode_workcart_with_bundle` and `rewrite_workcart` retain child source exactly,
 including comments and CRLF. Asset deletion, map generation and CLI source
 formatting retain dependencies too. No-op rewriting retains the entire enclosing

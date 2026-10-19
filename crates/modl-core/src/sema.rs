@@ -499,6 +499,9 @@ impl<'syntax> Analyzer<'syntax> {
             Type::Rect,
         );
         self.builtin("menu_item", vec![Type::Int, Type::Text], Type::Unit);
+        self.builtin("load_cart", vec![Type::Text, Type::Text], Type::Unit);
+        self.builtin("cart_parameter", vec![], Type::Text);
+        self.builtin("reload_assets", vec![Type::Text], Type::Unit);
     }
 
     fn install_builtin_values(&mut self) {

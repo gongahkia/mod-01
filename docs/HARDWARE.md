@@ -171,9 +171,10 @@ An empty copy/fill costs one unit and accepts the one-past-end address `0x400000
 invalid byte/word/register value, and `M019011` a write outside the raster facility during `on raster`.
 `M019001` remains the work-limit fault. All carry the originating MODL span. Type-invalid source is rejected before execution.
 
-Current core snapshots use revision 6 and machine snapshots revision 2. They
+Current core snapshots use revision 7 and machine snapshots revision 3. They
 retain RAM, visual pixels/tail, graphics/raster, synth/tracker, saves, input,
-scheduler, RNG, work attribution and terminal faults. Restore validates the
+scheduler, RNG, work attribution, terminal faults and deferred cartridge controls.
+Restore validates the
 complete state and rolls back on failure. Older schemas are errors.
 Snapshots are boot/frame-boundary records; live statement suspension uses
 compiler-generated continuations, not serialized host generators.

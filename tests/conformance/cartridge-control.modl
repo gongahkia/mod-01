@@ -1,0 +1,13 @@
+state ticks: Int = 0
+on start:
+  assert cart_parameter() == "lives=3", "parameter"
+  menu_item(1, "GO TO ARENA")
+on menu(action: Int):
+  assert action == 1, "action"
+  load_cart("arena", "lives=2")
+on update:
+  ticks += 1
+on draw:
+  clear(1)
+  if ticks > 1:
+    clear(2)

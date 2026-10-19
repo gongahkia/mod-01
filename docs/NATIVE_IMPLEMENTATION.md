@@ -51,6 +51,16 @@ choices remain outstanding.
 
 ## Progress
 
+- Typed `load_cart`, `cart_parameter` and `reload_assets` now reach the production
+  console's deferred request service; both compiler modes enforce their signatures
+  and reject raster calls. Console snapshots are current revision 7 (machine 3),
+  including request/context state and atomic rollback. Real MODL release/debug
+  tests prove menu-driven requests remain pending during statement suspension,
+  restore with VM state, and defer boot without rerunning start after restoration.
+  Input hashes, work peaks, final/checkpoint framebuffers, audio command streams
+  and PCM match all three original replays; only compiled-cartridge and complete
+  state identity hashes changed for the new builtin table/snapshot schema.
+  The actual multi-cart scheduler, host adapters and acceptance row remain open.
 - Runtime request control is implemented and unit-tested: local aliases only,
   a 1,024-byte well-formed UTF-8 transfer parameter, one deferred operation per
   callback frame, pre-admitted compatible reload banks, work charged before

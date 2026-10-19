@@ -28,6 +28,11 @@ import {
 import { isInputFrame, type InputFrame } from './input';
 import type { MenuItem } from './menu';
 import { isConsoleConfiguration } from './protocol';
+import {
+  isCartridgeControlSnapshot,
+  type CartridgeControl,
+  type CartridgeControlSnapshot,
+} from './cartridge-control';
 import type {
   ConsoleCommand,
   DebugStackFrame,
@@ -70,27 +75,35 @@ export interface ConsoleRuntime {
 }
 
 export interface ConsoleRuntimeSnapshot {
-  readonly revision: 6;
+  readonly revision: 7;
   readonly machine: MachineSnapshot;
   readonly save: SaveSnapshot;
   readonly graphics: GraphicsSnapshot;
   readonly audio: SynthSnapshot;
   readonly pendingSaveWrites: readonly SaveWrite[];
   readonly memory: MemorySnapshot;
+  readonly cartridgeControl: CartridgeControlSnapshot | null;
+}
+
+/** Trusted scheduler services, never data supplied by cartridge code or JSON configuration. */
+export interface ConsoleRuntimeServices {
+  readonly cartridge?: CartridgeControl;
+  readonly deferBoot?: boolean;
 }
 
 export function isConsoleRuntimeSnapshot(value: unknown): value is ConsoleRuntimeSnapshot {
   return (
     isRecord(value) &&
-    value.revision === 6 &&
-    Object.keys(value).length === 7 &&
+    value.revision === 7 &&
+    Object.keys(value).length === 8 &&
     isMachineSnapshot(value.machine) &&
     isSaveSnapshot(value.save) &&
     isGraphicsSnapshot(value.graphics) &&
     isSynthSnapshot(value.audio) &&
     isPendingDeviceWrites(value.pendingSaveWrites, value.save) &&
     isMemorySnapshot(value.memory) &&
-    graphicsMatchesMemory(value.graphics, value.memory)
+    graphicsMatchesMemory(value.graphics, value.memory) &&
+    (value.cartridgeControl === null || isCartridgeControlSnapshot(value.cartridgeControl))
   );
 }
 
@@ -98,9 +111,12 @@ export function isConsoleRuntimeSnapshot(value: unknown): value is ConsoleRuntim
 export function createConsoleRuntime(
   factory: CartridgeFactory,
   configuration: ConsoleConfiguration,
+  services: ConsoleRuntimeServices = {},
 ): ConsoleRuntime {
   if (!isConsoleConfiguration(configuration))
     throw new RuntimeFault('M019100', 'invalid console configuration', { start: 0, end: 0 });
+  const cartridgeControl = services.cartridge;
+  const deferBoot = services.deferBoot === true;
   const source = configuration.assets;
   const assets =
     source === undefined
@@ -211,7 +227,7 @@ export function createConsoleRuntime(
   graphics.beginFrame();
   rendering = true;
   try {
-    if (!debugEnabled) machine.boot();
+    if (!debugEnabled && !deferBoot) machine.boot();
   } finally {
     rendering = false;
   }
@@ -326,8 +342,16 @@ export function createConsoleRuntime(
       if (!isConsoleRuntimeSnapshot(value))
         throw new RuntimeFault('M019103', 'invalid console snapshot', { start: 0, end: 0 });
       const snapshot = value;
+      if ((cartridgeControl === undefined) !== (snapshot.cartridgeControl === null))
+        throw new RuntimeFault(
+          'M019103',
+          'snapshot cartridge environment does not match this console',
+          { start: 0, end: 0 },
+        );
       const before = debugFrameActive ? boundarySnapshot : captureSnapshot();
       try {
+        if (snapshot.cartridgeControl !== null)
+          cartridgeControl?.restore(snapshot.cartridgeControl);
         requireMachine().restore(snapshot.machine);
         debugFrameActive = false;
         saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
@@ -336,6 +360,7 @@ export function createConsoleRuntime(
         bus.restore(snapshot.memory);
         boundarySnapshot = captureSnapshot();
       } catch (error) {
+        if (before.cartridgeControl !== null) cartridgeControl?.restore(before.cartridgeControl);
         requireMachine().restore(before.machine);
         saveMemory.restoreDevice(before.save, before.pendingSaveWrites);
         graphics.restore(before.graphics);
@@ -384,13 +409,14 @@ export function createConsoleRuntime(
 
   function captureSnapshot(): ConsoleRuntimeSnapshot {
     return {
-      revision: 6,
+      revision: 7,
       machine: requireMachine().snapshot(),
       save: saveMemory.deviceSnapshot(),
       graphics: graphics.snapshot(),
       audio: synthesizer.snapshot(),
       pendingSaveWrites: saveMemory.pendingWrites(),
       memory: bus.snapshot(),
+      cartridgeControl: cartridgeControl?.snapshot() ?? null,
     };
   }
 
@@ -409,6 +435,17 @@ export function createConsoleRuntime(
     sourceSpan: SourceSpan,
     context: ExecutionContext,
   ): unknown {
+    if (name === 'load_cart' || name === 'cart_parameter' || name === 'reload_assets') {
+      if (cartridgeControl === undefined)
+        throw new RuntimeFault(
+          'M019017',
+          'cartridge changes require an admitted game scheduler',
+          sourceSpan,
+        );
+      return cartridgeControl.call(name, arguments_, sourceSpan, context, (units, span) => {
+        requireMachine().work(units, span);
+      });
+    }
     if (name === 'visual_id' || name === 'audio_id') {
       if (arguments_.length !== 1 || typeof arguments_[0] !== 'string')
         throw new RuntimeFault('M019009', `${name} expects one Text name`, sourceSpan);

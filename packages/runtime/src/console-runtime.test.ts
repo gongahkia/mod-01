@@ -260,7 +260,7 @@ describe('production console dispatcher', () => {
     const runtime = createConsoleRuntime(factory, configuration);
     runtime.runFrame(emptyInputFrame());
     const current = runtime.snapshot();
-    for (const revision of [0, 1, 2, 3, 4, 5, 7]) {
+    for (const revision of [0, 1, 2, 3, 4, 5, 6, 8]) {
       expect(() => {
         runtime.restore({ ...current, revision });
       }).toThrow(/snapshot/);

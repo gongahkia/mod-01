@@ -1,7 +1,8 @@
 # Local multi-cartridge games
 
 Status: source preservation and whole-game packing/admission are implemented in
-the shared Rust core. Runtime switching, asset reload, state/save handling,
+the shared Rust core. Typed request calls and their console/debug snapshot state
+are implemented too. Actual runtime switching, asset reload, state/save handling,
 CLI/Studio controls and cross-host verification are still being implemented.
 This document does not claim that those runtime workflows are available yet.
 
@@ -73,6 +74,46 @@ forging compiled code, recomputing inventories, adding unknown fields/files,
 nested compositions and historical headers all fail. Single-cartridge bytes are
 unchanged. Core tests exercise a complete 32-member round trip and these rejection
 paths; gameplay/replay/debugger parity remains an open acceptance requirement.
+
+## Deferred request API
+
+The compiler and production console implement these typed operations for an
+admitted game scheduler:
+
+```modl
+load_cart("arena", "lives=2")
+let parameter: Text = cart_parameter()
+reload_assets("bank")
+```
+
+`load_cart(Text, Text)` and `reload_assets(Text)` return Unit;
+`cart_parameter()` returns Text. Calls cannot be used in `on raster`. A request
+does not immediately abandon its callback or execute target code. Only one
+load/reload may be queued per logical display frame; a second request faults
+instead of silently replacing the first. Only declared aliases are valid.
+Reload targets must have been admitted as compatible banks by the scheduler.
+
+Transfer parameters are well-formed UTF-8, up to 1,024 bytes, including empty
+text. `cart_parameter` charges `1 + parameterBytes`; `load_cart` charges
+`1 + aliasBytes + parameterBytes`; reload charges its pre-admitted bank-copy
+cost. These are additional to ordinary compiler call costs. Work is charged
+before a request is queued, so a budget failure cannot schedule a transition.
+`M019017` identifies invalid aliases/parameters, incompatible banks, duplicate
+requests, forbidden phases or a missing admitted scheduler.
+
+Current console snapshots are revision 7 and carry this context-bound pending
+request state (or null for a console without a game service). Restoring a
+snapshot restores both the machine and request, rolling both back on validation
+failure. Live statement suspensions remain non-serializable: a request may be
+observed during stepping, but it cannot be saved/applied as a completed frame
+until that frame finishes. An internal deferred-boot construction path prepares
+target consoles without executing start; restoring an existing machine does
+not run start again. These behaviours run through actual release/debug MODL
+compiler output in `cartridge-control-conformance.test.ts`.
+
+The game scheduler and host adapters are still pending. Entry-only hosts reject
+these requests explicitly; accepting the language syntax is not yet a claim
+that native/CLI multi-cart gameplay is complete.
 
 The 32-member model and separate loading/data-reload requirements were researched
 against the primary [PICO-8 manual](https://www.lexaloffle.com/dl/docs/pico-8_manual.html),

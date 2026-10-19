@@ -4811,29 +4811,67 @@ function hasExactKeys$2(value, expected) {
   const actual = Object.keys(value).sort();
   return actual.length === expected.length && expected.every((key) => actual.includes(key));
 }
+function isCartridgeAlias(value) {
+  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
+}
+function isTransferParameter(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= 1024 &&
+    value.isWellFormed() &&
+    new TextEncoder().encode(value).length <= 1024
+  );
+}
+function request(value) {
+  if (!record(value) || !isCartridgeAlias(value.alias)) return false;
+  return value.kind === 'load'
+    ? exact(value, ['kind', 'alias', 'parameter']) && isTransferParameter(value.parameter)
+    : value.kind === 'reload' && exact(value, ['kind', 'alias']);
+}
+function isCartridgeControlSnapshot(value) {
+  return (
+    record(value) &&
+    exact(value, ['revision', 'alias', 'parameter', 'pending']) &&
+    value.revision === 1 &&
+    isCartridgeAlias(value.alias) &&
+    isTransferParameter(value.parameter) &&
+    (value.pending === null || request(value.pending))
+  );
+}
+function record(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+function exact(value, keys) {
+  return (
+    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+  );
+}
 //#endregion
 //#region src/console-runtime.ts
 function isConsoleRuntimeSnapshot(value) {
   return (
     isRecord$2(value) &&
-    value.revision === 6 &&
-    Object.keys(value).length === 7 &&
+    value.revision === 7 &&
+    Object.keys(value).length === 8 &&
     isMachineSnapshot(value.machine) &&
     isSaveSnapshot(value.save) &&
     isGraphicsSnapshot(value.graphics) &&
     isSynthSnapshot(value.audio) &&
     isPendingDeviceWrites(value.pendingSaveWrites, value.save) &&
     isMemorySnapshot(value.memory) &&
-    graphicsMatchesMemory(value.graphics, value.memory)
+    graphicsMatchesMemory(value.graphics, value.memory) &&
+    (value.cartridgeControl === null || isCartridgeControlSnapshot(value.cartridgeControl))
   );
 }
 /** One production dispatcher for native Studio, standalone players and headless hosts. */
-function createConsoleRuntime(factory, configuration) {
+function createConsoleRuntime(factory, configuration, services = {}) {
   if (!isConsoleConfiguration(configuration))
     throw new RuntimeFault('M019100', 'invalid console configuration', {
       start: 0,
       end: 0,
     });
+  const cartridgeControl = services.cartridge;
+  const deferBoot = services.deferBoot === true;
   const source = configuration.assets;
   const assets =
     source === void 0
@@ -4951,7 +4989,7 @@ function createConsoleRuntime(factory, configuration) {
   graphics.beginFrame();
   rendering = true;
   try {
-    if (!debugEnabled) machine.boot();
+    if (!debugEnabled && !deferBoot) machine.boot();
   } finally {
     rendering = false;
   }
@@ -5076,8 +5114,19 @@ function createConsoleRuntime(factory, configuration) {
           end: 0,
         });
       const snapshot = value;
+      if ((cartridgeControl === void 0) !== (snapshot.cartridgeControl === null))
+        throw new RuntimeFault(
+          'M019103',
+          'snapshot cartridge environment does not match this console',
+          {
+            start: 0,
+            end: 0,
+          },
+        );
       const before = debugFrameActive ? boundarySnapshot : captureSnapshot();
       try {
+        if (snapshot.cartridgeControl !== null)
+          cartridgeControl?.restore(snapshot.cartridgeControl);
         requireMachine().restore(snapshot.machine);
         debugFrameActive = false;
         saveMemory.restoreDevice(snapshot.save, snapshot.pendingSaveWrites);
@@ -5086,6 +5135,7 @@ function createConsoleRuntime(factory, configuration) {
         bus.restore(snapshot.memory);
         boundarySnapshot = captureSnapshot();
       } catch (error) {
+        if (before.cartridgeControl !== null) cartridgeControl?.restore(before.cartridgeControl);
         requireMachine().restore(before.machine);
         saveMemory.restoreDevice(before.save, before.pendingSaveWrites);
         graphics.restore(before.graphics);
@@ -5140,13 +5190,14 @@ function createConsoleRuntime(factory, configuration) {
   };
   function captureSnapshot() {
     return {
-      revision: 6,
+      revision: 7,
       machine: requireMachine().snapshot(),
       save: saveMemory.deviceSnapshot(),
       graphics: graphics.snapshot(),
       audio: synthesizer.snapshot(),
       pendingSaveWrites: saveMemory.pendingWrites(),
       memory: bus.snapshot(),
+      cartridgeControl: cartridgeControl?.snapshot() ?? null,
     };
   }
   function completedOutput() {
@@ -5158,6 +5209,17 @@ function createConsoleRuntime(factory, configuration) {
     return frameOutput;
   }
   function handleConsoleCall(name, arguments_, sourceSpan, context) {
+    if (name === 'load_cart' || name === 'cart_parameter' || name === 'reload_assets') {
+      if (cartridgeControl === void 0)
+        throw new RuntimeFault(
+          'M019017',
+          'cartridge changes require an admitted game scheduler',
+          sourceSpan,
+        );
+      return cartridgeControl.call(name, arguments_, sourceSpan, context, (units, span) => {
+        requireMachine().work(units, span);
+      });
+    }
     if (name === 'visual_id' || name === 'audio_id') {
       if (arguments_.length !== 1 || typeof arguments_[0] !== 'string')
         throw new RuntimeFault('M019009', `${name} expects one Text name`, sourceSpan);

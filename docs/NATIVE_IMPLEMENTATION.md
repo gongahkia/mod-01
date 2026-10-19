@@ -11,6 +11,11 @@ Checkboxes mean the complete behaviour has been demonstrated, not merely that an
 API, UI label, or test file exists. Each implementation slice receives an atomic
 Git commit. The final audit must link the evidence for every row below.
 
+The [decision-by-decision acceptance audit](NATIVE_ACCEPTANCE.md) maps all 21
+original review IDs to current implementation and execution evidence. Progress
+entries below are reverse-chronological history: later entries supersede older
+open/closed statements. Cross-platform export qualification remains open.
+
 | Requirement                   | Acceptance evidence                                                                                                                                                                                         | Complete |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | Native-only product           | Browser app, Wasm bridge, PWA, workers, web sharing/export and browser-only build/test dependencies removed; native build/check/package gates pass.                                                         | [x]      |
@@ -51,6 +56,17 @@ choices remain outstanding.
 
 ## Progress
 
+- The acceptance audit now maps every original review ID, including rejected
+  items and note overrides, to concrete code/tests and scope qualifications.
+  At `7060d9b` the full gate passes 322 runtime/script, 134 core, 151 native,
+  34 CLI integration and one CLI unit test, all format/lint/type/Clippy/build
+  checks, ten deterministic cartridge pairs and three Linux package comparisons.
+  Fresh release Studio packaging and both release verifiers also pass. An actual
+  no-argument standalone launch from `/tmp` with empty PATH and isolated XDG data
+  shows menu docking, live night-bank graphics, the minimum player and active
+  vault source inspection; normal relaunch preserves separate saves. Current
+  Windows/macOS execution and actual window startup still need evidence. The
+  export/final-handoff rows deliberately remain open; no remote push is implied.
 - One actual Studio workflow now starts with an unsaved 256-colour source edit,
   steps both game members through the debugger, records each accepted input once,
   saves with the prior source recoverable, exports while the child is selected,

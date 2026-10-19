@@ -9,6 +9,7 @@ const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(PartialEq)]
 struct Key {
+    member: String,
     name: String,
     path: String,
     kind: Option<AssetKind>,
@@ -60,6 +61,7 @@ impl AssetSessions {
         self.stash(
             project,
             Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: path.to_owned(),
                 kind,
@@ -77,6 +79,7 @@ impl AssetSessions {
         self.stash(
             project,
             Key {
+                member: project.member_alias().to_owned(),
                 name: editor.name.clone(),
                 path: editor.asset_path.clone(),
                 kind,
@@ -106,6 +109,7 @@ impl AssetSessions {
             .saturating_add(source.capacity())
             .saturating_add(layered.as_ref().map_or(0, Vec::capacity))
             .saturating_add(key.name.capacity())
+            .saturating_add(key.member.capacity())
             .saturating_add(key.path.capacity())
             .saturating_add(size_of::<Session>());
         if bytes > MAX_RETAINED_BYTES {
@@ -163,6 +167,7 @@ impl AssetSessions {
         let editor = self.take(
             project,
             &Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: path.to_owned(),
                 kind,
@@ -180,6 +185,7 @@ impl AssetSessions {
         let editor = self.take(
             project,
             &Key {
+                member: project.member_alias().to_owned(),
                 name: name.to_owned(),
                 path: declaration.path.clone(),
                 kind: Some(declaration.kind),

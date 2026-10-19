@@ -16,6 +16,7 @@ fn game_source() -> String {
         let mut project =
             modl_core::parse_workcart(include_str!("../../../templates/blank/cart.m01w")).unwrap();
         project.manifest.id = format!("native-game-{alias}-{suffix}");
+        project.manifest.title = format!("NATIVE {alias}");
         project.manifest.update_rate = rate;
         project
             .files
@@ -49,7 +50,9 @@ fn game_source() -> String {
 fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
     let context = egui::Context::default();
     let mut app = StudioApp::new_with_devices(None, &context, false);
-    app.project = Some(NativeProject::from_source(game_source(), None).unwrap());
+    let project = NativeProject::from_source(game_source(), None).unwrap();
+    app.manifest_text = project.manifest_source.clone();
+    app.project = Some(project);
     let mut held = replay::empty_input();
     held["controllers"][0]["buttons"]["a"] = true.into();
     let mut transfer = held.clone();
@@ -76,6 +79,9 @@ fn fixture(debug: bool) -> (StudioApp, egui::Context, BTreeMap<u32, Value>) {
 fn complete_game_crosses_native_release_and_source_step_boundaries_on_one_input_timeline() {
     for debug in [false, true] {
         let (mut app, context, inputs) = fixture(debug);
+        app.select_member("arena");
+        assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
+        assert_eq!(app.runtime_title(), "NATIVE main");
         for frame in 0..7 {
             if debug {
                 advance_debug_to(&mut app, &context, frame + 1);
@@ -101,6 +107,7 @@ fn complete_game_crosses_native_release_and_source_step_boundaries_on_one_input_
                     "main"
                 }
             );
+            assert_eq!(app.runtime_title(), format!("NATIVE {}", app.active_alias));
             if frame == 1 || frame == 5 {
                 assert!(!app.debug_booted, "target boot is deferred in both modes");
                 assert!(app.frame_input.is_none());
@@ -351,4 +358,170 @@ fn studio_preloads_all_admitted_disk_saves_and_playback_cannot_overwrite_them() 
     assert_eq!(app.last_pixels[0], 7);
     assert_eq!(disk_main.unwrap(), initial_main);
     assert_eq!(disk_arena.unwrap(), initial_arena);
+}
+
+#[test]
+fn member_views_preserve_unsaved_source_and_whole_game_saves_without_rewriting_untouched_children()
+{
+    let mut whole = modl_core::parse_workcart(&game_source()).unwrap();
+    whole.bundle[0].source = format!(
+        "# exact child comments\r\n{}",
+        whole.bundle[0].source.replace('\n', "\r\n")
+    );
+    let source = format!(
+        "# exact enclosing comments\n{}",
+        modl_core::workcart::encode_workcart_with_bundle(
+            &whole.manifest,
+            &whole.files,
+            &whole.recipes,
+            &whole.tests,
+            &whole.bundle
+        )
+        .unwrap()
+    );
+    let mut project = NativeProject::from_source(source.clone(), None).unwrap();
+    project.select_member("arena").unwrap();
+    assert_eq!(project.source().unwrap(), source);
+    project.select_member("main").unwrap();
+    assert_eq!(project.source().unwrap(), source);
+    project.editor_text = project.editor_text.replace("clear(1)", "clear(2)");
+    project.dirty = true;
+    // No explicit sync_editor: switching must flush the visible editor itself.
+    project.select_member("arena").unwrap();
+    let after_root = modl_core::parse_workcart(&project.source().unwrap()).unwrap();
+    assert_eq!(after_root.bundle[0].source, whole.bundle[0].source);
+    assert!(
+        String::from_utf8(after_root.files["src/main.modl"].clone())
+            .unwrap()
+            .contains("clear(2)")
+    );
+    project.editor_text = project.editor_text.replace("clear(7)", "clear(8)");
+    let before_bad_selection = project.source().unwrap();
+    assert!(project.select_member("not-present").is_err());
+    assert_eq!(project.member_alias(), "arena");
+    assert_eq!(project.source().unwrap(), before_bad_selection);
+    let main_id = whole.manifest.id.clone();
+    assert_eq!(project.game().unwrap().entry().manifest.id, main_id);
+    assert_eq!(
+        project.load_command(true, &[]).unwrap()["game"]["members"]
+            .as_object()
+            .unwrap()
+            .len(),
+        2
+    );
+    let directory = std::env::temp_dir().join(format!(
+        "mod01-member-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&directory).unwrap();
+    project.workcart_path = Some(directory.join("cart.m01w"));
+    project.save().unwrap();
+    let saved = NativeProject::open(&directory).unwrap();
+    let saved_source = saved.source().unwrap();
+    project.select_member("main").unwrap();
+    assert!(project.editor_text.contains("clear(2)"));
+    assert!(project.dirty);
+    project.select_member("arena").unwrap();
+    assert!(project.editor_text.contains("clear(8)"));
+    // This directory and its one workcart were created solely by this test.
+    fs::remove_dir_all(&directory).unwrap();
+    let saved = modl_core::parse_workcart(&saved_source).unwrap();
+    let saved_child = modl_core::parse_workcart(&saved.bundle[0].source).unwrap();
+    assert!(
+        String::from_utf8(saved_child.files["src/main.modl"].clone())
+            .unwrap()
+            .contains("clear(8)")
+    );
+    // A compiler-invalid draft can still switch and save; it is rejected only by check/run/pack.
+    project
+        .editor_text
+        .push_str("\non update:\n  nonexistent_call()\n");
+    project.select_member("main").unwrap();
+    assert!(project.game().is_err());
+    project.select_member("arena").unwrap();
+    assert!(project.editor_text.contains("nonexistent_call"));
+}
+
+#[test]
+fn studio_member_switches_isolate_identical_asset_paths_bytes_and_redo_history() {
+    let mut main =
+        modl_core::parse_workcart(include_str!("../../../examples/api-tour/cart.m01w")).unwrap();
+    main.manifest.id = "member-history-main".to_owned();
+    let music: Value = serde_json::from_slice(&main.files["assets/loop.m01t"]).unwrap();
+    main.files.insert(
+        "assets/loop.m01t".to_owned(),
+        serde_json::to_vec_pretty(&music).unwrap(),
+    );
+    let mut child = main.clone();
+    child.manifest.id = "member-history-arena".to_owned();
+    let child =
+        modl_core::encode_workcart(&child.manifest, &child.files, &child.recipes, &child.tests)
+            .unwrap();
+    let source = modl_core::workcart::encode_workcart_with_bundle(
+        &main.manifest,
+        &main.files,
+        &main.recipes,
+        &main.tests,
+        &[BundleSource {
+            alias: "arena".to_owned(),
+            source: child,
+        }],
+    )
+    .unwrap();
+    let context = egui::Context::default();
+    let mut app = StudioApp::new_with_devices(None, &context, false);
+    let project = NativeProject::from_source(source, None).unwrap();
+    app.manifest_text = project.manifest_source.clone();
+    app.project = Some(project);
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    let mut edited = editor.document.clone();
+    edited["framesPerRow"] = json!(240);
+    editor.replace_document(edited);
+    editor.undo();
+    app.select_member("arena");
+    assert_eq!(
+        app.project.as_ref().unwrap().member_alias(),
+        "arena",
+        "{}",
+        app.status
+    );
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    editor.redo();
+    assert_eq!(
+        editor.document["framesPerRow"], 12,
+        "another member's redo must never leak"
+    );
+    let mut edited = editor.document.clone();
+    edited["framesPerRow"] = json!(99);
+    editor.replace_document(edited);
+    app.select_member("main");
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    editor.redo();
+    assert_eq!(editor.document["framesPerRow"], 240);
+    app.select_member("arena");
+    app.open_asset("loop");
+    let editor = app.asset_workbench.as_mut().unwrap();
+    assert_eq!(editor.document["framesPerRow"], 99);
+    editor.undo();
+    assert_eq!(editor.document["framesPerRow"], 12);
+    app.sync_asset().unwrap();
+    app.project.as_ref().unwrap().pack().unwrap();
+    app.manifest_text.push_str("\ninvalid = [\n");
+    app.select_member("main");
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
+    assert!(app.status.starts_with("APPLY OR REVERT MANIFEST DRAFT"));
+    app.manifest_text = app.project.as_ref().unwrap().manifest_source.clone();
+    app.asset_workbench = None;
+    app.asset_text = "invalid JSON draft".to_owned();
+    app.asset_dirty = true;
+    app.select_member("main");
+    assert_eq!(app.project.as_ref().unwrap().member_alias(), "arena");
+    assert_eq!(app.asset_text, "invalid JSON draft");
 }

@@ -137,7 +137,10 @@ impl SourceEditor {
             .max_height(controls_height)
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui_theme::legend(ui, &project.selected_file);
+                    ui_theme::legend(
+                        ui,
+                        format!("{}/{}", project.member_alias(), project.selected_file),
+                    );
                     if ui
                         .button("FIND")
                         .on_hover_text("Ctrl/Cmd+F; F3 next, Shift+F3 previous")
@@ -236,7 +239,11 @@ impl SourceEditor {
         let mut changed = false;
         let source_id = editor_id(project);
         egui::ScrollArea::both()
-            .id_salt(("source-scroll", &project.selected_file))
+            .id_salt((
+                "source-scroll",
+                project.member_alias(),
+                &project.selected_file,
+            ))
             .max_height(height)
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -298,8 +305,9 @@ impl SourceEditor {
     }
 
     fn refresh(&mut self, project: &mut NativeProject) {
-        if self.identity != project.manifest.id {
-            self.identity.clone_from(&project.manifest.id);
+        let identity = format!("{}:{}", project.member_alias(), project.manifest.id);
+        if self.identity != identity {
+            self.identity = identity;
             self.completion_model = None;
             self.model = None;
             self.fingerprint = None;
@@ -787,6 +795,7 @@ impl SourceEditor {
 fn editor_id(project: &NativeProject) -> egui::Id {
     egui::Id::unique((
         "native-modl-source",
+        project.member_alias(),
         &project.manifest.id,
         &project.selected_file,
     ))

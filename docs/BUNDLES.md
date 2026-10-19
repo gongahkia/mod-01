@@ -6,8 +6,13 @@ asset reload, per-ID saves, input ownership and whole-game checkpoints, with rea
 release/debug MODL tests. CLI `pack`, `check`, `info --source`, `watch` and
 `run --headless` now retain/admit the whole game. Native Studio/player use the same
 whole-game loader and scheduler, including per-ID disk saves and member-scoped
-host debugger symbols. Bundle editing/source navigation, remaining export/analysis
-integration and cross-host verification are still being implemented; these
+host debugger symbols. The workspace member picker edits embedded cartridges
+without separating them into disk projects: switching flushes the visible source,
+assets, manifest and per-member file selection; Save and Run always retain the
+whole game and Run starts `main`, whichever member is selected for editing.
+Asset history and source widget identities include the member alias, and invalid
+asset/manifest drafts block switching without discarding text. Source navigation,
+member composition controls, remaining export/analysis integration and cross-host verification are still being implemented; these
 workflows are not yet exposed as a complete native feature.
 
 ## Authoring and admission

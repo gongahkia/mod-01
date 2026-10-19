@@ -202,6 +202,7 @@ struct StudioApp {
     preview_name: String,
     loaded: bool,
     running_members: BTreeMap<String, String>,
+    running_titles: BTreeMap<String, String>,
     active_alias: String,
     pending: bool,
     frame: u32,
@@ -316,6 +317,7 @@ impl StudioApp {
             preview_name: String::new(),
             loaded: false,
             running_members: BTreeMap::new(),
+            running_titles: BTreeMap::new(),
             active_alias: String::new(),
             pending: false,
             frame: 0,
@@ -422,6 +424,67 @@ impl StudioApp {
                 self.status = "MANIFEST APPLIED".to_owned();
             }
             Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn select_member(&mut self, alias: &str) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        if alias == project.member_alias() {
+            return;
+        }
+        if self.manifest_text != project.manifest_source {
+            self.status = "APPLY OR REVERT MANIFEST DRAFT BEFORE SWITCHING CARTRIDGES".to_owned();
+            return;
+        }
+        if let Err(error) = self.sync_asset() {
+            self.status = error;
+            return;
+        }
+        if self.sprite.as_ref().is_some_and(|sprite| sprite.dirty)
+            && let Err(error) = self.save_sprite()
+        {
+            self.status = error;
+            return;
+        }
+        let Some(project) = &self.project else {
+            return;
+        };
+        let mut candidate = project.clone();
+        if let Err(error) = candidate.select_member(alias) {
+            self.status = error;
+            return;
+        }
+        self.cache_asset_editors();
+        self.asset_meter = asset_meter::AssetMeter::default();
+        self.source_editor.dismiss_completion();
+        self.manifest_text = candidate.manifest_source.clone();
+        self.project = Some(candidate);
+        self.live_audio.stop();
+        self.view = View::Code;
+        self.status = format!("EDITING {alias} / SAVE AND RUN KEEP THE WHOLE GAME");
+    }
+
+    fn member_picker(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = &self.project else {
+            return;
+        };
+        let selected = project.member_alias().to_owned();
+        let members = project.members();
+        let mut next = selected.clone();
+        ui_theme::legend(ui, format!("GAME / {} CARTRIDGE(S)", members.len()));
+        egui::ComboBox::from_id_salt("game-member")
+            .selected_text(&selected)
+            .width(ui.available_width() - 12.0)
+            .show_ui(ui, |ui| {
+                for (alias, id) in members {
+                    ui.selectable_value(&mut next, alias.clone(), alias)
+                        .on_hover_text(id);
+                }
+            });
+        if next != selected {
+            self.select_member(&next);
         }
     }
 
@@ -1230,6 +1293,12 @@ impl StudioApp {
             .iter()
             .map(|(alias, cart)| (alias.clone(), cart.manifest.id.clone()))
             .collect::<BTreeMap<_, _>>();
+        let titles = game
+            .catalog()
+            .cartridges()
+            .iter()
+            .map(|(alias, cart)| (alias.clone(), cart.manifest.title.clone()))
+            .collect();
         let saves = members
             .values()
             .map(|id| read_save(id).map(|save| (id.clone(), save)))
@@ -1256,6 +1325,7 @@ impl StudioApp {
         match self.runtime.send(command) {
             Ok(()) => {
                 self.running_members = members;
+                self.running_titles = titles;
                 self.active_alias = "main".to_owned();
                 self.running = true;
                 self.keyboard_controller.quarantine();
@@ -1577,9 +1647,25 @@ impl StudioApp {
         let alias = active["cartridgeAlias"].as_str().unwrap_or("");
         let id = active["cartridgeId"].as_str().unwrap_or("");
         if self.running_members.get(alias).map(String::as_str) == Some(id) {
+            if self.active_alias != alias && !self.debugging {
+                self.status = format!("RUNNING {alias} / {id}");
+            }
             self.active_alias = alias.to_owned();
             self.debug_booted = active["booted"] == true;
         }
+    }
+
+    fn runtime_title(&self) -> String {
+        self.running
+            .then(|| self.running_titles.get(&self.active_alias))
+            .flatten()
+            .cloned()
+            .or_else(|| {
+                self.project
+                    .as_ref()
+                    .map(|project| project.manifest.title.clone())
+            })
+            .unwrap_or_else(|| "MOD-01".to_owned())
     }
 
     fn send_frame(&mut self, context: &egui::Context) {
@@ -3140,6 +3226,7 @@ impl eframe::App for StudioApp {
                     .show(ui, |ui| {
                         ui_theme::legend(ui, "01 / WORKSPACE");
                         ui.heading("PROJECT");
+                        self.member_picker(ui);
                         ui.separator();
                         for (view, title) in [
                             (View::Code, "01  CODE"),

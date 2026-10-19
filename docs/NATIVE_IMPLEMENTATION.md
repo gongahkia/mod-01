@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- Studio's game-member picker now provides independent embedded source/manifest/
+  asset views while Save, Check and Run retain the complete game. Switching keeps
+  unsaved code (including compiler-invalid drafts), exact untouched child source,
+  per-member source selection and alias-scoped asset undo/redo; malformed raw JSON
+  or unapplied manifest drafts block switching safely. Running titles come from
+  the admitted active member rather than whichever cartridge is being edited.
+  Two new integration tests exercise these behaviours; all 103 native tests pass.
+  Inspected real native screenshots at 1280×800 and 900×600 show both member views,
+  and Run from the selected child starts main. The complete gate passes: 275
+  runtime, 117 core and 25 CLI tests, all format/lint/type/Clippy/build checks,
+  nine unchanged raw/PNG pairs and 120 Linux packaged frames without PATH.
+  Alias-qualified source breakpoints/navigation, composition controls and complete
+  export remain open; the multi-cart acceptance row remains open.
 - Native Studio/player now prepare every member through shared Rust and load one
   whole-game host command, without an entry-only fallback. Frames carry global and
   local time, producing alias/ID and next active context; snapshots bind the whole

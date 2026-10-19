@@ -19,11 +19,7 @@ impl StudioApp {
             .frame(ui_theme::case_frame())
             .show(root, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.heading(
-                        self.project
-                            .as_ref()
-                            .map_or("MOD-01", |project| &project.manifest.title),
-                    );
+                    ui.heading(self.runtime_title());
                     if ui
                         .add_enabled(
                             self.running,

@@ -22,6 +22,10 @@ pub struct NativeProject {
     pub root: Option<PathBuf>,
     pub workcart_path: Option<PathBuf>,
     workcart_source: String,
+    member_source: String,
+    member_alias: String,
+    member_ids: BTreeMap<String, String>,
+    member_paths: BTreeMap<String, String>,
     pub manifest_source: String,
     pub manifest: ProjectManifest,
     pub files: BTreeMap<String, Vec<u8>>,
@@ -115,6 +119,13 @@ impl NativeProject {
     ) -> Result<Self, String> {
         let view = workcart_project_view(&source).map_err(|error| error.to_string())?;
         let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
+        let whole = modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+        let mut member_ids = BTreeMap::from([("main".to_owned(), manifest.id.clone())]);
+        for member in whole.bundle {
+            let cart =
+                modl_core::parse_workcart(&member.source).map_err(|error| error.to_string())?;
+            member_ids.insert(member.alias, cart.manifest.id);
+        }
         let selected_file = manifest.entry.clone();
         let editor_text = String::from_utf8(
             view.files
@@ -129,7 +140,11 @@ impl NativeProject {
         Ok(Self {
             root,
             workcart_path,
+            member_source: source.clone(),
             workcart_source: source,
+            member_alias: "main".to_owned(),
+            member_ids,
+            member_paths: BTreeMap::new(),
             manifest_source: view.manifest,
             manifest,
             files: view.files,
@@ -151,6 +166,110 @@ impl NativeProject {
         self.selected_file = path.to_owned();
         Ok(())
     }
+
+    pub fn member_alias(&self) -> &str {
+        &self.member_alias
+    }
+
+    pub fn members(&self) -> Vec<(String, String)> {
+        self.member_ids
+            .iter()
+            .map(|(alias, id)| {
+                (
+                    alias.clone(),
+                    if alias == &self.member_alias {
+                        self.manifest.id.clone()
+                    } else {
+                        id.clone()
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Flushes just the selected member into the complete enclosing source. Other
+    /// members retain their exact source, and a no-op preserves the whole document.
+    pub fn source(&self) -> Result<String, String> {
+        let mut files = self.files.clone();
+        files.insert(
+            self.selected_file.clone(),
+            self.editor_text.as_bytes().to_vec(),
+        );
+        let edited = rewrite_workcart(&self.member_source, &self.manifest_source, &files)
+            .map_err(|error| error.to_string())?;
+        if self.member_alias == "main" {
+            return Ok(edited);
+        }
+        let mut whole =
+            modl_core::parse_workcart(&self.workcart_source).map_err(|error| error.to_string())?;
+        let member = whole
+            .bundle
+            .iter_mut()
+            .find(|member| member.alias == self.member_alias)
+            .ok_or("selected cartridge is missing")?;
+        if member.source == edited {
+            return Ok(self.workcart_source.clone());
+        }
+        member.source = edited;
+        modl_core::workcart::encode_workcart_with_bundle(
+            &whole.manifest,
+            &whole.files,
+            &whole.recipes,
+            &whole.tests,
+            &whole.bundle,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// Switching is transactional and needs valid source structure, not valid MODL
+    /// code. In-progress compiler errors remain editable and are saved with the game.
+    pub fn select_member(&mut self, alias: &str) -> Result<(), String> {
+        if alias == self.member_alias {
+            return Ok(());
+        }
+        let source = self.source()?;
+        let whole = modl_core::parse_workcart(&source).map_err(|error| error.to_string())?;
+        let member_source = if alias == "main" {
+            source.clone()
+        } else {
+            whole
+                .bundle
+                .iter()
+                .find(|member| member.alias == alias)
+                .ok_or("cartridge alias is not in this game")?
+                .source
+                .clone()
+        };
+        let view = workcart_project_view(&member_source).map_err(|error| error.to_string())?;
+        let manifest = parse_project_manifest(&view.manifest).map_err(|error| error.to_string())?;
+        let selected_file = self
+            .member_paths
+            .get(alias)
+            .filter(|path| view.files.contains_key(*path))
+            .cloned()
+            .unwrap_or_else(|| manifest.entry.clone());
+        let editor_text = String::from_utf8(
+            view.files
+                .get(&selected_file)
+                .cloned()
+                .ok_or("selected source is missing")?,
+        )
+        .map_err(|error| error.to_string())?;
+        self.member_paths
+            .insert(self.member_alias.clone(), self.selected_file.clone());
+        self.member_ids
+            .insert(self.member_alias.clone(), self.manifest.id.clone());
+        self.dirty |= source != self.workcart_source;
+        self.workcart_source = source;
+        self.member_source = member_source;
+        self.member_alias = alias.to_owned();
+        self.manifest_source = view.manifest;
+        self.manifest = manifest;
+        self.files = view.files;
+        self.selected_file = selected_file;
+        self.editor_text = editor_text;
+        Ok(())
+    }
     pub fn sync_editor(&mut self) {
         self.files.insert(
             self.selected_file.clone(),
@@ -170,8 +289,7 @@ impl NativeProject {
             .workcart_path
             .as_ref()
             .ok_or("choose a workcart path before saving")?;
-        let rewritten = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
-            .map_err(|error| error.to_string())?;
+        let rewritten = self.source()?;
         let previous = match fs::read_to_string(path) {
             Ok(source) => Some(source),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -226,8 +344,7 @@ impl NativeProject {
     }
 
     pub fn game(&self) -> Result<PackedGame, String> {
-        let source = rewrite_workcart(&self.workcart_source, &self.manifest_source, &self.files)
-            .map_err(|error| error.to_string())?;
+        let source = self.source()?;
         pack_game_workcart(&source).map_err(|error| error.to_string())
     }
 

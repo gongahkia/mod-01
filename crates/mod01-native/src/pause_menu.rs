@@ -235,13 +235,10 @@ impl crate::StudioApp {
             return;
         }
         let (enabled, reason) = self.menu_action_readiness();
-        let title = self
-            .project
-            .as_ref()
-            .map_or("CARTRIDGE", |project| project.manifest.title.as_str());
+        let title = self.runtime_title();
         if let Some(action) = self.pause_menu.show(
             context,
-            title,
+            &title,
             enabled,
             reason,
             std::mem::take(&mut self.pause_navigation),

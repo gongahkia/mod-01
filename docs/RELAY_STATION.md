@@ -47,7 +47,14 @@ target/debug/mod01 run cartridges/relay-station --headless --frames 110 --input 
 target/debug/mod01-studio --verify cartridges/relay-station --frames 110 --input tests/replays/relay-station.json
 target/debug/mod01 pack cartridges/relay-station --output /tmp/relay-station.m01c
 target/debug/mod01 export png cartridges/relay-station --output /tmp/relay-station.m01c.png
+node scripts/verify-relay-station.mjs
 ```
+
+The verification script compares all 110 frames' routing, work, indexed pixels,
+interleaved PCM and audio commands across CLI/native source, raw, PNG and an
+actual exported executable launched outside the checkout with empty PATH. Final
+state/checkpoint and every member's save must also match. It uses a private
+temporary directory and does not modify the maintained source, replay or saves.
 
 The normal native export command ships the entire game, including the night
 bank. Studio's member picker edits each embedded `src/main.modl` independently;

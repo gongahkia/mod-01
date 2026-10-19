@@ -81,6 +81,15 @@ must remain inspectable from outside the checkout. The macOS/Windows/Linux
 packaging matrix runs this same verification on each OS; cross-target file-layout
 tests alone do not demonstrate execution on another OS.
 
+`node scripts/verify-relay-station.mjs` also compares the maintained three-member
+game's complete 110-frame replay across CLI and native source/raw/PNG execution
+and the actual standalone package with empty PATH. Each frame must agree on
+producer/local/global cursor, work, pixels, interleaved PCM and audio commands;
+the final canonical state/checkpoint and every distinct save image must agree.
+The route exercises two asset-bank reloads, 60/30 Hz execution, task/RNG state,
+menu transfer and held-input quarantine, then returns home with a committed clear.
+This check is part of both the full gate and the desktop packaging matrix.
+
 For display-free QA through the **native production bridge**:
 
 ```sh
@@ -97,6 +106,10 @@ neutral input, and events beyond `--frames` are rejected before game loading.
 The report also fingerprints consumed input and the final opaque whole-game
 checkpoint (the latter is a same-Node-build comparison, not a portable snapshot
 file format). Verification accepts 1–36,000 frames and replay files up to 8 MiB.
+`frameChecks` contains bounded per-frame SHA-256 evidence using the CLI's shared
+encoding, and final SHA-256 fields cover canonical state, checkpoint and saves.
+These permit direct cross-host comparisons; they do not change game execution
+or turn JSON reports into restorable checkpoints.
 Studio replay imports use that same bounded reader. It does not open
 a window, initialize an audio device, read local saves or persist save commits.
 Frame count is bounded to 1–36,000. This is a smoke

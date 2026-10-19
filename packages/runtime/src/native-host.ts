@@ -11,6 +11,7 @@ import type { GameFrame, GameRuntime } from './game-runtime';
 import { DEFAULT_SEED, HARDWARE } from './hardware';
 import type { InputFrame } from './input';
 import { RuntimeFault } from './errors';
+import { canonicalBytes, pcmBytes, saveHashes, sha256, stateBytes } from './execution-hashes';
 import { renderMusicWav, renderSoundWav } from './wav';
 import {
   AudioAssetStore,
@@ -119,6 +120,11 @@ function frameResponse(result: GameFrame) {
     cartridgeId: result.cartridgeId,
     cartridgeFrame: result.cartridgeFrame,
     workUnits: result.workUnits,
+    checks: {
+      framebufferSha256: sha256(result.output.indexedPixels),
+      pcmSha256: sha256(pcmBytes(result)),
+      audioCommandSha256: sha256(canonicalBytes(result.audioCommands)),
+    },
     pixels: encoded(result.output.indexedPixels),
     left: encoded(result.output.audio.left),
     right: encoded(result.output.audio.right),
@@ -310,6 +316,12 @@ async function handle(command: Command): Promise<unknown> {
         return {
           type: 'snapshot',
           snapshot: serialize(snapshot).toString('base64'),
+          checks: {
+            stateSha256: sha256(stateBytes(snapshot)),
+            snapshotSha256: sha256(canonicalBytes(snapshot)),
+            saveSha256: sha256(canonicalBytes(snapshot.saves)),
+            saves: saveHashes(snapshot),
+          },
           frame: snapshot.frame,
           booted: snapshot.console.machine.execution.booted,
           active: current.inspect(),

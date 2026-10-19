@@ -65,3 +65,4 @@ for cartridge in "${cartridges[@]}"; do
 done
 
 node scripts/verify-native-game.mjs
+node scripts/verify-relay-station.mjs

@@ -177,6 +177,7 @@ pub fn verify(path: &Path, frames: u32, input: Option<&Path>) -> Result<Value, S
     let mut member_frames: BTreeMap<String, u32> = BTreeMap::new();
     let mut save_commit_frames: BTreeMap<String, u32> = BTreeMap::new();
     let mut audio_peak = 0.0_f32;
+    let mut frame_checks = Vec::with_capacity(frames as usize);
     for frame in 0..frames {
         let input = inputs
             .get(&frame)
@@ -203,6 +204,20 @@ pub fn verify(path: &Path, frames: u32, input: Option<&Path>) -> Result<Value, S
         if value["cartridgeId"] != member.manifest.id {
             return Err("native frame producer identity differs".to_owned());
         }
+        let mut check = checked_hashes(
+            &value["checks"],
+            &["framebufferSha256", "pcmSha256", "audioCommandSha256"],
+        )?;
+        for key in [
+            "frame",
+            "cartridgeFrame",
+            "cartridgeAlias",
+            "cartridgeId",
+            "workUnits",
+        ] {
+            check[key] = value[key].clone();
+        }
+        frame_checks.push(check);
         *member_frames.entry(alias.to_owned()).or_default() += 1;
         fingerprint(
             &mut timeline_hash,
@@ -253,6 +268,17 @@ pub fn verify(path: &Path, frames: u32, input: Option<&Path>) -> Result<Value, S
     if snapshot["type"] != "snapshot" || snapshot["frame"] != frames {
         return Err("native final checkpoint cursor differs".to_owned());
     }
+    let final_checks = checked_hashes(
+        &snapshot["checks"],
+        &["stateSha256", "snapshotSha256", "saveSha256"],
+    )?;
+    let save_ids = game
+        .catalog()
+        .cartridges()
+        .values()
+        .map(|member| member.manifest.id.as_str())
+        .collect::<Vec<_>>();
+    let final_saves = checked_hashes(&snapshot["checks"]["saves"], &save_ids)?;
     let snapshot = STANDARD
         .decode(
             snapshot["snapshot"]
@@ -272,8 +298,28 @@ pub fn verify(path: &Path, frames: u32, input: Option<&Path>) -> Result<Value, S
             "audioFnv64":format!("{audio_hash:016x}"),"audioPeak":audio_peak,
             "saveCommitsFnv64":format!("{saves_hash:016x}"),"saveCommitFrames":save_commit_frames,
             "timelineFnv64":format!("{timeline_hash:016x}"),
-            "inputFnv64":format!("{input_hash:016x}"), "snapshotFnv64":format!("{snapshot_hash:016x}")}),
+            "inputFnv64":format!("{input_hash:016x}"), "snapshotFnv64":format!("{snapshot_hash:016x}"),
+            "frameChecks":frame_checks, "finalStateSha256":final_checks["stateSha256"],
+            "finalSnapshotSha256":final_checks["snapshotSha256"],
+            "finalSaveSha256":final_checks["saveSha256"], "finalSaves":final_saves}),
     )
+}
+
+fn checked_hashes(value: &Value, fields: &[&str]) -> Result<Value, String> {
+    let mut output = json!({});
+    for field in fields {
+        let hash = value[field]
+            .as_str()
+            .filter(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+            .ok_or_else(|| format!("missing or invalid native {field} fingerprint"))?;
+        output[field] = json!(hash);
+    }
+    Ok(output)
 }
 
 fn fingerprint(hash: &mut u64, bytes: &[u8]) {
@@ -285,6 +331,25 @@ fn fingerprint(hash: &mut u64, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_requires_complete_canonical_sha256_evidence() {
+        let good = "01ab".repeat(16);
+        assert_eq!(
+            checked_hashes(&json!({"pixels":good}), &["pixels"]).unwrap(),
+            json!({"pixels":good})
+        );
+        for bad in [
+            Value::Null,
+            json!(0),
+            json!("a".repeat(63)),
+            json!("A".repeat(64)),
+            json!("g".repeat(64)),
+        ] {
+            assert!(checked_hashes(&json!({"pixels":bad}), &["pixels"]).is_err());
+        }
+        assert!(checked_hashes(&json!({}), &["pixels"]).is_err());
+    }
 
     #[test]
     fn native_verification_replays_real_member_transitions_and_rejects_out_of_range_input_before_load()

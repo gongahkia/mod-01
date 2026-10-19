@@ -51,6 +51,19 @@ choices remain outstanding.
 
 ## Progress
 
+- CLI and native verification now share the same canonical evidence helpers,
+  with unchanged existing replay goldens. Native reports bounded per-frame
+  SHA-256 checks for indexed pixels, interleaved PCM and audio commands, plus
+  canonical final state/checkpoint and per-ID saves. The maintained Relay Station
+  verifier compares every one of 110 frames from source/raw/PNG across both hosts
+  and an actual Linux packaged executable from an unrelated directory with empty
+  PATH. Routing, work, all final hashes, two bank swaps, non-silent audio, six main
+  and 104 vault frames, two commits each and untouched donor save agree. The
+  desktop CI packaging matrix also runs this check; other-OS execution remains
+  unobserved locally. Seven targeted host/headless and four native player tests,
+  existing CLI replay goldens, workspace Clippy/lint/types/build and both existing
+  120-frame native packages pass. Actual Studio source-stepping of this route and
+  the final requirement audit remain open.
 - `cartridges/relay-station` is a maintained playable 47,591-byte three-member
   game: 60 Hz station, 30 Hz vault and compatible data-only night bank. Public
   MODL implements movement, three ordered relay interactions, two bank swaps,

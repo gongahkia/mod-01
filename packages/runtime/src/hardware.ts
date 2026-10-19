@@ -1,4 +1,4 @@
-import palette from './palette.json';
+import palette from './palette.json' with { type: 'json' };
 
 /** Default seed shared by native play and CLI headless runs; explicit seeds remain supported. */
 export const DEFAULT_SEED = 604_772_761;
